@@ -37,6 +37,49 @@ fn hidden_layers_excluded_from_extents() {
 }
 
 #[test]
+fn rays_and_xlines_do_not_stretch_extents() {
+    // ZOOM Extents ignores infinite lines; real drawings carry stray rays millions of units away.
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), line((0.0, 0.0), (1.0, 1.0))).unwrap();
+    let far = Vec3::new(-1_977_989.0, -1_952_638.0, 0.0);
+    d.add(&Space::Model, Common::default(), EntityKind::Ray(RayLine { base: far, dir: Vec3::new(-0.7, -0.7, 0.0) })).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::XLine(RayLine { base: far, dir: Vec3::new(1.0, 0.0, 0.0) })).unwrap();
+    let b = d.extents(&Space::Model);
+    assert_eq!((b.min, b.max), (Vec2::ZERO, Vec2::new(1.0, 1.0)));
+}
+
+#[test]
+fn inserts_of_missing_or_empty_blocks_do_not_stretch_extents() {
+    // An unloaded xref or a purged definition draws nothing, so its insertion point is not an extent.
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), line((0.0, 0.0), (1.0, 1.0))).unwrap();
+    let ins = |block: &str, x: f64, y: f64| {
+        EntityKind::Insert(Insert {
+            block: block.into(),
+            insert: Vec3::new(x, y, 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: vec![],
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+        })
+    };
+    d.blocks.insert("Empty".into(), std::sync::Arc::new(Block::new("Empty")));
+    d.add(&Space::Model, Common::default(), ins("Missing", -125_319.0, -79_990.0)).unwrap();
+    d.add(&Space::Model, Common::default(), ins("Empty", 55_652.0, -3_448_576.0)).unwrap();
+    let b = d.extents(&Space::Model);
+    assert_eq!((b.min, b.max), (Vec2::ZERO, Vec2::new(1.0, 1.0)));
+    // A block with geometry still counts.
+    let mut full = Block::new("Full");
+    full.entities.push(Entity::new(Handle(1), line((0.0, 0.0), (2.0, 2.0))));
+    d.blocks.insert("Full".into(), std::sync::Arc::new(full));
+    d.add(&Space::Model, Common::default(), ins("Full", 10.0, 10.0)).unwrap();
+    assert_eq!(d.extents(&Space::Model).max, Vec2::new(12.0, 12.0));
+}
+
+#[test]
 fn transform_arc_mirror_keeps_shape() {
     let mut k = EntityKind::Arc(Arc { center: Vec3::ZERO, radius: 1.0, start: 0.0, end: std::f64::consts::FRAC_PI_2 });
     k.transform(&Mat3::mirror(Vec2::ZERO, Vec2::Y));

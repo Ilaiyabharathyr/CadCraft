@@ -70,7 +70,10 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             if depth >= MAX_BLOCK_DEPTH {
                 return Bounds2::EMPTY;
             }
-            let Some(blk) = d.block(&ins.block) else { return Bounds2::from_points([ins.insert.xy()]) };
+            // A reference to a missing block (an unloaded xref, a purged definition) or to an empty
+            // one draws nothing, so it contributes nothing: ZOOM Extents must not fly off to its
+            // insertion point. Attributes below still count.
+            let Some(blk) = d.block(&ins.block) else { return Bounds2::EMPTY };
             let m = ins.transform(blk.base.xy());
             let inner = match blocks.get(&blk.name) {
                 Some(b) => *b,
@@ -83,8 +86,7 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
                     inner
                 }
             };
-            let mut b =
-                if inner.is_empty() { Bounds2::from_points([ins.insert.xy()]) } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
+            let mut b = if inner.is_empty() { Bounds2::EMPTY } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
             if ins.cols > 1 || ins.rows > 1 {
                 let off = Vec2::new(ins.col_spacing * f64::from(ins.cols.saturating_sub(1)), ins.row_spacing * f64::from(ins.rows.saturating_sub(1)))
                     .rotate(ins.rotation);
@@ -156,14 +158,9 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
                     Prim::Ellipse(e) => e.bounds(),
                     Prim::Spline(s) => s.bounds(),
                     Prim::Point(p) => Bounds2::from_points([p]),
-                    // Infinite lines don't contribute to extents (as in ZOOM Extents).
-                    Prim::Infinite { base, ray, .. } => {
-                        if ray {
-                            Bounds2::from_points([base])
-                        } else {
-                            Bounds2::EMPTY
-                        }
-                    }
+                    // Infinite lines don't contribute to extents, rays included (as in ZOOM Extents;
+                    // real drawings carry stray rays millions of units away).
+                    Prim::Infinite { .. } => Bounds2::EMPTY,
                     Prim::Fill(pts) => Bounds2::from_points(pts),
                 };
                 b = b.union(&pb);
