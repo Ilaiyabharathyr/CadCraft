@@ -2,7 +2,8 @@
 //! `{type, names}`.
 
 use cadcraft_engine::Session;
-use cadcraft_engine::doc::EntityKind;
+use cadcraft_engine::doc::{Common, EntityKind, Line, Space};
+use cadcraft_engine::geom::Vec3;
 use serde_json::json;
 
 /// Unused: blocks U1 and U2, layer Spare, linetype DASHED, text style Notes, dimension style Arch.
@@ -74,8 +75,11 @@ fn verify_asks_for_each_name_and_absent_types_take_their_tokens() {
     assert!(s.running.is_none(), "{}", s.prompt_text());
     assert!(s.log[n..].iter().any(|l| l.contains("No unreferenced")), "{:?}", &s.log[n..]);
     assert_eq!(count(&s, |k| matches!(k, EntityKind::Line(_))), 1);
-    // Zero-length geometry purges at once.
-    s.execute("line", &json!({ "points": [[3, 3], [3, 3]] })).unwrap();
+    // Zero-length geometry purges at once. The line command refuses a zero-length line, so the
+    // line goes straight into the drawing, the way one arrives from an opened file.
+    let p = Vec3::new(3.0, 3.0, 0.0);
+    s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Line(Line { a: p, b: p })).unwrap();
+    assert_eq!(count(&s, |k| matches!(k, EntityKind::Line(_))), 2);
     s.script("-PURGE Z\n").unwrap();
     assert!(s.running.is_none(), "{}", s.prompt_text());
     assert_eq!(count(&s, |k| matches!(k, EntityKind::Line(_))), 1);
