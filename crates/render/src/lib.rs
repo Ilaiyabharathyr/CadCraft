@@ -139,11 +139,6 @@ struct Builder<'a> {
 pub const MAX_BLOCK_EXPANSION: usize = 2_000_000;
 
 impl Builder<'_> {
-    /// Take one unit of the block-expansion budget; false once it is spent.
-    fn expand(&mut self) -> bool {
-        self.list.expanded = self.list.expanded.saturating_add(1);
-        self.list.expanded <= MAX_BLOCK_EXPANSION
-    }
     fn polyline(&mut self, ctx: &Ctx, color: Rgb, lw: f32, pts: &[Vec2]) {
         if pts.len() < 2 {
             return;
@@ -200,6 +195,11 @@ impl Builder<'_> {
         self.list.verts.push(ctx.xf.apply(base));
         self.list.verts.push(ctx.xf.apply_vec(dir).normalized());
         self.list.prims.push(DPrim { handle: ctx.top, color, lw: 0.0, kind: Kind::Infinite { ray }, start, len: 2 });
+    }
+    /// Take one unit of the block-expansion budget; false once it is spent.
+    fn expand(&mut self) -> bool {
+        self.list.expanded = self.list.expanded.saturating_add(1);
+        self.list.expanded <= MAX_BLOCK_EXPANSION
     }
 }
 
