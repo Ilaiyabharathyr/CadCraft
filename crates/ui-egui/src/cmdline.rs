@@ -60,10 +60,13 @@ pub fn capture_tab(ctx: &egui::Context, raw: &mut egui::RawInput) {
     });
 }
 
-/// Tab on the command line: type the Dynamic Input separator (`,` or `<`) after a value, or
-/// complete a command name.
+/// Tab on the command line: cycle the object snaps under the cursor, type the Dynamic Input
+/// separator (`,` or `<`) after a value, or complete a command name.
 fn tab(app: &mut CadApp) {
-    if let Some(f) = dyn_frame(app)
+    // Over a snap marker with nothing typed, Tab cycles the candidate snaps.
+    if app.cmd.buffer.is_empty() && app.canvas.snap.is_some() {
+        app.canvas.snap_tab = true;
+    } else if let Some(f) = dyn_frame(app)
         && let Some(sep) = crate::dyninput::tab_separator(&app.cmd.buffer, &f)
     {
         app.cmd.buffer.push(sep);
@@ -156,7 +159,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                         }
                     } else {
                         let base = app.canvas.hot_grip.map(|g| g.base).unwrap_or_default();
-                        match cadcraft_engine::prompt::parse_point(&typed, base) {
+                        match cadcraft_engine::prompt::parse_point_with(&typed, base, &app.session.angle_settings()) {
                             Some(p) => crate::canvas::apply_hot_grip(app, p),
                             None => app.session.echo("Requires a point (x,y, @dx,dy or @d<a)."),
                         }

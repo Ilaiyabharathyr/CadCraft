@@ -107,7 +107,7 @@ numbers):
 | Layers & properties | Layers palette and Layer Properties Manager (on/off, freeze, lock, plot, colour, linetype), layer tools (isolate, freeze, off, lock, match, previous), Properties palette with per-object editing, linetypes, lineweights, colour index and true colour |
 | Annotation | All DIM* commands with full DIMSTYLE variables, overrides and every arrowhead, associative dimensions that follow geometry, MLEADER, TABLE, TrueType fonts (`.ttf`, `.otf`, `.ttc` collections), MTEXT formatting codes (fonts, heights, colours, stacked fractions), our own single-stroke drafting font |
 | Hatch & blocks | Pick-point hatch boundaries with islands, pattern, solid and gradient fills from our own pattern library, BLOCK/INSERT, attributes and nested blocks |
-| Files | DXF read/write (R12–2018, including dimension styles, associativity, tables and constraints), DWG read/write (R13–2018, via the acadrust library), PDF plotting, SVG and PNG export |
+| Files | DXF read (R12–2018, ASCII and binary) and write (R2000), including dimension styles, associativity, tables and constraints; DWG read (via the acadrust library) and write (R2000); PDF plotting, SVG and PNG export. Entities CADCraft doesn't model yet are not kept on save: see [file-format parity](docs/file-format-parity.md) |
 | Layouts & plotting | Paper-space layouts, viewports (scale, lock, per-viewport layer freeze), MSPACE/PSPACE through viewports, page setups, PLOT and EXPORTPDF |
 | Parametric | Geometric and dimensional constraints, AUTOCONSTRAIN, PARAMETERS with expressions, conflict detection; constraints re-solve after every edit |
 | Grips | Hot grips with Space to cycle Stretch, Move, Rotate, Scale and Mirror |
@@ -213,9 +213,13 @@ apps: cadcraft · cadcraft-cli · cadcraft-web
 Nothing below `ui-egui` knows about egui, so the front end can be replaced. `cargo xtask ci`
 checks formatting, clippy, tests, asset attribution, the crate layering and the wasm build.
 
+## Accessibility
+
+Over the drawing area CADCraft hides the system cursor and draws its own crosshair. Tools that follow the system cursor (Windows Magnifier set to follow or centre the mouse pointer, other screen magnifiers, screen recorders, remote desktops) lose track of it there. Turn on **View ▸ Accessibility ▸ Show System Cursor** to keep a small system crosshair visible at the centre of the drawn one, or start CADCraft with the environment variable `CADCRAFT_SYSTEM_CURSOR=1` (on Windows, set it once with `setx CADCRAFT_SYSTEM_CURSOR 1` and start CADCraft again). Agents can switch it with the control channel: `ui.set {"systemCursor": true}`.
+
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for milestones, measured parity and the estimate of remaining work.
+See [ROADMAP.md](ROADMAP.md) for the stage, measured parity and the estimate of remaining work, and [docs/gaps.md](docs/gaps.md) for everything still missing.
 
 ## Downloads
 
@@ -264,6 +268,8 @@ and web backend defaults are unchanged.
 | Debian/Ubuntu | `cadcraft-<ver>-linux-x86_64.deb` | `cadcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `cadcraft-<ver>-linux-x86_64.rpm` | `cadcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `cadcraft-<ver>-linux-x86_64.tar.gz` | `cadcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
+
+RISC-V (riscv64): `cadcraft-<ver>-linux-riscv64.tar.gz`, cross-compiled; needs glibc 2.39 or newer (Ubuntu 24.04+, Debian 13+).
 
 ### FreeBSD
 

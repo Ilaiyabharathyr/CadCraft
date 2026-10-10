@@ -15,6 +15,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.sample", "Open Sample Drawing", &["Help", "Open Sample Drawing"], None),
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
     ("ui.toggle.palettes", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
+    ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.toggle.toolbar", "Tool Bar", &["Window", "Tool Bar"], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
     ("ui.toggle.statusbar", "Status Bar", &["Window", "Status Bar"], None),
@@ -25,6 +26,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.theme.light", "Light", &["View", "Interface Theme", "Light"], None),
     ("ui.theme.dark", "Dark", &["View", "Interface Theme", "Dark"], None),
     ("ui.theme", "Interface Theme", &[], None),
+    ("ui.saveformat.dxf", "DXF", &["File", "Default Save Format", "DXF"], None),
+    ("ui.saveformat.dwg", "DWG", &["File", "Default Save Format", "DWG"], None),
+    ("ui.saveformat", "Default Save Format", &[], None),
     ("ui.toggle.menubar", "In-window Menu Bar", &["Window", "In-window Menu Bar"], None),
     ("ui.hidepalettes", "Hide Palettes", &["Window", "Hide Palettes"], None),
     ("ui.resetpalettes", "Reset Palettes", &["Window", "Reset Palettes"], None),
@@ -57,6 +61,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     if let Some(r) = crate::managers::route(app, id, params) {
         return Some(r);
     }
+    if let Some(r) = crate::plotstyles::route(app, id, params) {
+        return Some(r);
+    }
     let toggle = |b: &mut bool, p: &Value| {
         *b = p.get("on").and_then(Value::as_bool).unwrap_or(!*b);
     };
@@ -80,9 +87,18 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             Ok(Value::Null)
         }
+        // RECOVER from the menu or typed: pick the file. Without a picker the engine asks for the
+        // file name on the command line.
+        "recover" if no_path && app.services.pick_open.is_some() => {
+            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
+                let r = app.run("recover", json!({ "path": p }));
+                app.opened(r);
+            }
+            Ok(Value::Null)
+        }
         "ui.saveas" | "saveas" if no_path => {
-            let name = app.session.state().map(|s| s.title.clone()).unwrap_or_else(|_| "Drawing.dxf".into());
-            let name = if name.contains('.') { name } else { format!("{name}.dxf") };
+            let title = app.session.state().map(|s| s.title.clone()).ok();
+            let name = app.ui.save_format.suggested_name(title.as_deref());
             if let Some(p) = app.services.pick_save.as_ref().and_then(|f| f(&name)) {
                 return Some(app.session.execute("saveas", &json!({ "path": p })).map_err(|e| e.to_string()));
             }
@@ -135,6 +151,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             toggle(&mut app.ui.show_command_line, params);
             Ok(Value::Null)
         }
+        "ui.toggle.systemcursor" => {
+            toggle(&mut app.ui.system_cursor, params);
+            Ok(Value::Null)
+        }
         "ui.toggle.viewcube" => {
             toggle(&mut app.ui.show_viewcube, params);
             Ok(Value::Null)
@@ -159,14 +179,27 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             },
             None => Ok(theme_json(app)),
         },
+        "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
+            let format = crate::SaveFormat::parse(id.trim_start_matches("ui.saveformat.")).unwrap_or_default();
+            Ok(set_save_format(app, format))
+        }
+        // `{"format": "dxf"|"dwg"}` sets the default save format for new drawings; without it,
+        // reports it.
+        "ui.saveformat" => match params.get("format").and_then(Value::as_str) {
+            Some(name) => match crate::SaveFormat::parse(name) {
+                Some(format) => Ok(set_save_format(app, format)),
+                None => Err(format!("unknown save format \"{name}\" (dxf or dwg)")),
+            },
+            None => Ok(json!({ "saveFormat": app.ui.save_format.as_str() })),
+        },
         "ui.hidepalettes" => {
             app.ui.show_palettes = false;
             app.ui.show_toolsets = false;
             Ok(Value::Null)
         }
         "ui.resetpalettes" => {
-            let (menu, theme, interface_language) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language);
-            app.ui = crate::UiState { in_window_menu: menu, theme, interface_language, ..Default::default() };
+            let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
+            app.ui = crate::UiState { in_window_menu: menu, theme, interface_language, save_format, ..Default::default() };
             Ok(Value::Null)
         }
         "ui.start" => {
@@ -251,6 +284,12 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     Some(r)
 }
 
+fn set_save_format(app: &mut CadApp, format: crate::SaveFormat) -> Value {
+    app.ui.save_format = format;
+    app.session.echo(format!("New drawings will be saved as {}", format.as_str().to_ascii_uppercase()));
+    json!({ "saveFormat": format.as_str() })
+}
+
 fn set_theme(app: &mut CadApp, pref: crate::theme::ThemePref) -> Result<Value, String> {
     app.ui.theme = pref;
     Ok(theme_json(app))
@@ -327,7 +366,7 @@ pub(crate) fn shortcut_label(s: &str, mac: bool) -> String {
     format!("{shift}{cmd}{}", s.replace("Cmd+", "").replace("Shift+", ""))
 }
 
-fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
+pub(crate) fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
     match e {
         Entry::Item { label, id, shortcut, enabled } => {
             let mut b = egui::Button::new(crate::i18n::t(label));
@@ -386,7 +425,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
     let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
     let pairs: &[(KeyboardShortcut, &str)] = &[
         (sc(cmd_shift, Key::Z), "redo"),
-        (sc(cmd, Key::Z), "undo"),
+        (sc(cmd, Key::Z), "u"),
         (sc(cmd, Key::Y), "redo"),
         (sc(cmd, Key::N), "new"),
         (sc(cmd, Key::O), "ui.open"),
@@ -397,6 +436,7 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(cmd_shift, Key::C), "copybase"),
         (sc(cmd, Key::C), "copyclip"),
         (sc(cmd, Key::X), "cutclip"),
+        (sc(cmd_shift, Key::V), "pasteblock"),
         (sc(cmd, Key::V), "pasteclip"),
         (sc(cmd, Key::Num1), "ui.toggle.palettes"),
         (sc(cmd, Key::Num3), "ui.toggle.toolsets"),
@@ -411,13 +451,15 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(Modifiers::NONE, Key::F11), "otrack"),
         (sc(Modifiers::NONE, Key::F12), "dynmode"),
     ];
+    crate::clipboard::mirror(app, ctx);
     if ctx.egui_wants_keyboard_input() || app.closing.is_some() {
         return;
     }
-    let mut fire = Vec::new();
+    // Cmd/Ctrl+C, X and V arrive as clipboard events, not key presses.
+    let mut fire = crate::clipboard::shortcut_commands(app, ctx);
     ctx.input_mut(|i| {
         for (s, id) in pairs {
-            if i.consume_shortcut(s) {
+            if i.consume_shortcut(s) && !fire.contains(id) {
                 fire.push(*id);
             }
         }
