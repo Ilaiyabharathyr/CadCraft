@@ -48,3 +48,7 @@ sync_github_name = true
 
 [people.Losminek]
 sync_github_name = true
+
+[people.webdevtodayjason]
+real_name = "Jason Brashear"
+display_name = "Jason Brashear"
