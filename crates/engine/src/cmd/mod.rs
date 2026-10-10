@@ -12,6 +12,7 @@ mod draw2;
 mod edit;
 pub mod file;
 mod gripcmds;
+mod griphot;
 pub(crate) mod groups;
 mod hatch;
 mod inquiry;
