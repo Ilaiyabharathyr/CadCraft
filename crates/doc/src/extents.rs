@@ -34,6 +34,22 @@ fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
     Bounds2::from_points(local.map(|p| origin.xy() + p.rotate(t.rotation)))
 }
 
+/// Whether an entity inside a block definition shows: its own invisible flag and its layer count,
+/// as when drawing. Dimensional constraints of dynamic blocks (layer `*ADSK_CONSTRAINTS`) and the
+/// entities a visibility state hides are invisible this way, and they sit far from the block's
+/// geometry in real drawings. Layer "0" takes the insert's layer, which the caller has checked.
+fn in_block_visible(d: &Drawing, e: &Entity) -> bool {
+    // Attribute definitions are not drawn in an insert (its attribs are, see below).
+    !matches!(e.kind, EntityKind::AttDef(_))
+        && e.common.visible
+        && (e.common.layer == "0" || d.layer(&e.common.layer).is_none_or(crate::Layer::visible))
+}
+
+/// A text that draws no glyph (empty, or only blanks and non-breaking spaces) takes no room.
+fn blank(s: &str) -> bool {
+    s.replace("\\~", " ").chars().all(char::is_whitespace)
+}
+
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
     bounds_in(d, e, depth, &mut HashMap::new())
 }
@@ -44,6 +60,8 @@ pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
 /// per reference (which grows exponentially with the nesting depth).
 fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String, Bounds2>) -> Bounds2 {
     match &e.kind {
+        EntityKind::Text(t) if blank(&t.value) => Bounds2::EMPTY,
+        EntityKind::MText(t) if blank(&t.contents) => Bounds2::EMPTY,
         EntityKind::Text(t) => text_box(t, t.value.chars().count()),
         EntityKind::AttDef(a) => text_box(&a.text, a.tag.chars().count()),
         EntityKind::MText(t) => {
@@ -79,7 +97,7 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
                 Some(b) => *b,
                 None => {
                     let mut inner = Bounds2::EMPTY;
-                    for be in blk.entities.iter() {
+                    for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
                         inner = inner.union(&bounds_in(d, be, depth + 1, blocks));
                     }
                     blocks.insert(blk.name.clone(), inner);
@@ -124,7 +142,7 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             if let Some(blk) = dm.block.as_ref().and_then(|n| d.block(n))
                 && depth < MAX_BLOCK_DEPTH
             {
-                for be in blk.entities.iter() {
+                for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
                     b = b.union(&bounds_in(d, be, depth + 1, blocks));
                 }
             }
