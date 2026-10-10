@@ -52,4 +52,18 @@ mod tests {
         assert!(!is_asset("crates/x/src/lib.rs"));
         assert!(is_asset("assets/fonts/OFL.txt"));
     }
+
+    #[test]
+    fn scalable_app_icon_is_attributed_and_vector_only() {
+        let root = crate::root();
+        let path = "assets/app-icon/hicolor/scalable/apps/ai.storyteller.cadcraft.svg";
+        let svg = std::fs::read_to_string(root.join(path)).expect("the scalable Linux app icon must ship");
+        assert!(svg.contains("xmlns=\"http://www.w3.org/2000/svg\""));
+        assert!(svg.contains("viewBox=\"0 0 256 256\""));
+        assert!(svg.contains("<path"));
+        assert!(!svg.contains("<image"), "the scalable icon must not embed a raster image");
+        assert!(!svg.contains("href="), "the icon must not depend on external resources");
+        let md = std::fs::read_to_string(root.join("ATTRIBUTION.md")).expect("asset attribution");
+        assert!(missing(&[path.into()], &md).is_empty(), "the scalable icon needs an ATTRIBUTION.md row");
+    }
 }
