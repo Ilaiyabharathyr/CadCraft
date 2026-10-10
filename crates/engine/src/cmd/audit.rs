@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|_| Ok(Box::new(Audit))),
         CommandSpec::new("recover", "Recover...", run_recover)
             .menu(&["File", "Drawing Utilities", "Recover..."])
-            .params("{path} | {data: base64, name} → {index, errors, fixed, issues, message}")
+            .params("{path, copy?: bool (an unsaved copy without a file name), title?} | {data: base64, name} → {index, uid, errors, fixed, issues, message}")
             .enabled(always)
             .noundo()
             .interactive(|_| Ok(Box::new(Recover))),
@@ -36,7 +36,9 @@ fn run_audit(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Open a drawing file as tolerantly as the readers allow, then fix what AUDIT finds. The
-/// drawing keeps its file name; when anything was fixed it opens with unsaved changes.
+/// drawing keeps its file name; when anything was fixed it opens with unsaved changes. With
+/// `copy` it opens as an unsaved copy without a file name (Drawing Recovery opens autosave files
+/// this way), titled `title`.
 fn run_recover(s: &mut Session, p: &Value) -> Result<Value> {
     let (bytes, name, path) = match (str_param(p, "path"), str_param(p, "data")) {
         (Some(path), _) => (read_path("recover", path)?, path.to_string(), Some(path.to_string())),
@@ -48,16 +50,26 @@ fn run_recover(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let hooks = file::io().ok_or_else(|| bad("recover", "file formats are not available in this build"))?;
     let d = (hooks.read)(&bytes, &name).map_err(|e| bad("recover", format!("{name} can't be read: {e}")))?;
-    let title = std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| name.clone());
-    let i = s.open_drawing(d, &title, path);
+    let title = match str_param(p, "title") {
+        Some(t) => t.to_string(),
+        None => std::path::Path::new(&name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| name.clone()),
+    };
+    let copy = bool_or(p, "copy", false);
+    let i = s.open_drawing(d, &title, if copy { None } else { path });
     let st = s.state_mut()?;
     let report = crate::audit::fix(Arc::make_mut(&mut st.doc));
     if report.issues.is_empty() {
         // Nothing to fix: the drawing opens unchanged, like OPEN.
         st.doc = st.saved.clone();
     }
+    if copy && !st.is_dirty() {
+        // An unsaved copy (Drawing Recovery): closing it asks to save it under a name.
+        st.saved = Arc::new((*st.doc).clone());
+    }
+    let uid = st.uid;
     let mut r = report.to_json();
     r["index"] = json!(i);
+    r["uid"] = json!(uid);
     Ok(r)
 }
 
