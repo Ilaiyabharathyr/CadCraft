@@ -270,7 +270,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod solid_interior_tests {
     use super::*;
 
     fn face(kind: bool, triangular: bool) -> Entity {
