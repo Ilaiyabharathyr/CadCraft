@@ -21,6 +21,7 @@ mod pline_opts;
 mod props;
 mod qselect;
 mod settings;
+mod spline_opts;
 mod table;
 mod trimextend;
 mod utility;
