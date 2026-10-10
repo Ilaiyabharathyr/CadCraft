@@ -12,6 +12,9 @@ use crate::CadApp;
 use crate::parametric::expr_field;
 use crate::theme::Tokens;
 
+/// The Block Attribute Manager (BATTMAN).
+mod battman;
+
 /// Open the dialog for a typed or menu-invoked command. `None` if `id` has no dialog here or the
 /// call carries parameters.
 pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -19,6 +22,7 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
         return None;
     }
     let dialog = match id {
+        "battman" => "battman",
         "linetype" | "lt" | "ltype" => "linetype",
         "ddptype" => "ptype",
         "tablestyle" | "ts" => "tablestyle",
@@ -34,6 +38,7 @@ pub fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value,
 /// Show the dialog named `name`; closes it (`open = false`) if it isn't one of these.
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, name: &str, open: &mut bool) {
     let action = match name {
+        "battman" => battman::dialog(app, ctx, open),
         "linetype" => linetype(app, ctx, open),
         "ptype" => point_style(app, ctx, open),
         "tablestyle" => table_style(app, ctx, open),
