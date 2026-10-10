@@ -218,6 +218,8 @@ pub struct Settings {
     pub gridmode: bool,
     pub snapmode: bool,
     pub snapunit: Vec2,
+    /// OSNAPHATCH: object snaps find hatch objects (off by default, as in AutoCAD).
+    pub osnaphatch: bool,
     pub gridunit: Vec2,
     /// Major grid line every N minor lines (GRIDMAJOR).
     pub gridmajor: u32,
@@ -259,6 +261,7 @@ impl Default for Settings {
             gridmode: true,
             snapmode: false,
             snapunit: Vec2::new(0.5, 0.5),
+            osnaphatch: false,
             gridunit: Vec2::new(0.5, 0.5),
             gridmajor: 5,
             dynmode: true,
