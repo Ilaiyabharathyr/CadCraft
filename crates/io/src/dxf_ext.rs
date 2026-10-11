@@ -662,8 +662,10 @@ pub(crate) fn apply_anno(d: &mut cadcraft_doc::Drawing, p: AnnoPayload) {
     if let Some(v) = p.annoallvisible {
         d.header.set_i64("ANNOALLVISIBLE", i64::from(v != 0));
     }
+    // Block names compare case-insensitively; one map keeps a long hostile list linear.
+    let by_upper: std::collections::HashMap<String, String> = d.blocks.keys().map(|k| (k.to_ascii_uppercase(), k.clone())).collect();
     for name in &p.blocks {
-        let key = d.blocks.keys().find(|k| k.eq_ignore_ascii_case(name)).cloned();
+        let key = by_upper.get(&name.to_ascii_uppercase()).cloned();
         if let Some(b) = key.and_then(|k| d.blocks.get_mut(&k)) {
             std::sync::Arc::make_mut(b).annotative = true;
         }
