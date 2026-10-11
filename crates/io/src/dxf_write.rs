@@ -1,10 +1,12 @@
-//! Drawing → DXF (AC1015 / R2000 structure, readable by every DXF consumer since 2000).
+//! Drawing → DXF (AC1015 / R2000 structure, readable by every DXF consumer since 2000). Later
+//! versions keep that structure (the groups they add are optional, DXF Reference) and differ in
+//! `$ACADVER` and, from 2007, in UTF-8 text; the caller picks the text encoding.
 
 use std::collections::HashMap;
 
 use cadcraft_color::Color;
 use cadcraft_doc::*;
-use cadcraft_dxf::Tag;
+use cadcraft_dxf::{Tag, Version};
 use cadcraft_geom::{Bounds2, Vec2, Vec3};
 
 use crate::dxf_ext::{self, DimVal, K};
@@ -831,7 +833,12 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                         w.f(42, v.bulge);
                     }
                 }
-                w.i(97, 0);
+                // Source boundary objects of an associative hatch (the ones still in the drawing).
+                let sources: Vec<String> = l.sources.iter().filter(|s| h.associative && d.entity(**s).is_some()).map(|s| s.hex()).collect();
+                w.i(97, sources.len() as i64);
+                for s in &sources {
+                    w.s(330, s);
+                }
             }
             w.i(75, i64::from(h.style));
             w.i(76, 1);
@@ -927,6 +934,14 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             for q in pts {
                 w.p2(14, Vec2::new((q.x - o.x) / sx - 0.5, 0.5 - (q.y - o.y) / sy));
             }
+        }
+        EntityKind::Tolerance(t) => {
+            w.s(0, "TOLERANCE");
+            common(w, e, owner, paper, "AcDbFcf");
+            w.s(3, &t.style);
+            w.p(10, t.insert);
+            w.s(1, &t.text);
+            w.p(11, t.dir);
         }
         // Entity types CADCraft doesn't model aren't written; the save command reports them.
         EntityKind::Unknown(_) => {}
@@ -1232,7 +1247,13 @@ fn record_head(w: &mut W, kind: &str, owner: &str, subclass: &str) -> String {
 }
 
 /// Write a drawing as ASCII DXF.
+/// The drawing as R2000 ASCII DXF.
 pub fn write(d: &Drawing) -> String {
+    cadcraft_dxf::write_ascii(&tags(d, Version::R2000))
+}
+
+/// The drawing's DXF tags, declaring `version` in `$ACADVER`.
+pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     // Structural handles start above every entity handle.
     let mut w = W { t: Vec::new(), next: d.handseed.max(0x100) + 0x1000, pstyles: HashMap::new() };
     // Pre-allocate handles for block records.
@@ -1383,7 +1404,7 @@ pub fn write(d: &Drawing) -> String {
     w.s(0, "SECTION");
     w.s(2, "HEADER");
     w.s(9, "$ACADVER");
-    w.s(1, "AC1015");
+    w.s(1, version.code());
     w.s(9, "$DWGCODEPAGE");
     w.s(3, "ANSI_1252");
     let ext = d.extents(&Space::Model);
@@ -1686,6 +1707,10 @@ pub fn write(d: &Drawing) -> String {
         if let Some(b) = blk {
             w.i(70, i64::from(b.units));
             w.i(280, i64::from(b.explodable));
+            if let Some(a) = &b.array {
+                w.s(1001, dxf_ext::APP);
+                w.xdata(dxf_ext::array_xdata(a));
+            }
         }
     };
     br_rec(&mut w, &ms_br, "*Model_Space", Some(&model_layout), None);
@@ -2031,7 +2056,7 @@ pub fn write(d: &Drawing) -> String {
         *t = Tag::s(5, seed);
     }
     mark_xrefs(&mut w.t, d);
-    cadcraft_dxf::write_ascii(&w.t)
+    w.t
 }
 
 /// Xref blocks (DXF Reference, BLOCK): bit 4 of group 70 and the external drawing's path in
