@@ -723,6 +723,7 @@ fn block_dims_using(d: &cadcraft_doc::Drawing, name: &str) -> Vec<(String, cadcr
             let uses = match &e.kind {
                 EntityKind::Dimension(dm) => dm.style.eq_ignore_ascii_case(name),
                 EntityKind::Leader(l) => l.style.eq_ignore_ascii_case(name),
+                EntityKind::Tolerance(t) => t.style.eq_ignore_ascii_case(name),
                 _ => false,
             };
             if uses {
