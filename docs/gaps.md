@@ -13,7 +13,7 @@ do them first.
 
 | # | Gap | Why it ranks here | Est. | Doc |
 |---|---|---|---|---|
-| 1 | **[alpha blocker]** **Saving drops whatever we don't model** (Unknown entities, IMAGE, layer states, block descriptions, true colours, MULTILEADER written as LEADER+MTEXT, groups, named views/UCS, foreign xdata) | Opening a colleague's DWG and saving it silently deletes content: the one thing a CAD user can't forgive | 15–25 | [file formats](file-format-parity.md) |
+| 1 | **[alpha blocker]** **Saving DWG drops what we don't model** (DXF now writes back unknown entities and objects, foreign xdata, extension dictionaries, reactors, layer states and colour books, #528; through DWG, acadrust drops custom-class entities and objects, xdata on table records and blocks, entity colour books and reactors; MULTILEADER is still written as LEADER+MTEXT) | Opening a colleague's DWG and saving it still deletes some content: the one thing a CAD user can't forgive | 6–10 | [file formats](file-format-parity.md) |
 | 2 | **[alpha blocker]** **No real-file test corpus and no check in AutoCAD** | All 36 file tests are synthetic; nobody has verified a CADCraft DWG/DXF opens cleanly in AutoCAD | 10–15 + human | [file formats](file-format-parity.md#tests) |
 | 3 | **Tracking leftovers** (object snap tracking, Extension, Parallel and Apparent Intersection landed, #379): polar angles relative to the last segment, PolarSnap, temporary tracking point | Small now; ranks lower at the next review | 3–5 | [ui](ui-parity.md#tracking-polar-ortho-grid-and-snap--70) |
 | 4 | **[alpha blocker]** **DWG always saves as R2000; DXF only R2000 ASCII; no code pages** | Can't exchange at 2018 format; pre-2007 CJK/Cyrillic files are garbled | 10–15 | [file formats](file-format-parity.md) |
@@ -80,7 +80,7 @@ Detail: [file-format-parity.md](file-format-parity.md).
 
 | # | Gap | User impact | Est. |
 |---|---|---|---|
-| FF1 | **[alpha blocker]** Round-trip what we don't model: keep Unknown entities and objects, foreign xdata, extension dictionaries; write IMAGE (with IMAGEDEF), VIEW/UCS/VPORT tables, groups, layer states, block descriptions, true colours (#201, #204, #208, #209, #213, #223); WIPEOUT and gradients done (#147, #162) | High | 12–20 |
+| FF1 | **[alpha blocker]** Round-trip what we don't model. DXF done (#528): unknown entities and objects (with their CLASS records), foreign xdata (hyperlinks included), extension dictionaries, persistent reactors, DICTIONARYVAR and XRECORDs, layer states, colour book colours, references remapped on save; IMAGE, VIEW/UCS, groups, block descriptions, true colours, transparency (#201, #204, #208, #209, #213, #223); WIPEOUT and gradients (#147, #162). Left: through DWG, acadrust drops custom-class entities and objects, xdata on table records and blocks, entity colour book names and reactors; UCS elevation; MTEXT background colours; unknown entities follow only layer edits, and renamed layers and blocks lose their foreign data | High | 6–10 |
 | FF2 | **[alpha blocker]** Native MULTILEADER objects (read and write) | High | 6–10 |
 | FF3 | **[alpha blocker]** Write DXF 2004–2018 and binary DXF; save DWG at a chosen version (2018 default) instead of always R2000; SAVEAS version choice (PR #198 adds DWG to the dialog) | High | 8–12 |
 | FF4 | Code pages (`$DWGCODEPAGE`, ANSI_932/936/949/950/125x) when reading pre-2007 files | Medium-high (Asia, Eastern Europe) | 3–5 |
