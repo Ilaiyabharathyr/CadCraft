@@ -113,7 +113,10 @@ fn locale_and_saved_preference_resolution() {
     for tag in ["uk", "uk-UA", "uk_UA.UTF-8", "UK-ua", " uk-UA ", "uk_UA@euro"] {
         assert_eq!(locale_language(tag), Some("uk"), "{tag}");
     }
-    for tag in ["ua", "ukulele", "ru-RU", "", "garbage", "💙"] {
+    for (tag, code) in [("ru-RU", "ru"), ("es-ES", "es"), ("fr-FR", "fr"), ("pt-BR", "pt"), ("de-DE", "de")] {
+        assert_eq!(locale_language(tag), Some(code), "{tag}");
+    }
+    for tag in ["ua", "ukulele", "pl-PL", "", "garbage", "💙"] {
         assert_eq!(locale_language(tag), None, "{tag}");
     }
     let locales = vec!["pl-PL".into(), "uk-UA".into(), "en-US".into()];
