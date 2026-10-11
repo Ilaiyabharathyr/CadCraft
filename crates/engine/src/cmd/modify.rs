@@ -1,5 +1,5 @@
 //! Modify commands: ERASE, MOVE, COPY, ROTATE, SCALE, MIRROR, OFFSET, TRIM, EXTEND, FILLET,
-//! CHAMFER, EXPLODE, STRETCH, DRAWORDER, BREAK, JOIN (arrays: `array`).
+//! CHAMFER, EXPLODE, STRETCH, BREAK, JOIN (arrays: `array`; draw order: `draworder`).
 
 use cadcraft_doc::{Entity, EntityKind, Handle, Prim};
 use cadcraft_geom::{
@@ -8,7 +8,7 @@ use cadcraft_geom::{
 use serde_json::{Value, json};
 
 use super::helpers::*;
-use super::machines::{SelOutcome, SelectPhase, SelectRun, number};
+use super::machines::{SelOutcome, SelectPhase, number};
 use super::trimextend::{self, TrimM};
 use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
@@ -82,14 +82,6 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["x"])
             .params("{handles?}")
             .interactive(|_| Ok(Box::new(SelectThen::new(Op::Explode)))),
-        CommandSpec::new("draworder.front", "Bring to Front", run_front)
-            .menu(&["Tools", "Draw Order", "Bring to Front"])
-            .params("{handles?}")
-            .interactive(|_| Ok(Box::new(SelectRun::new("draworder.front", "DRAWORDER")))),
-        CommandSpec::new("draworder.back", "Send to Back", run_back)
-            .menu(&["Tools", "Draw Order", "Send to Back"])
-            .params("{handles?}")
-            .interactive(|_| Ok(Box::new(SelectRun::new("draworder.back", "DRAWORDER")))),
         CommandSpec::new("break", "Break", run_break)
             .menu(&["Modify", "Break"])
             .alias(&["br"])
@@ -101,7 +93,6 @@ pub fn specs() -> Vec<CommandSpec> {
             .alias(&["j"])
             .params("{handles?}")
             .interactive(|_| Ok(Box::new(SelectThen::new(Op::Join)))),
-        CommandSpec::new("overkill", "Delete Duplicate Objects", run_overkill).menu(&["Modify", "Delete Duplicate Objects"]).params("{handles?}"),
     ]
 }
 
@@ -1160,6 +1151,9 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
             )
         }
         EntityKind::Insert(ins) => {
+            if let Some(items) = super::array::explode_array(d, e) {
+                return Some(items);
+            }
             let blk = d.block(&ins.block)?;
             let m = ins.transform(blk.base.xy());
             Some(
@@ -1260,6 +1254,7 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
             }
             Some(v)
         }
+        EntityKind::Tolerance(t) => Some(super::tolerance::explode(d, e, t)),
         _ => None,
     }
 }
@@ -1291,30 +1286,6 @@ fn run_explode(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let r = explode(s, &hs)?;
     Ok(json!({ "handles": r.iter().map(|h| h.hex()).collect::<Vec<_>>() }))
-}
-
-fn run_front(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = targets(s, p)?;
-    let space = s.space();
-    let d = s.doc_mut()?;
-    if let Some(st) = d.space_mut(&space) {
-        for h in hs {
-            st.bring_to_front(h);
-        }
-    }
-    ok()
-}
-
-fn run_back(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = targets(s, p)?;
-    let space = s.space();
-    let d = s.doc_mut()?;
-    if let Some(st) = d.space_mut(&space) {
-        for h in hs.into_iter().rev() {
-            st.send_to_back(h);
-        }
-    }
-    ok()
 }
 
 /// Break `h` between two points (or at one point when p1 == p2).
@@ -1506,24 +1477,6 @@ fn run_join(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let r = join(s, &hs)?;
     Ok(json!({ "handle": r.map(|h| h.hex()) }))
-}
-
-fn run_overkill(s: &mut Session, p: &Value) -> Result<Value> {
-    let hs = if p.get("handles").is_some() { targets(s, p)? } else { s.doc()?.space(&s.space()).map(|st| st.handles()).unwrap_or_default() };
-    let d = s.doc()?;
-    let mut seen: Vec<(String, String)> = Vec::new();
-    let mut dup = Vec::new();
-    for h in hs {
-        let Some(e) = d.entity(h) else { continue };
-        let key = (serde_json::to_string(&e.kind).unwrap_or_default(), serde_json::to_string(&e.common).unwrap_or_default());
-        if seen.contains(&key) {
-            dup.push(h);
-        } else {
-            seen.push(key);
-        }
-    }
-    let n = erase(s, &dup)?;
-    Ok(json!({ "deleted": n, "message": format!("{n} duplicate(s) deleted") }))
 }
 
 // ---------------- interactive ----------------
