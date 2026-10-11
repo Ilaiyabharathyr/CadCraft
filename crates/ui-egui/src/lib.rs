@@ -30,6 +30,7 @@ pub mod plotstyles;
 pub mod quick;
 pub mod theme;
 pub mod viewcube;
+pub mod vpscale;
 
 use std::sync::mpsc::Receiver;
 

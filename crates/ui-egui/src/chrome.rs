@@ -314,6 +314,8 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 app.canvas.list = None;
             }
             coord_right = br.left() - 10.0;
+            // Scale and lock of the active or selected viewport.
+            coord_right = crate::vpscale::status(app, ui, coord_right + 4.0, r.center().y) - 10.0;
         }
         if let Some(c) = coord {
             p.text(pos2(coord_right, r.center().y), egui::Align2::RIGHT_CENTER, c, crate::theme::body(), t.text);
