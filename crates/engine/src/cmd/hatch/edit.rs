@@ -175,9 +175,24 @@ pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
     let recreate = match p.get("recreate") {
         None | Some(Value::Null) | Some(Value::Bool(false)) => false,
         Some(Value::Bool(true)) => true,
-        Some(Value::String(t)) if matches!(t.to_ascii_lowercase().as_str(), "polyline" | "region") => true,
-        Some(_) => return Err(bad("hatchedit", "`recreate` is \"polyline\" or \"region\"")),
+        Some(Value::String(t)) if t.eq_ignore_ascii_case("polyline") => true,
+        Some(Value::String(t)) if t.eq_ignore_ascii_case("region") => {
+            return Err(bad("hatchedit", "region boundaries are not available yet; use \"polyline\""));
+        }
+        Some(_) => return Err(bad("hatchedit", "`recreate` is \"polyline\"")),
     };
+    // Like the prompt: a pattern must be one CADCraft defines, SOLID, or the hatches' own (a
+    // pattern read from a file keeps its definition).
+    if let Some(up) = str_param(p, "pattern").map(|v| v.trim().to_ascii_uppercase()).filter(|v| !v.is_empty())
+        && up != "SOLID"
+        && cadcraft_doc::library::pattern(&up).is_none()
+    {
+        let d = s.doc()?;
+        let own = hs.iter().all(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Hatch(x)) if x.pattern == up));
+        if !own {
+            return Err(bad("hatchedit", format!("unknown pattern {up}")));
+        }
+    }
     let boundary: Option<Vec<Handle>> = match p.get("boundary") {
         None | Some(Value::Null) => None,
         Some(Value::Array(a)) => Some(a.iter().filter_map(|v| v.as_str().and_then(Handle::parse_hex)).take(MAX_EDITED).collect()),
@@ -313,7 +328,8 @@ impl Interactive for HatchEditM {
             Ask::Angle => Prompt::new("Specify an angle for the hatch pattern", Accept::NUMBER)
                 .default(format!("{:.0}", h.map_or(0.0, |h| h.angle.to_degrees()))),
             Ask::Origin => Prompt::new("Specify the pattern origin", Accept::POINT).kw(&ORIGIN_KW).default("Use current"),
-            Ask::Recreate => Prompt::new("Type of boundary object", Accept::TEXT).kw(&["Region", "Polyline"]).default("Polyline"),
+            // Region boundaries come with REGION objects; polylines until then.
+            Ask::Recreate => Prompt::new("Type of boundary object", Accept::TEXT).kw(&["Polyline"]).default("Polyline"),
             Ask::RecreateLink => Prompt::new("Associate the hatch with the new boundary?", Accept::TEXT).kw(&["Yes", "No"]).default("No"),
             Ask::Link => Prompt::new("Select boundary objects (Enter finds them)", Accept::SELECT),
         }

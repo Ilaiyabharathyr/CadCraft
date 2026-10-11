@@ -156,3 +156,19 @@ fn dash_hatchedit_options_at_the_command_line() {
     assert!(hatch(&s, &h).associative, "{:?}", s.log);
     assert_eq!(hatch(&s, &h).loops[0].sources, vec![Handle::parse_hex(&r).unwrap()]);
 }
+
+#[test]
+fn hatchedit_refuses_unknown_patterns_and_region_boundaries() {
+    let mut s = Session::new();
+    let r = rect(&mut s, [0.0, 0.0], [4.0, 2.0]);
+    let h = handle(&s.execute("hatch", &json!({ "handles": [r] })).unwrap());
+    let before = hatch(&s, &h).pattern;
+    assert!(s.execute("hatchedit", &json!({ "handles": [h.clone()], "pattern": "NO-SUCH-PATTERN" })).is_err());
+    assert_eq!(hatch(&s, &h).pattern, before);
+    // Its own pattern, SOLID and library patterns are fine.
+    s.execute("hatchedit", &json!({ "handles": [h.clone()], "pattern": before.to_lowercase() })).unwrap();
+    s.execute("hatchedit", &json!({ "handles": [h.clone()], "pattern": "solid" })).unwrap();
+    assert!(hatch(&s, &h).solid);
+    // Region boundaries need REGION objects; the hatch is left as it was.
+    assert!(s.execute("hatchedit", &json!({ "handles": [h], "recreate": "region" })).is_err());
+}
