@@ -97,6 +97,7 @@ AutoCAD 2027 for Mac ships 8 interface languages; CADCraft ships English only. D
 | German | none | 0% |
 | Korean | none | 0% |
 | Vietnamese | none | 0% |
+| Turkish | none | 0% |
 
 Other languages shipped: Ukrainian, partial (936 catalog rows, landed with #36; engine messages stay English).
 
