@@ -307,7 +307,7 @@ pub struct Settings {
     /// MAXARRAY: the most objects one array command creates (items × selected objects).
     pub maxarray: u64,
     pub isodraft: bool,
-    pub annoallvisible: bool,
+    /// ANNOAUTOSCALE on: changing the annotation scale adds it to the annotative objects.
     pub annoautoscale: bool,
     /// QPMODE: show the Quick Properties palette when objects are selected.
     pub qpmode: bool,
@@ -346,7 +346,6 @@ impl Default for Settings {
             cursorsize: 5.0,
             maxarray: 100_000,
             isodraft: false,
-            annoallvisible: true,
             annoautoscale: false,
             qpmode: false,
             polar_flags: 0,
@@ -614,6 +613,12 @@ impl Session {
         let mut common = common;
         if let Some(rgb) = true_color {
             common.color = cadcraft_color::Color::True(cadcraft_color::Rgb::from_u32(rgb as u32));
+        }
+        // Text, dimensions, multileaders, hatches and block references of annotative styles are
+        // annotative, supporting the current annotation scale.
+        let d = self.doc()?;
+        if d.annotative_by_style(&kind) {
+            common.anno_scales = vec![d.current_anno_scale()];
         }
         let h = self.doc_mut()?.add(&space, common, kind)?;
         Ok(h)
