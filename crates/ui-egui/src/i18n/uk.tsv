@@ -171,6 +171,8 @@
 	Deselect All	Скасувати вибір
 	Diameter	Діаметр
 	Dim style	Розмірний стиль
+	Dimension Break	Розрив розміру
+	Dimension Edit	Редагувати розмір
 	Dimension	Розміри
 	Dimension Space	Відстань між розмірами
 	Dimension Style Override	Перевизначення розмірного стилю
@@ -348,6 +350,7 @@
 	Insertion Z	Вставлення Z
 	Inspect Constraints	Переглянути обмеження
 	Inspect Drawing	Переглянути креслення
+	Inspection	Контрольний розмір
 	Interface Language	Мова інтерфейсу
 	Interface Theme	Тема інтерфейсу
 	Intersect	Перетин
@@ -355,6 +358,8 @@
 	Isolate	Ізолювати
 	Isolate Layer	Ізолювати шар
 	Isometric Drafting	Ізометричне креслення
+	Jogged	Зі зламом
+	Jogged Linear	Лінійний зі зламом
 	Join	Об'єднати
 	Join the ArtCraft Discord…	Приєднатися до Discord ArtCraft…
 	Join us on Discord	Приєднуйтеся до нас у Discord
@@ -481,6 +486,7 @@
 	Object Snap Tracking	Відстеження об'єктної прив'язки
 	Object Snap Tracking (F11)	Відстеження об'єктної прив'язки (F11)
 	Object type:	Тип об'єкта:
+	Oblique	Похилий
 	Off	Вимкнено
 	Offset	Зміщення
 	On	Увімкнено
