@@ -1,5 +1,8 @@
 //! HATCH, GRADIENT, BOUNDARY, REGION: boundaries from pick points or selected closed objects.
 
+mod patfile;
+pub(super) use patfile::{lines_for, run_patterns};
+
 use cadcraft_color::Color;
 use cadcraft_doc::{Drawing, Entity, EntityKind, Gradient, Handle, Hatch, HatchLoop, Space, entity_bounds};
 use cadcraft_geom::{Bounds2, PolyVertex, Polyline, Vec2, point_in_polygon};
@@ -200,7 +203,7 @@ impl HatchSettings {
             gradient: self.gradient.clone(),
             origin: Vec2::ZERO,
             background: None,
-            pattern_lines: Vec::new(),
+            pattern_lines: patfile::lines_for(&self.pattern),
         })
     }
 }
@@ -231,6 +234,7 @@ fn make(s: &mut Session, p: &Value, gradient: bool) -> Result<Value> {
 }
 
 fn run_hatch(s: &mut Session, p: &Value) -> Result<Value> {
+    patfile::load_param(p)?;
     make(s, p, false)
 }
 fn run_gradient(s: &mut Session, p: &Value) -> Result<Value> {
@@ -330,15 +334,16 @@ impl HatchM {
     fn answer(&mut self, s: &mut Session, a: HatchAsk, t: &str) -> Result<()> {
         match a {
             HatchAsk::Pattern => {
-                let up = t.trim().to_ascii_uppercase();
-                if cadcraft_doc::library::pattern(&up).is_some() {
+                let up = match patfile::typed_file(s, t.trim()) {
+                    Some(n) if n.is_empty() => return Ok(()),
+                    Some(n) => n,
+                    None => t.trim().to_ascii_uppercase(),
+                };
+                if cadcraft_doc::library::pattern(&up).is_some() || patfile::user_pattern(&up).is_some() {
                     self.settings.pattern = up.clone();
                     s.doc_mut()?.header.set_str("HPNAME", &up);
                 } else {
-                    s.echo(format!(
-                        "Unknown pattern {up}. Available: {}",
-                        cadcraft_doc::library::standard_patterns().iter().map(|p| p.name).collect::<Vec<_>>().join(", ")
-                    ));
+                    s.echo(format!("Unknown pattern {up}. Available: {}", patfile::names().join(", ")));
                 }
             }
             HatchAsk::Scale => {
