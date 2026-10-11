@@ -17,16 +17,19 @@ pub enum Preference {
     English,
     #[serde(rename = "uk")]
     Ukrainian,
+    #[serde(rename = "de")]
+    German,
 }
 
 impl Preference {
-    pub const ALL: [Self; 3] = [Self::Auto, Self::English, Self::Ukrainian];
+    pub const ALL: [Self; 4] = [Self::Auto, Self::English, Self::Ukrainian, Self::German];
 
     pub fn code(self) -> &'static str {
         match self {
             Self::Auto => "auto",
             Self::English => "en",
             Self::Ukrainian => "uk",
+            Self::German => "de",
         }
     }
 
@@ -35,6 +38,7 @@ impl Preference {
             Self::Auto => t("Auto (system language)"),
             Self::English => "English",
             Self::Ukrainian => "Українська",
+            Self::German => "Deutsch",
         }
     }
 
@@ -51,6 +55,7 @@ impl Preference {
         match self {
             Self::English => "en",
             Self::Ukrainian => "uk",
+            Self::German => "de",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -63,9 +68,10 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 2] = [
+pub static LANGUAGES: [Language; 3] = [
     Language { code: "en", name: "English", source: "", catalog: OnceLock::new() },
     Language { code: "uk", name: "Українська", source: include_str!("uk.tsv"), catalog: OnceLock::new() },
+    Language { code: "de", name: "Deutsch", source: include_str!("de.tsv"), catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA` and `uk_UA.UTF-8`.
@@ -161,10 +167,23 @@ pub fn plural_uk(n: u64) -> usize {
     }
 }
 
+/// English and German integer plurals: one (1), other (0, 2…).
+fn plural_en_de(n: u64) -> usize {
+    usize::from(n != 1)
+}
+
+/// Selects the plural rule of the current language; indexes match the `@plural` forms.
+fn plural_form(language: &str, n: u64) -> usize {
+    match language {
+        "uk" => plural_uk(n),
+        _ => plural_en_de(n),
+    }
+}
+
 pub fn count(n: u64, one: &str, other: &str) -> String {
     let language = CURRENT.get();
     let source = catalog(language).and_then(|c| c.get(&("@plural", one))).copied();
-    let form = source.and_then(|s| s.split('|').nth(plural_uk(n))).unwrap_or(if n == 1 { one } else { other });
+    let form = source.and_then(|s| s.split('|').nth(plural_form(language, n))).unwrap_or(if n == 1 { one } else { other });
     format(form, &[("n", n.to_string())])
 }
 

@@ -113,12 +113,17 @@ fn locale_and_saved_preference_resolution() {
     for tag in ["uk", "uk-UA", "uk_UA.UTF-8", "UK-ua", " uk-UA ", "uk_UA@euro"] {
         assert_eq!(locale_language(tag), Some("uk"), "{tag}");
     }
+    for tag in ["de", "de-DE", "de_DE.UTF-8", "DE-at", "de-CH"] {
+        assert_eq!(locale_language(tag), Some("de"), "{tag}");
+    }
     for tag in ["ua", "ukulele", "ru-RU", "", "garbage", "💙"] {
         assert_eq!(locale_language(tag), None, "{tag}");
     }
     let locales = vec!["pl-PL".into(), "uk-UA".into(), "en-US".into()];
     assert_eq!(Preference::Auto.resolve(&locales), "uk");
     assert_eq!(Preference::English.resolve(&locales), "en");
+    assert_eq!(Preference::German.resolve(&locales), "de");
+    assert_eq!(Preference::Auto.resolve(&["de-DE".into(), "en-US".into()]), "de");
     assert_eq!(Preference::Auto.resolve(&["en-US".into(), "uk-UA".into()]), "en");
     assert_eq!(Preference::Auto.resolve(&[]), "en");
     assert_eq!(Preference::restore(None), Preference::Auto);
@@ -169,6 +174,12 @@ fn plural_forms_and_templates_preserve_inserted_user_data() {
         assert_eq!(format("{b}/{a}", &[("a", "А".into()), ("b", "Б".into())]), "Б/А");
     });
     assert_eq!(t("Layers"), "Layers");
+    with_language("de", || {
+        assert_eq!(t("Layers"), "Layer");
+        assert_eq!(count(1, "{n} contributor", "{n} contributors"), "1 Mitwirkender");
+        assert_eq!(count(2, "{n} contributor", "{n} contributors"), "2 Mitwirkende");
+        assert_eq!(count(11, "{n} contributor", "{n} contributors"), "11 Mitwirkende");
+    });
     with_language("uk", || {
         assert_eq!(t("Layers"), "Шари");
         with_language("en", || assert_eq!(t("Layers"), "Layers"));
@@ -268,6 +279,22 @@ fn dialogs_render_in_ukrainian_and_keep_their_source_ids() {
         assert!(text.contains(heading), "{dialog}: {text}");
         assert_eq!(app.ui.dialog.as_deref(), Some(dialog));
     }
+}
+
+#[test]
+fn default_fonts_cover_every_german_special_letter_in_the_catalog() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let letters: BTreeSet<_> = include_str!("de.tsv").chars().filter(|c| ('\u{00c0}'..='\u{00ff}').contains(c)).collect();
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
+            }
+        }
+    });
 }
 
 #[test]
