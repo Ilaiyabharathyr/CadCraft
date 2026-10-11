@@ -20,8 +20,60 @@ pub fn specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo()
             .interactive(|_| Ok(Box::new(Recover))),
+        CommandSpec::new("drawingrecovery", "Drawing Recovery Manager...", run_drawingrecovery)
+            .menu(&["File", "Drawing Utilities", "Drawing Recovery Manager..."])
+            .params("{action?: list|open|discard (default list), path? (one of the listed files)} → {files: [{path, drawing, modified, bytes}]} | (open: as RECOVER)")
+            .enabled(always)
+            .noundo(),
     ]
 }
+
+/// Drawing Recovery: list the autosave files that apps which stopped left in SAVEFILEPATH, open
+/// one as an unsaved copy, or delete one. Only listed files can be opened or deleted.
+fn run_drawingrecovery(s: &mut Session, p: &Value) -> Result<Value> {
+    let action = str_param(p, "action").unwrap_or("list").to_ascii_lowercase();
+    let files = recoverable_files();
+    let pick = || {
+        let path = str_param(p, "path").ok_or_else(|| bad("drawingrecovery", "`path` is required"))?;
+        files.iter().find(|f| f.path == path).cloned().ok_or_else(|| bad("drawingrecovery", format!("{path} is not a recoverable autosave file")))
+    };
+    match action.as_str() {
+        "list" => Ok(json!({ "files": files })),
+        "open" => {
+            let f = pick()?;
+            run_recover(s, &json!({ "path": f.path, "copy": true, "title": f.drawing }))
+        }
+        "discard" => {
+            let f = pick()?;
+            discard_file(&f.path);
+            Ok(json!({ "files": recoverable_files() }))
+        }
+        other => Err(bad("drawingrecovery", format!("unknown action `{other}` (list, open or discard)"))),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn recoverable_files() -> Vec<crate::autosave::Recoverable> {
+    let dir = crate::autosave::savefilepath();
+    if dir.is_empty() {
+        return Vec::new();
+    }
+    // This app's own files are never listed: its lock file is fresh.
+    crate::autosave::recoverable(std::path::Path::new(&dir), "")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn recoverable_files() -> Vec<crate::autosave::Recoverable> {
+    Vec::new()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn discard_file(path: &str) {
+    crate::autosave::discard(path);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn discard_file(_: &str) {}
 
 /// Check the current drawing; with `fix`, repair it (one undo step).
 fn run_audit(s: &mut Session, p: &Value) -> Result<Value> {
