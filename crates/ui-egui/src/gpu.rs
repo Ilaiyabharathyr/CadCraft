@@ -232,20 +232,28 @@ pub struct CanvasCallback {
     pub scale: f32,
     /// Canvas rect centre in points.
     pub center: [f32; 2],
+    /// Which buffers to draw: [`LAYER_DRAWING`] or [`LAYER_DRAG`].
+    pub layer: usize,
+    /// Affine transform applied to the origin-relative positions before `offset`: the linear
+    /// part (a, b, c, d as in `Mat3`) and the translation. [`IDENTITY_XFORM`] for the drawing.
+    pub xform: [f32; 6],
 }
+
+/// The drawing's display list.
+pub const LAYER_DRAWING: usize = 0;
+/// The objects a MOVE/COPY/ROTATE/SCALE preview drags, uploaded once per drag.
+pub const LAYER_DRAG: usize = 1;
+pub const IDENTITY_XFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
 struct Batch {
     buffer: wgpu::Buffer,
     count: u32,
 }
 
-struct Resources {
-    line_pipeline: wgpu::RenderPipeline,
-    tri_pipeline: wgpu::RenderPipeline,
-    quad_pipeline: wgpu::RenderPipeline,
+/// One uploaded mesh with its own view uniform (each callback's transform differs).
+struct Layer {
     uniform: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    linear_out: bool,
     key: Option<u64>,
     lines: Vec<Batch>,
     tris: Vec<Batch>,
@@ -253,13 +261,23 @@ struct Resources {
     breaks: Vec<[usize; 3]>,
 }
 
-const UNIFORM_SIZE: u64 = 48;
+struct Resources {
+    line_pipeline: wgpu::RenderPipeline,
+    tri_pipeline: wgpu::RenderPipeline,
+    quad_pipeline: wgpu::RenderPipeline,
+    linear_out: bool,
+    layers: Vec<Layer>,
+}
+
+const UNIFORM_SIZE: u64 = 80;
 
 const SHADER: &str = r#"
 struct View {
     a: vec4<f32>, // offset x, offset y (world), scale (device px per unit), 1 = linear output
     b: vec4<f32>, // canvas centre x, y (device px), screen w, h (device px)
     c: vec4<f32>, // pixels per point
+    d: vec4<f32>, // transform linear part: a, b, c, d (x' = a x + c y, y' = b x + d y)
+    e: vec4<f32>, // transform translation x, y (world, origin-relative)
 };
 @group(0) @binding(0) var<uniform> view: View;
 
@@ -269,7 +287,8 @@ struct VOut {
 };
 
 fn to_px(p: vec2<f32>) -> vec2<f32> {
-    let w = (p + view.a.xy) * view.a.z;
+    let q = vec2<f32>(view.d.x * p.x + view.d.z * p.y, view.d.y * p.x + view.d.w * p.y) + view.e.xy;
+    let w = (q + view.a.xy) * view.a.z;
     return vec2<f32>(view.b.x + w.x, view.b.y - w.y);
 }
 
@@ -354,17 +373,20 @@ impl Resources {
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cad_canvas_view"),
-            size: UNIFORM_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("cad_canvas"),
-            layout: &bgl,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
-        });
+        let layer = || {
+            let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("cad_canvas_view"),
+                size: UNIFORM_SIZE,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cad_canvas"),
+                layout: &bgl,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
+            });
+            Layer { uniform, bind_group, key: None, lines: Vec::new(), tris: Vec::new(), quads: Vec::new(), breaks: Vec::new() }
+        };
         let pipeline = |label: &str, vs: &str, topology: wgpu::PrimitiveTopology, buffer: wgpu::VertexBufferLayout<'static>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -396,14 +418,8 @@ impl Resources {
             line_pipeline: pipeline("cad_lines", "vs_line", wgpu::PrimitiveTopology::LineList, vertex_layout()),
             tri_pipeline: pipeline("cad_fills", "vs_line", wgpu::PrimitiveTopology::TriangleList, vertex_layout()),
             quad_pipeline: pipeline("cad_quads", "vs_quad", wgpu::PrimitiveTopology::TriangleList, instance_layout()),
-            uniform,
-            bind_group,
             linear_out: target.format.is_srgb(),
-            key: None,
-            lines: Vec::new(),
-            tris: Vec::new(),
-            quads: Vec::new(),
-            breaks: Vec::new(),
+            layers: vec![layer(), layer()],
         }
     }
 }
@@ -439,6 +455,8 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
+        let linear_out = res.linear_out;
+        let Some(res) = res.layers.get_mut(self.layer) else { return Vec::new() };
         if res.key != Some(self.key) {
             let pending = self.slot.lock().ok().and_then(|mut s| s.take());
             if let Some(m) = pending {
@@ -452,16 +470,20 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         }
         let ppp = screen.pixels_per_point;
         let [w, h] = screen.size_in_pixels;
-        let a = [self.offset[0], self.offset[1], self.scale * ppp, if res.linear_out { 1.0 } else { 0.0 }];
+        let a = [self.offset[0], self.offset[1], self.scale * ppp, if linear_out { 1.0 } else { 0.0 }];
         let b = [self.center[0] * ppp, self.center[1] * ppp, w.max(1) as f32, h.max(1) as f32];
         let c = [ppp, 0.0, 0.0, 0.0];
-        let bytes: Vec<u8> = a.iter().chain(&b).chain(&c).flat_map(|v| v.to_le_bytes()).collect();
+        let [ma, mb, mc, md, tx, ty] = self.xform;
+        let d = [ma, mb, mc, md];
+        let e = [tx, ty, 0.0, 0.0];
+        let bytes: Vec<u8> = a.iter().chain(&b).chain(&c).chain(&d).chain(&e).flat_map(|v| v.to_le_bytes()).collect();
         queue.write_buffer(&res.uniform, 0, &bytes);
         Vec::new()
     }
 
     fn paint(&self, info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
-        let Some(res) = resources.get::<Resources>() else { return };
+        let Some(shared) = resources.get::<Resources>() else { return };
+        let Some(res) = shared.layers.get(self.layer) else { return };
         if res.key != Some(self.key) {
             return;
         }
@@ -478,7 +500,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         let mut from = [0usize; 3];
         for to in res.breaks.iter().copied().chain(std::iter::once(all)) {
             for (i, (pipeline, batches)) in
-                [(&res.tri_pipeline, &res.tris), (&res.line_pipeline, &res.lines), (&res.quad_pipeline, &res.quads)].into_iter().enumerate()
+                [(&shared.tri_pipeline, &res.tris), (&shared.line_pipeline, &res.lines), (&shared.quad_pipeline, &res.quads)].into_iter().enumerate()
             {
                 let parts = batch_ranges(batches.iter().map(|b| b.count), from[i]..to[i]);
                 if parts.is_empty() {

@@ -48,6 +48,11 @@ pub struct CanvasState {
     mesh_key: Option<u64>,
     mesh_slot: crate::gpu::MeshSlot,
     mesh_origin: Vec2,
+    /// The dragged objects of a MOVE/COPY/ROTATE/SCALE preview, uploaded once per drag (see
+    /// [`draw_drag_gpu`]).
+    drag_key: Option<u64>,
+    drag_slot: crate::gpu::MeshSlot,
+    drag_origin: Vec2,
     /// Indices of infinite-line primitives in `list` (drawn on the CPU in GPU mode).
     infinite: Vec<usize>,
     /// Milliseconds spent converting the display list to vertex data (last rebuild).
@@ -322,6 +327,54 @@ fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay:
     p.extend(shapes);
 }
 
+/// Draw a MOVE/COPY/ROTATE/SCALE preview the way the drawing itself is drawn: the dragged
+/// objects are tessellated and uploaded once (again only when the drawing, the selection or the
+/// zoom band changes), and each frame only the transform in the view uniform moves. Rebuilding
+/// the transformed copies as egui shapes every frame was slow with heavy selections and could
+/// overflow the GPU buffer limit.
+fn draw_drag_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, doc: &cadcraft_doc::Drawing, drag: &cadcraft_engine::Drag, bg: Rgb) {
+    // Tessellate for a power-of-two zoom band so zooming mid-drag rebuilds only every 2x.
+    let band = xf.scale.max(1e-300).log2().round() as i32;
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (c.key, band, bg.0, bg.1, bg.2, &drag.handles).hash(&mut h);
+        h.finish()
+    };
+    if c.drag_key != Some(key) {
+        let band_scale = 2f64.powi(band);
+        let list = cadcraft_render::build_entities(
+            doc,
+            drag.handles.iter().filter_map(|h| doc.entity(*h)).map(|e| e.as_ref()),
+            &cadcraft_render::Options { tolerance: 0.5 / band_scale, min_dash: 2.0 / band_scale, ..Default::default() },
+        );
+        let origin = if list.bounds.is_empty() { Vec2::ZERO } else { list.bounds.center() };
+        let mesh = crate::gpu::build_mesh(&list, origin, bg, false);
+        if let Ok(mut slot) = c.drag_slot.lock() {
+            *slot = Some(mesh);
+        }
+        c.drag_key = Some(key);
+        c.drag_origin = origin;
+    }
+    // Positions are relative to the origin o: M(o + p) = L·p + (M(o) − o).
+    let m = drag.matrix;
+    let o = c.drag_origin;
+    let t = m.apply(o) - o;
+    let center = xf.rect.center();
+    p.add(egui_wgpu::Callback::new_paint_callback(
+        xf.rect,
+        crate::gpu::CanvasCallback {
+            key,
+            slot: c.drag_slot.clone(),
+            offset: [(o.x - xf.center.x) as f32, (o.y - xf.center.y) as f32],
+            scale: xf.scale as f32,
+            center: [center.x, center.y],
+            layer: crate::gpu::LAYER_DRAG,
+            xform: [m.a as f32, m.b as f32, m.c as f32, m.d as f32, t.x as f32, t.y as f32],
+        },
+    ));
+}
+
 /// Draw the display list through the GPU paint callback (uploading it when it changed), plus
 /// the infinite lines, which are clipped to the view on the CPU every frame.
 fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdisplay: bool) {
@@ -353,6 +406,8 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
             offset: [(c.mesh_origin.x - xf.center.x) as f32, (c.mesh_origin.y - xf.center.y) as f32],
             scale: xf.scale as f32,
             center: [center.x, center.y],
+            layer: crate::gpu::LAYER_DRAWING,
+            xform: crate::gpu::IDENTITY_XFORM,
         },
     ));
     let mut shapes = Vec::new();
@@ -973,7 +1028,21 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
     // Rubber band preview of the active command.
-    if let (Some(c), true) = (app.canvas.cursor, app.session.running.is_some()) {
+    let drag = match (app.canvas.cursor, app.canvas.gpu.is_some() && sheet.is_none()) {
+        (Some(c), true) => app.session.drag(c),
+        _ => None,
+    };
+    if let Some((drag, extra)) = drag {
+        if let Ok(st) = app.session.state() {
+            draw_drag_gpu(&mut app.canvas, &painter, &xf, &st.doc, &drag, bg);
+            let list = cadcraft_render::build_entities(
+                &st.doc,
+                extra.iter(),
+                &cadcraft_render::Options { tolerance: 0.5 / scale, min_dash: 2.0 / scale, ..Default::default() },
+            );
+            draw_list(&painter, &xf, &list, bg, false);
+        }
+    } else if let (Some(c), true) = (app.canvas.cursor, app.session.running.is_some()) {
         let ents = app.session.preview(c);
         if !ents.is_empty()
             && let Ok(st) = app.session.state()
