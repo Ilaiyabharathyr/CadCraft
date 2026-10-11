@@ -4,6 +4,8 @@ use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
 
+mod table;
+
 const SESSION_VARS: &[&str] = &[
     "OSMODE",
     "OSNAPHATCH",
@@ -92,6 +94,9 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
             json!([p.x, p.y, 0.0])
         }
         _ => {
+            if let Some(v) = table::get(s, &n) {
+                return Some(v);
+            }
             let d = s.doc().ok()?;
             match d.header.get(&n) {
                 Some(h) => serde_json::to_value(h).ok()?,
@@ -125,7 +130,7 @@ fn as_pt(v: &Value) -> Option<cadcraft_geom::Vec2> {
 const READ_ONLY: &[&str] = &["CMDNAMES", "DWGNAME", "DBMOD", "CTAB", "LASTPOINT", "VIEWCTR", "VIEWSIZE", "EXTMIN", "EXTMAX"];
 
 pub fn is_read_only(name: &str) -> bool {
-    READ_ONLY.iter().any(|r| r.eq_ignore_ascii_case(name.trim()))
+    READ_ONLY.iter().any(|r| r.eq_ignore_ascii_case(name.trim())) || table::is_read_only(&name.trim().to_ascii_uppercase())
 }
 
 pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
@@ -182,6 +187,9 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             s.doc_mut()?.header.set_f64("ANGBASE", cadcraft_geom::norm_angle(a));
         }
         _ => {
+            if let Some(r) = table::set(s, &n, v) {
+                return r;
+            }
             let d = s.doc_mut()?;
             let val = match v {
                 Value::Number(x) if x.is_i64() => cadcraft_doc::HVal::Int(x.as_i64().unwrap_or(0)),
@@ -241,5 +249,6 @@ pub fn list(s: &Session) -> Value {
             }
         }
     }
+    table::list(s, &mut m);
     Value::Object(m)
 }
