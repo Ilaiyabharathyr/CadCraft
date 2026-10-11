@@ -35,46 +35,6 @@ impl Xf {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct HotGrip {
-    pub handle: Handle,
-    pub index: usize,
-    pub base: Vec2,
-    pub mode: cadcraft_engine::grips::GripMode,
-}
-
-impl HotGrip {
-    pub fn label(&self) -> &'static str {
-        use cadcraft_engine::grips::GripMode::*;
-        match self.mode {
-            Stretch => "** STRETCH ** Specify stretch point or [Base point/Copy/Undo/eXit]:",
-            Move => "** MOVE ** Specify move point or [Base point/Copy/Undo/eXit]:",
-            Rotate => "** ROTATE ** Specify rotation angle or [Base point/Copy/Undo/Reference/eXit]:",
-            Scale => "** SCALE ** Specify scale factor or [Base point/Copy/Undo/Reference/eXit]:",
-            Mirror => "** MIRROR ** Specify second point or [Base point/Copy/Undo/eXit]:",
-        }
-    }
-    pub fn next_mode(&mut self) {
-        use cadcraft_engine::grips::GripMode::*;
-        self.mode = match self.mode {
-            Stretch => Move,
-            Move => Rotate,
-            Rotate => Scale,
-            Scale => Mirror,
-            Mirror => Stretch,
-        };
-    }
-}
-
-/// Apply a hot grip at `to` (one undo step) and clear it.
-pub fn apply_hot_grip(app: &mut CadApp, to: Vec2) {
-    if let Some(g) = app.canvas.hot_grip.take()
-        && let Err(e) = app.session.grip_edit(g.handle, g.index, to, g.mode)
-    {
-        app.session.echo(e.to_string());
-    }
-}
-
 #[derive(Default)]
 pub struct CanvasState {
     pub list: Option<DisplayList>,
@@ -104,8 +64,13 @@ pub struct CanvasState {
     /// True when the latest scroll came from a trackpad (or other precise-scrolling device):
     /// scrolling then pans and pinch zooms. A notched mouse wheel clears it so the wheel zooms.
     scroll_pans: bool,
-    /// A hot (clicked) grip being dragged: entity, grip index, grip position, mode.
-    pub hot_grip: Option<HotGrip>,
+    /// Hot grips (object, grip index): the ones Shift+clicked while idle, then the ones the
+    /// running GRIP edit works on (the engine's grip modes take them from there).
+    pub hot_grips: Vec<(Handle, usize)>,
+    /// A GRIP edit was running last frame (its grips go cold when it ends).
+    grip_editing: bool,
+    /// The grip whose menu (Stretch, Add Vertex, Lengthen…) a right-click opened.
+    grip_menu: Option<(Handle, usize)>,
     /// Zoom to extents once the canvas size is known (after opening a drawing).
     pub zoom_pending: bool,
     pub build_ms: f64,
@@ -510,6 +475,11 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
                 let (a0, span) = (center.angle_to(tr.point), (far / radius).min(std::f64::consts::PI));
                 (0..=96).map(|i| xf.to_screen(Vec2::polar(center, radius, a0 - span + span * f64::from(i) / 48.0))).collect()
             }
+            PathShape::Ellipse { center, major, ratio, .. } => {
+                let e = cadcraft_geom::Ellipse::full(center, major, ratio);
+                let (t0, span) = (e.param_of(tr.point), (far / (major.len() * ratio.min(1.0))).min(std::f64::consts::PI));
+                (0..=96).map(|i| xf.to_screen(e.at_param(t0 - span + span * f64::from(i) / 48.0))).collect()
+            }
         };
         p.extend(Shape::dotted_line(&pts, t.snap, 6.0, 1.0));
         let (distance, angle) = (
@@ -537,10 +507,9 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
 /// `Session::snap_cursor`: object snaps, acquiring tracking points, grid, tracking paths, ortho).
 fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) -> Vec2 {
     let prompt = app.session.current_prompt();
-    let hot = app.canvas.hot_grip;
-    let wants_point = hot.is_some() || prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
-    let base = hot.map(|g| g.base).or_else(|| prompt.as_ref().and_then(|p| p.base));
-    let deferred = hot.is_none() && prompt.as_ref().is_some_and(|p| p.deferred);
+    let wants_point = prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
+    let base = prompt.as_ref().and_then(|p| p.base);
+    let deferred = prompt.as_ref().is_some_and(|p| p.deferred);
     app.canvas.snap = None;
     app.canvas.track = None;
     if !wants_point || app.session.pending_window.is_some() {
@@ -672,6 +641,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         Err(_) => (xf, None),
     };
+    // A clipped active viewport's outline (picks and its heavy border follow it).
+    let active_clip = app.session.state().ok().and_then(|st| st.active_viewport().and_then(|(h, v)| cadcraft_render::viewport_clip(&st.doc, h, &v)));
     // Double-click a viewport to work inside it; double-click the sheet outside it to return.
     if inside
         && dbl_primary
@@ -680,9 +651,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && let Some(hp) = hover_pos
     {
         let pp = xf_paper.to_world(hp);
-        let in_active = active_vp.as_ref().is_some_and(|v| (pp.x - v.center.x).abs() <= v.width / 2.0 && (pp.y - v.center.y).abs() <= v.height / 2.0);
+        let in_rect = |v: &cadcraft_doc::Viewport| (pp.x - v.center.x).abs() <= v.width / 2.0 && (pp.y - v.center.y).abs() <= v.height / 2.0;
+        let in_active = active_vp.as_ref().is_some_and(|v| active_clip.as_ref().map_or(in_rect(v), |c| c.contains(pp)));
         if !in_active {
-            app.canvas.hot_grip = None;
+            app.canvas.hot_grips.clear();
             if app.run("mspace", serde_json::json!({"at": [pp.x, pp.y]})).is_err() && active_vp.is_some() {
                 let _ = app.run("pspace", serde_json::json!({}));
             }
@@ -724,7 +696,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && let Some(p) = app.canvas.cursor
     {
         if app.session.running.is_some() {
-            app.canvas.hot_grip = None;
+            // Ctrl held while picking the point of a grip edit makes copies (the Copy option).
+            if mods.ctrl && app.session.running.as_ref().is_some_and(|r| r.id == "grip") {
+                let _ = app.session.input(Input::Keyword("Copy".into()));
+            }
             // Clicking places the point; a value typed into the Dynamic Input boxes is used up.
             if let Some(f) = dyn_frame
                 && crate::dyninput::parse(&app.cmd.buffer, &f).is_some()
@@ -736,11 +711,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             if let Err(e) = app.session.input(input) {
                 app.session.echo(e.to_string());
             }
-        } else if app.canvas.hot_grip.is_some() {
-            apply_hot_grip(app, p);
         } else if let Some(g) = grip_at(app, &xf, hover_pos) {
-            app.canvas.hot_grip = Some(g);
-            app.session.echo(g.label());
+            click_grip(app, g, mods.shift);
         } else if let Err(e) = app.session.idle_click(raw_world.unwrap_or(p), mods.shift) {
             app.session.echo(e.to_string());
         }
@@ -750,7 +722,6 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // and letting go closes it. Drags on grips and drags while drawing are left alone.
     if resp.drag_started_by(egui::PointerButton::Primary)
         && !middle_down
-        && app.canvas.hot_grip.is_none()
         && app.session.pending_window.is_none()
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
         && rect.contains(origin)
@@ -779,7 +750,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if inside && pressed_secondary && !idle && !app.canvas.snap_menu {
         let _ = app.session.input(Input::Enter);
     }
-    if idle || app.canvas.snap_menu {
+    // Right-click on a grip with options (polyline vertex, line end…) opens the grip menu.
+    if inside && pressed_secondary && idle && !app.canvas.snap_menu {
+        app.canvas.grip_menu = grip_at(app, &xf, hover_pos).filter(|g| !grip_options(app, *g).is_empty());
+    }
+    if idle && !app.canvas.snap_menu && app.canvas.grip_menu.is_some() {
+        grip_menu(app, &resp);
+    } else if idle || app.canvas.snap_menu {
         crate::context_menu::show(app, &resp);
     }
 
@@ -838,7 +815,17 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             xf_paper.to_screen(Vec2::new(vp.center.x - vp.width / 2.0, vp.center.y + vp.height / 2.0)),
             xf_paper.to_screen(Vec2::new(vp.center.x + vp.width / 2.0, vp.center.y - vp.height / 2.0)),
         );
-        painter.rect_stroke(r, 0.0, Stroke::new(3.0, Color32::from_rgb(0x2a, 0x2a, 0x2a)), egui::StrokeKind::Middle);
+        let heavy = Stroke::new(3.0, Color32::from_rgb(0x2a, 0x2a, 0x2a));
+        match &active_clip {
+            Some(c) => {
+                let mut pts: Vec<egui::Pos2> = c.polygon().iter().map(|q| xf_paper.to_screen(*q)).collect();
+                pts.extend(pts.first().copied());
+                painter.add(egui::Shape::line(pts, heavy));
+            }
+            None => {
+                painter.rect_stroke(r, 0.0, heavy, egui::StrokeKind::Middle);
+            }
+        }
         if let Ok(st) = app.session.state() {
             let mut hs = sel.clone();
             hs.extend(app.canvas.hover.filter(|h| !sel.contains(h)));
@@ -876,8 +863,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let p = painter.with_clip_rect(clip);
         crate::parametric::draw_overlay(app, ui, &p, &xf);
     }
-    // Grips on selected objects (when idle).
-    if app.session.running.is_none()
+    // Grips on selected objects (when idle or editing grips).
+    let grip_edit = app.session.running.as_ref().is_some_and(|r| r.id == "grip");
+    if (!grip_edit && (app.canvas.grip_editing || app.session.running.is_some())) || sel.is_empty() {
+        app.canvas.hot_grips.clear();
+    }
+    app.canvas.grip_editing = grip_edit;
+    if (app.session.running.is_none() || grip_edit)
         && let Ok(st) = app.session.state()
     {
         let gs = app.session.settings.gripsize as f32;
@@ -887,7 +879,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                     let sp = xf.to_screen(g);
                     if rect.contains(sp) {
                         let r = Rect::from_center_size(sp, vec2(gs * 2.0, gs * 2.0));
-                        let hot = app.canvas.hot_grip.is_some_and(|hg| hg.handle == *h && hg.index == gi);
+                        let hot = app.canvas.hot_grips.contains(&(*h, gi));
                         let warm = !hot && hover_pos.is_some_and(|hp| r.expand(2.0).contains(hp));
                         painter.rect_filled(
                             r,
@@ -905,30 +897,6 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
             }
         }
-    }
-    // Hot grip preview.
-    if let (Some(g), Some(c), Ok(st)) = (app.canvas.hot_grip, app.canvas.cursor, app.session.state())
-        && let Some(e) = st.doc.entity(g.handle)
-    {
-        let k = match cadcraft_engine::grips::mode_matrix(g.mode, g.base, c) {
-            Some(m) => {
-                let mut k = e.kind.clone();
-                k.transform(&m);
-                Some(k)
-            }
-            None if g.mode == cadcraft_engine::grips::GripMode::Stretch => cadcraft_engine::grips::stretch_grip(&e.kind, g.index, c),
-            None => None,
-        };
-        if let Some(k) = k {
-            let ent = cadcraft_doc::Entity { handle: Handle(0), common: e.common.clone(), kind: k };
-            let list = cadcraft_render::build_entities(
-                &st.doc,
-                std::iter::once(&ent),
-                &cadcraft_render::Options { tolerance: 0.5 / scale, min_dash: 2.0 / scale, ..Default::default() },
-            );
-            draw_list(&painter, &xf, &list, bg, false);
-        }
-        painter.extend(Shape::dashed_line(&[xf.to_screen(g.base), xf.to_screen(c)], Stroke::new(1.0, t.canvas_ink), 4.0, 3.0));
     }
     // Rubber band preview of the active command.
     if let (Some(c), true) = (app.canvas.cursor, app.session.running.is_some()) {
@@ -1029,7 +997,7 @@ fn override_cursor(app: &mut CadApp, raw: Vec2, xf: &Xf) {
     let cycle = snap_cycle(app, raw, ap);
     let prompt = app.session.current_prompt();
     let wants_point = prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
-    if (over.is_none() && cycle.is_none()) || !wants_point || app.canvas.hot_grip.is_some() || app.session.pending_window.is_some() {
+    if (over.is_none() && cycle.is_none()) || !wants_point || app.session.pending_window.is_some() {
         return;
     }
     let base = prompt.as_ref().and_then(|p| p.base);
@@ -1245,8 +1213,75 @@ fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     p.text(pill.center(), egui::Align2::CENTER_CENTER, crate::tl!("WCS ⌄"), crate::theme::small(), t.canvas_ink);
 }
 
-/// The grip of a selected object under the cursor, if any.
-fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<HotGrip> {
+/// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts
+/// editing it, with the other hot grips when it is one of them.
+fn click_grip(app: &mut CadApp, g: (Handle, usize), shift: bool) {
+    let hot = &mut app.canvas.hot_grips;
+    if shift {
+        match hot.iter().position(|x| *x == g) {
+            Some(i) => {
+                hot.remove(i);
+            }
+            None => hot.push(g),
+        }
+        return;
+    }
+    if !hot.contains(&g) {
+        hot.clear();
+    }
+    hot.retain(|x| *x != g);
+    hot.insert(0, g);
+    let hs = hot.clone();
+    if let Err(e) = app.session.start_grip_edit(&hs) {
+        app.canvas.hot_grips.clear();
+        app.session.echo(e.to_string());
+    }
+}
+
+/// The multifunctional options of grip `g` (Add Vertex, Lengthen…; empty: Stretch only).
+fn grip_options(app: &CadApp, (h, i): (Handle, usize)) -> Vec<cadcraft_engine::grips::GripAction> {
+    let Ok(st) = app.session.state() else { return Vec::new() };
+    st.doc.entity(h).map(|e| cadcraft_engine::grips::grip_actions(&e.kind, i)).unwrap_or_default()
+}
+
+/// The menu of a multifunctional grip: Stretch and its options. A choice makes the grip hot and
+/// runs the option at the grip prompt, as typing its keyword would.
+fn grip_menu(app: &mut CadApp, resp: &egui::Response) {
+    let Some(g) = app.canvas.grip_menu else { return };
+    let options = grip_options(app, g);
+    let mut chosen: Option<Option<cadcraft_engine::grips::GripAction>> = None;
+    let open = resp
+        .context_menu(|ui| {
+            let vertex = options.contains(&cadcraft_engine::grips::GripAction::RemoveVertex);
+            if ui.button(crate::i18n::t(if vertex { "Stretch Vertex" } else { "Stretch" })).clicked() {
+                chosen = Some(None);
+                ui.close();
+            }
+            for a in &options {
+                if ui.button(crate::i18n::t(a.label())).clicked() {
+                    chosen = Some(Some(*a));
+                    ui.close();
+                }
+            }
+        })
+        .is_some();
+    if !open || chosen.is_some() {
+        app.canvas.grip_menu = None;
+    }
+    let Some(choice) = chosen else { return };
+    app.canvas.hot_grips = vec![g];
+    let r = app.session.start_grip_edit(&[g]).and_then(|()| match choice {
+        Some(a) => app.session.input(Input::Keyword(a.keyword().to_string())),
+        None => Ok(()),
+    });
+    if let Err(e) = r {
+        app.canvas.hot_grips.clear();
+        app.session.echo(e.to_string());
+    }
+}
+
+/// The grip of a selected object under the cursor, if any: (object, grip index).
+fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)> {
     let hp = hover?;
     let st = app.session.state().ok()?;
     let gs = app.session.settings.gripsize as f32 + 3.0;
@@ -1258,7 +1293,7 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<HotGrip> {
         for (i, g) in e.kind.grips().into_iter().enumerate() {
             let sp = xf.to_screen(g);
             if (sp.x - hp.x).abs() <= gs && (sp.y - hp.y).abs() <= gs {
-                return Some(HotGrip { handle: *h, index: i, base: g, mode: cadcraft_engine::grips::GripMode::Stretch });
+                return Some((*h, i));
             }
         }
     }
