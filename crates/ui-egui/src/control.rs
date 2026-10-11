@@ -288,7 +288,13 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
             let before = app.session.log.len();
             let error = match s("key").unwrap_or("enter").to_ascii_lowercase().as_str() {
                 "escape" | "esc" => {
-                    app.session.cancel();
+                    // As the keyboard Escape in `cmdline::keyboard`: a clicked grip ends first, or the next canvas click would apply it.
+                    if app.canvas.hot_grip.take().is_some() {
+                        app.cmd.buffer.clear();
+                        app.session.echo("*Cancel*");
+                    } else {
+                        app.session.cancel();
+                    }
                     None
                 }
                 // As pressing Enter in the command line: a refused Enter is echoed to the history.
@@ -555,5 +561,26 @@ mod tests {
         assert_eq!(r["bytes"], 3);
         assert_eq!(r["path"], "x.png");
         assert!(render_reply(b"abc", 7, 5, None).get("path").is_none());
+    }
+
+    #[test]
+    fn cmdline_key_escape_ends_a_clicked_grip() {
+        let mut app = CadApp::new(cadcraft_engine::Session::new(), crate::Services::default());
+        let base = Vec2::new(5.0, 0.0);
+        let mode = cadcraft_engine::grips::GripMode::Stretch;
+        let line = cadcraft_doc::Handle(100);
+        app.session.set_selection(vec![line]);
+        app.canvas.hot_grip = Some(crate::canvas::HotGrip { handle: line, index: 1, base, mode });
+        app.cmd.buffer.push_str("3");
+        let (req, _pending) = ControlRequest::new("cmdline.key", json!({"key": "escape"}));
+        let _ = handle(&mut app, &egui::Context::default(), &req);
+        // As keyboard Escape: the first press ends the grip and keeps the selection, the next one clears it.
+        assert!(app.canvas.hot_grip.is_none());
+        assert!(app.cmd.buffer.is_empty());
+        assert_eq!(app.session.log.last().map(String::as_str), Some("*Cancel*"));
+        assert_eq!(app.session.selection(), vec![line]);
+        let (req, _pending) = ControlRequest::new("cmdline.key", json!({"key": "escape"}));
+        let _ = handle(&mut app, &egui::Context::default(), &req);
+        assert!(app.session.selection().is_empty());
     }
 }
