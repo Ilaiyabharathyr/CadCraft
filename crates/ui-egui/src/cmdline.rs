@@ -26,6 +26,55 @@ pub struct CmdLine {
 pub const MAX_LINES: usize = 12;
 const LINE_H: f32 = 16.0;
 
+/// The Dynamic Input frame for the prompt on screen, or `None` when the value boxes are not live
+/// (Dynamic Input off, no point prompt, a hot grip or a pending selection window).
+pub fn dyn_frame(app: &CadApp) -> Option<crate::dyninput::Frame> {
+    let st = &app.session.settings;
+    if !st.dynmode || app.canvas.hot_grip.is_some() || app.session.pending_window.is_some() {
+        return None;
+    }
+    let p = app.session.current_prompt().filter(|p| p.accept.point && !p.accept.select)?;
+    Some(crate::dyninput::Frame { base: p.base, cartesian: st.dynpi_cartesian, absolute: st.dynpi_absolute })
+}
+
+/// Take Tab away from egui before it moves keyboard focus to the next widget (which would leave
+/// the command line deaf to typing). While no widget has focus, a pressed Tab becomes a `"\t"`
+/// text event, which keeps its place among the other keystrokes; [`keyboard`] handles it.
+pub fn capture_tab(ctx: &egui::Context, raw: &mut egui::RawInput) {
+    if ctx.egui_wants_keyboard_input() {
+        return;
+    }
+    raw.events.retain_mut(|e| {
+        let tab = match e {
+            egui::Event::Key { key: Key::Tab, pressed, .. } => Some(*pressed),
+            _ => None,
+        };
+        match tab {
+            Some(true) => {
+                *e = egui::Event::Text("\t".into());
+                true
+            }
+            Some(false) => false,
+            None => true,
+        }
+    });
+}
+
+/// Tab on the command line: cycle the object snaps under the cursor, type the Dynamic Input
+/// separator (`,` or `<`) after a value, or complete a command name.
+fn tab(app: &mut CadApp) {
+    // Over a snap marker with nothing typed, Tab cycles the candidate snaps.
+    if app.cmd.buffer.is_empty() && app.canvas.snap.is_some() {
+        app.canvas.snap_tab = true;
+    } else if let Some(f) = dyn_frame(app)
+        && let Some(sep) = crate::dyninput::tab_separator(&app.cmd.buffer, &f)
+    {
+        app.cmd.buffer.push(sep);
+    } else if let Some((id, _)) = suggestions(&app.cmd.buffer).first() {
+        app.cmd.buffer = id.clone();
+    }
+}
+
 /// Matching command names/aliases for AutoComplete.
 fn suggestions(prefix: &str) -> Vec<(String, &'static str)> {
     if prefix.is_empty() || prefix.contains(' ') {
@@ -91,7 +140,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
     if app.canvas.hot_grip.is_some() {
         for ev in &events {
             match ev {
-                egui::Event::Text(t) if t != " " => app.cmd.buffer.push_str(t),
+                egui::Event::Text(t) if t != " " && t != "\t" => app.cmd.buffer.push_str(t),
                 egui::Event::Key { key: Key::Backspace, pressed: true, .. } => {
                     app.cmd.buffer.pop();
                 }
@@ -110,7 +159,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                         }
                     } else {
                         let base = app.canvas.hot_grip.map(|g| g.base).unwrap_or_default();
-                        match cadcraft_engine::prompt::parse_point(&typed, base) {
+                        match cadcraft_engine::prompt::parse_point_with(&typed, base, &app.session.angle_settings()) {
                             Some(p) => crate::canvas::apply_hot_grip(app, p),
                             None => app.session.echo("Requires a point (x,y, @dx,dy or @d<a)."),
                         }
@@ -125,7 +174,9 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
     for ev in events {
         match ev {
             egui::Event::Text(t) => {
-                if t == " " && !text_prompt {
+                if t == "\t" {
+                    tab(app);
+                } else if t == " " && !text_prompt {
                     submit(app);
                 } else {
                     app.cmd.buffer.push_str(&t);
@@ -173,11 +224,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                         }
                     }
                 }
-                Key::Tab => {
-                    if let Some((id, _)) = suggestions(&app.cmd.buffer).first() {
-                        app.cmd.buffer = id.clone();
-                    }
-                }
+                Key::Tab => tab(app),
                 Key::Delete if app.cmd.buffer.is_empty() && app.session.running.is_none() => {
                     let _ = app.run("erase.selection", serde_json::json!({}));
                 }
@@ -190,6 +237,16 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
 }
 
 pub fn submit(app: &mut CadApp) {
+    // Dynamic Input: a split entry (`40,30`, `40<90`, `40,`) is completed from the cursor and
+    // measured from the last point.
+    if let Some(f) = dyn_frame(app) {
+        let cursor = app.canvas.cursor.unwrap_or(app.session.cursor);
+        let last = app.session.last_point;
+        let done = crate::dyninput::parse(&app.cmd.buffer, &f).and_then(|e| crate::dyninput::complete(&e, &f, cursor, last));
+        if let Some(text) = done {
+            app.cmd.buffer = text;
+        }
+    }
     let text = std::mem::take(&mut app.cmd.buffer);
     app.cmd.history_pos = None;
     if !text.trim().is_empty() && app.session.running.is_none() {
@@ -207,16 +264,21 @@ pub fn submit(app: &mut CadApp) {
     app.cmdline(&text);
 }
 
+fn visible_lines(app: &CadApp, canvas: Rect, bar: Rect) -> usize {
+    let available = ((bar.top() - canvas.top() - 8.0).max(0.0) / LINE_H) as usize;
+    app.ui.history_lines.min(MAX_LINES).min(available)
+}
+
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let t = Tokens::get();
     keyboard(app, ui.ctx());
-    let w = (canvas.width() * 0.48).clamp(360.0, 760.0);
+    let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
     let h = 24.0;
     let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - h - 10.0), vec2(w, h));
     let p = ui.painter_at(canvas);
     history(app, ui, canvas, bar);
     // History lines above the bar (the expanded window replaces them).
-    let n = if app.cmd.expanded { 0 } else { app.ui.history_lines.min(MAX_LINES) };
+    let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar) };
     let lines: Vec<String> = app.session.log.iter().rev().take(n).rev().cloned().collect();
     if !lines.is_empty() {
         let lh = 16.0;
@@ -234,7 +296,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let prompt = app.session.current_prompt();
     let font = crate::theme::body();
     if let Some(g) = app.canvas.hot_grip {
-        let gl = p.layout_no_wrap(g.label().to_string(), font.clone(), t.text);
+        let gl = p.layout_no_wrap(crate::i18n::t(g.label()).to_string(), font.clone(), t.text);
         let gw = gl.size().x;
         p.galley(pos2(x, bar.center().y - gl.size().y / 2.0), gl, t.text);
         x += gw + 6.0;
@@ -246,12 +308,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
                 let gw = g.size().x;
                 p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text_faint);
                 x += gw;
-                let g = p.layout_no_wrap(pr.message.clone(), font.clone(), t.text);
+                let g = p.layout_no_wrap(crate::i18n::t(&pr.message).to_string(), font.clone(), t.text);
                 let gw = g.size().x;
                 p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                 x += gw;
                 if !pr.keywords.is_empty() {
-                    let g = p.layout_no_wrap(if pr.message.is_empty() { " [".into() } else { " or [".into() }, font.clone(), t.text);
+                    let g = p.layout_no_wrap(if pr.message.is_empty() { " [".into() } else { crate::tl!(" or [").into() }, font.clone(), t.text);
                     let gw = g.size().x;
                     p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                     x += gw;
@@ -294,7 +356,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
             }
             None => {
                 if app.cmd.buffer.is_empty() {
-                    p.text(pos2(x, bar.center().y), egui::Align2::LEFT_CENTER, "Type a command", egui::FontId::proportional(12.5), t.text_faint);
+                    p.text(
+                        pos2(x, bar.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        crate::tl!("Type a command"),
+                        egui::FontId::proportional(12.5),
+                        t.text_faint,
+                    );
                 }
             }
         }
@@ -324,7 +392,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
                     bar.left() + 24.0,
                     bar.top() - 6.0 - rh * sug.len() as f32 - (if lines.is_empty() { 0.0 } else { 16.0 * lines.len() as f32 + 6.0 }),
                 ),
-                vec2(300.0, rh * sug.len() as f32),
+                vec2((bar.width() - 24.0).max(0.0), rh * sug.len() as f32),
             );
             p.rect_filled(lr, 3.0, t.list_bg);
             p.rect_stroke(lr, 3.0, Stroke::new(1.0, t.cmd_border), egui::StrokeKind::Inside);
@@ -335,7 +403,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
                     p.rect_filled(r.shrink(1.0), 2.0, if resp.hovered() { t.cmd_keyword_hover } else { t.list_row });
                 }
                 p.text(Pos2::new(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, id, crate::theme::body(), t.text);
-                p.text(Pos2::new(r.right() - 8.0, r.center().y), egui::Align2::RIGHT_CENTER, *label, crate::theme::small(), t.text_faint);
+                p.text(
+                    Pos2::new(r.right() - 8.0, r.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    crate::i18n::t(label),
+                    crate::theme::small(),
+                    t.text_faint,
+                );
                 if resp.clicked() {
                     app.cmd.buffer.clear();
                     app.start(&id.to_ascii_lowercase());
@@ -359,7 +433,7 @@ struct Zones {
 }
 
 fn zones(app: &CadApp, canvas: Rect, bar: Rect) -> Zones {
-    let n = if app.cmd.expanded { 0 } else { app.ui.history_lines.min(MAX_LINES).min(app.session.log.len()) };
+    let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar).min(app.session.log.len()) };
     let lines =
         (n > 0).then(|| Rect::from_min_size(pos2(bar.left(), bar.top() - LINE_H * n as f32 - 4.0), vec2(bar.width(), LINE_H * n as f32 + 2.0)));
     let window = app.cmd.expanded.then(|| {
@@ -400,7 +474,7 @@ fn history(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect, bar: Rect) {
         && let Some(o) = ui.input(|i| i.pointer.press_origin())
         && on_grip(o)
     {
-        app.cmd.resize_from = Some((o.y, app.ui.history_lines.min(MAX_LINES)));
+        app.cmd.resize_from = Some((o.y, visible_lines(app, canvas, bar)));
     }
     if let Some((y0, n0)) = app.cmd.resize_from {
         if let (true, Some(p)) = (resp.dragged(), resp.interact_pointer_pos()) {
@@ -449,6 +523,24 @@ mod tests {
     use cadcraft_engine::Session;
     use egui::{Event, PointerButton};
 
+    #[test]
+    fn compact_canvas_contains_history_controls_without_changing_line_preference() {
+        let mut app = CadApp::new(Session::empty(), crate::Services::default());
+        app.ui.history_lines = 12;
+        for i in 0..20 {
+            app.session.echo(format!("line {i}"));
+        }
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 180.0));
+        let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
+        let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - 34.0), vec2(w, 24.0));
+        let z = zones(&app, canvas, bar);
+        assert!(canvas.contains_rect(bar));
+        assert!(canvas.contains_rect(z.chevron));
+        assert!(z.lines.is_some_and(|r| canvas.contains_rect(r)));
+        assert!(canvas.contains_rect(z.grip));
+        assert_eq!(app.ui.history_lines, 12);
+    }
+
     fn frame(app: &mut CadApp, ctx: &egui::Context, events: Vec<Event>) {
         let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))), events, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| {
@@ -473,7 +565,7 @@ mod tests {
         frame(&mut app, &ctx, Vec::new());
         frame(&mut app, &ctx, Vec::new());
         let canvas = app.canvas.rect.unwrap_or(Rect::NOTHING);
-        let w = (canvas.width() * 0.48).clamp(360.0, 760.0);
+        let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
         let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - 34.0), vec2(w, 24.0));
         let z = zones(&app, canvas, bar);
         let Some(lines) = z.lines else { panic!("three history lines show by default") };
