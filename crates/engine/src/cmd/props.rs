@@ -182,17 +182,18 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .get("transparency")
         .map(|v| parse_transparency(v).ok_or_else(|| bad("properties.set", "transparency must be ByLayer, ByBlock or a percentage from 0 to 90")))
         .transpose()?;
-    let lw = p.get("lineweight").map(|v| match v.as_str().map(str::to_ascii_lowercase).as_deref() {
-        Some("bylayer") => Lineweight::ByLayer,
-        Some("byblock") => Lineweight::ByBlock,
-        Some("default") => Lineweight::Default,
-        _ => Lineweight::Mm100(
-            (v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim_end_matches("mm").trim().parse().ok())).unwrap_or(0.25) * 100.0)
-                .round()
-                .clamp(0.0, 211.0) as u16,
-        ),
-    });
+    let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
     let d = s.doc_mut()?;
+    // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
+    let linetype = str_param(p, "linetype")
+        .map(|n| {
+            if n.eq_ignore_ascii_case("ByLayer") || n.eq_ignore_ascii_case("ByBlock") {
+                Ok(n.to_string())
+            } else {
+                d.linetype(n).map(|t| t.name.clone()).ok_or_else(|| bad("properties.set", format!("linetype `{n}` is not loaded")))
+            }
+        })
+        .transpose()?;
     if let Some(l) = str_param(p, "layer") {
         d.ensure_layer(l);
     }
@@ -212,8 +213,8 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(c) = color {
                 e.common.color = c;
             }
-            if let Some(lt) = str_param(p, "linetype") {
-                e.common.linetype = lt.to_string();
+            if let Some(lt) = &linetype {
+                e.common.linetype.clone_from(lt);
             }
             if let Some(w) = lw {
                 e.common.lineweight = w;
@@ -325,9 +326,32 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 EntityKind::Insert(i) => {
                     if let Some(x) = num("rotation") {
+                        let turn = x.to_radians() - i.rotation;
                         i.rotation = x.to_radians();
+                        // The attached text turns with the reference, around its insertion point (as ROTATE does).
+                        let base = i.insert.xy();
+                        for a in &mut i.attribs {
+                            let t = &mut a.text;
+                            for q in std::iter::once(&mut t.insert).chain(t.align_pt.as_mut()) {
+                                let r = q.xy().rotate_about(base, turn);
+                                q.x = r.x;
+                                q.y = r.y;
+                            }
+                            t.rotation = cadcraft_geom::norm_angle(t.rotation + turn);
+                        }
                     }
                     if let Some(x) = num("scale").filter(|x| *x != 0.0) {
+                        // A new positive scale carries the attached attribute text with it, like SCALE about the insertion point.
+                        if x > 0.0 && i.scale.x > 0.0 {
+                            let m = cadcraft_geom::Mat3::scale_about(i.insert.xy(), x / i.scale.x);
+                            for a in &mut i.attribs {
+                                let mut k = EntityKind::Text(a.text.clone());
+                                k.transform(&m);
+                                if let EntityKind::Text(t) = k {
+                                    a.text = t;
+                                }
+                            }
+                        }
                         i.scale = Vec3::new(x, x, x);
                     }
                 }
@@ -581,26 +605,34 @@ fn run_style_rename(s: &mut Session, p: &Value) -> Result<Value> {
     }
     d.dim_styles.iter_mut().for_each(|x| fix(&mut x.text_style));
     d.mleader_styles.iter_mut().for_each(|x| fix(&mut x.text_style));
-    for space in
-        std::iter::once(cadcraft_doc::Space::Model).chain(d.layouts.iter().map(|l| cadcraft_doc::Space::Paper(l.name.clone())).collect::<Vec<_>>())
-    {
-        let hs: Vec<cadcraft_doc::Handle> = d.space(&space).map(|st| st.handles()).unwrap_or_default();
-        for h in hs {
-            let uses = d.entity(h).is_some_and(|e| match &e.kind {
-                EntityKind::Text(t) => t.style.eq_ignore_ascii_case(&from),
-                EntityKind::MText(t) => t.style.eq_ignore_ascii_case(&from),
-                EntityKind::AttDef(a) => a.text.style.eq_ignore_ascii_case(&from),
-                EntityKind::Insert(i) => i.attribs.iter().any(|a| a.text.style.eq_ignore_ascii_case(&from)),
-                _ => false,
-            });
-            if uses {
-                d.modify_entity(h, |e| match &mut e.kind {
-                    EntityKind::Text(t) => fix(&mut t.style),
-                    EntityKind::MText(t) => fix(&mut t.style),
-                    EntityKind::AttDef(a) => fix(&mut a.text.style),
-                    EntityKind::Insert(i) => i.attribs.iter_mut().for_each(|a| fix(&mut a.text.style)),
-                    _ => {}
-                })?;
+    let uses = |k: &EntityKind| match k {
+        EntityKind::Text(t) => t.style.eq_ignore_ascii_case(&from),
+        EntityKind::MText(t) => t.style.eq_ignore_ascii_case(&from),
+        EntityKind::AttDef(a) => a.text.style.eq_ignore_ascii_case(&from),
+        EntityKind::Insert(i) => i.attribs.iter().any(|a| a.text.style.eq_ignore_ascii_case(&from)),
+        EntityKind::MLeader(m) => m.text.iter().any(|t| t.style.eq_ignore_ascii_case(&from)),
+        _ => false,
+    };
+    let repoint = |k: &mut EntityKind| match k {
+        EntityKind::Text(t) => fix(&mut t.style),
+        EntityKind::MText(t) => fix(&mut t.style),
+        EntityKind::AttDef(a) => fix(&mut a.text.style),
+        EntityKind::Insert(i) => i.attribs.iter_mut().for_each(|a| fix(&mut a.text.style)),
+        EntityKind::MLeader(m) => m.text.iter_mut().for_each(|t| fix(&mut t.style)),
+        _ => {}
+    };
+    let mut hs: Vec<cadcraft_doc::Handle> = d.model.iter().filter(|e| uses(&e.kind)).map(|e| e.handle).collect();
+    hs.extend(d.layouts.iter().flat_map(|l| l.entities.iter().filter(|e| uses(&e.kind)).map(|e| e.handle)));
+    for h in hs {
+        d.modify_entity(h, |e| repoint(&mut e.kind))?;
+    }
+    // Block definitions too, so their text keeps resolving to the renamed style.
+    for block in d.blocks.values_mut() {
+        let hs: Vec<cadcraft_doc::Handle> = block.entities.iter().filter(|e| uses(&e.kind)).map(|e| e.handle).collect();
+        if !hs.is_empty() {
+            let b = std::sync::Arc::make_mut(block);
+            for h in hs {
+                b.entities.modify(h, |e| repoint(&mut e.kind));
             }
         }
     }
@@ -721,6 +753,7 @@ fn block_dims_using(d: &cadcraft_doc::Drawing, name: &str) -> Vec<(String, cadcr
             let uses = match &e.kind {
                 EntityKind::Dimension(dm) => dm.style.eq_ignore_ascii_case(name),
                 EntityKind::Leader(l) => l.style.eq_ignore_ascii_case(name),
+                EntityKind::Tolerance(t) => t.style.eq_ignore_ascii_case(name),
                 _ => false,
             };
             if uses {
@@ -972,4 +1005,27 @@ fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad("rename", "unsupported table")),
     }
     ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::Session;
+
+    #[test]
+    fn properties_set_rejects_unloaded_linetype() {
+        let mut s = Session::new();
+        s.execute("linetype", &json!({ "load": "DASHED" })).unwrap();
+        s.execute("line", &json!({ "points": [[0, 0], [50, 0]] })).unwrap();
+        let h = s.doc().unwrap().model.last().unwrap().handle.hex();
+        s.execute("properties.set", &json!({ "handles": [h], "linetype": "DASHED" })).unwrap();
+        assert!(s.execute("properties.set", &json!({ "handles": [h], "linetype": "NOPE" })).is_err());
+        let lt = |s: &Session| s.doc().unwrap().model.last().unwrap().common.linetype.clone();
+        assert_eq!(lt(&s), "DASHED");
+        for ok in ["ByBlock", "ByLayer"] {
+            s.execute("properties.set", &json!({ "handles": [h], "linetype": ok })).unwrap();
+            assert_eq!(lt(&s), ok);
+        }
+    }
 }
