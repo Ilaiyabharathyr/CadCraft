@@ -200,3 +200,16 @@ fn pasted_arrays_get_their_own_blocks() {
     assert_ne!(params[0].source, params[1].source);
     assert!(params.iter().all(|p| d.block(&p.source).is_some()));
 }
+
+#[test]
+fn json_arrays_follow_arrayassociativity() {
+    // With ARRAYASSOCIATIVITY 0 the JSON form makes copies unless `associative` asks otherwise.
+    let mut s = Session::new();
+    s.execute("setvar", &json!({"name": "ARRAYASSOCIATIVITY", "value": 0})).unwrap();
+    let h = circle(&mut s, 0.0, 0.0);
+    let r = s.execute("arrayrect", &json!({"handles": [h], "rows": 1, "cols": 3, "rowSpacing": 4, "colSpacing": 2})).unwrap();
+    assert_ne!(r["associative"], true);
+    assert_eq!(model(&s).iter().filter(|e| matches!(e.kind, EntityKind::Circle(_))).count(), 3);
+    let r = s.execute("arraypolar", &json!({"handles": [h], "center": [10, 0], "count": 4, "associative": true})).unwrap();
+    assert_eq!(r["associative"], true);
+}
