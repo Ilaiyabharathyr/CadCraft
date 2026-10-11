@@ -441,6 +441,19 @@ fn zoom_extents_fits_drawing() {
 }
 
 #[test]
+fn setvar_point_variables_take_point_objects() {
+    let mut s = Session::new();
+    for name in ["SNAPBASE", "LIMMIN", "LIMMAX", "INSBASE"] {
+        // GETVAR's own value (an object with z) writes back, and an {x, y} object equals the array form.
+        let got = sysvars::get(&s, name).unwrap();
+        s.execute("setvar", &json!({"name": name, "value": got})).unwrap();
+        s.execute("setvar", &json!({"name": name, "value": {"x": 5, "y": 7}})).unwrap();
+        assert_eq!(sysvars::get(&s, name), Some(json!({"x": 5.0, "y": 7.0, "z": 0.0})), "{name}");
+        assert!(s.execute("setvar", &json!({"name": name, "value": {"x": "a", "y": 1}})).is_err());
+    }
+}
+
+#[test]
 fn sysvars_roundtrip() {
     let mut s = Session::new();
     s.execute("setvar", &json!({"name": "osmode", "value": 7})).unwrap();
@@ -617,13 +630,15 @@ fn sample_drawing_builds() {
 #[test]
 fn count_from_the_menu_shows_its_result() {
     let mut s = Session::new();
-    s.start("count").unwrap();
+    s.cmdline("count").unwrap();
+    s.cmdline("").unwrap();
     assert_eq!(s.log.last().map(String::as_str), Some("No block references in model space."));
     s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
     s.execute("selectall", &json!({})).unwrap();
     s.cmdline("block Valve 0,0").unwrap();
     s.cmdline("insert Valve 10,0 1 1 0").unwrap();
-    s.start("count").unwrap();
+    s.cmdline("count").unwrap();
+    s.cmdline("").unwrap();
     let n = s.log.len();
     assert_eq!(&s.log[n - 3..], ["Block references in model space:", "  Valve: 2", "  Total: 2"]);
     let r = s.execute("count", &json!({"block": "Valve"})).unwrap();
