@@ -207,7 +207,7 @@ fn foreign_multileader_with_two_landings() {
 
 #[test]
 fn hostile_multileaders_do_not_panic() {
-    let many_lines: String = (0..10_000).map(|i| format!("304\nLEADER_LINE{{\n10\n{i}\n20\nnan\n")).collect();
+    let many_lines: String = (0..10_000).map(|i| format!("304\nLEADER_LINE{{\n10\n{i}\n20\nnan\n30\n1e999\n")).collect();
     let many_roots: String = (0..2_000).map(|_| "302\nLEADER{\n10\n1e999\n").collect();
     let cases = [
         // Unterminated sections.
@@ -225,6 +225,7 @@ fn hostile_multileaders_do_not_panic() {
         for m in mleaders(&d) {
             assert!(m.leaders.len() <= 4096);
             assert!(m.landing.x.is_finite() && m.landing.y.is_finite());
+            assert!(m.leaders.iter().flatten().all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite()));
             assert!(m.dogleg.is_finite() && m.dogleg >= 0.0);
             if let Some(t) = &m.text {
                 assert!((1..=9).contains(&t.attach) && t.height > 0.0);
