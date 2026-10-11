@@ -800,6 +800,8 @@ struct Rx {
     styles: HashMap<String, String>,
     /// BLOCK_RECORD handle (upper case) → block name.
     brs: HashMap<String, String>,
+    /// LTYPE record handle (upper case) → linetype name (DIMLTYPE, DIMLTEX1, DIMLTEX2).
+    ltypes: HashMap<String, String>,
     /// Upper-case block name → (insertion units, explodable) from its BLOCK_RECORD.
     block_props: HashMap<String, (u8, bool)>,
     /// Upper-case names of anonymous `*T` blocks drawn by ACAD_TABLE entities.
@@ -873,7 +875,7 @@ fn entity_plot_style(tags: &[Tag], rx: &Rx) -> Option<String> {
 fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &mut Rx) {
     match (kind, k) {
         ("DIMENSION", EntityKind::Dimension(dm)) => {
-            dm.overrides = crate::dxf_ext::read_dstyle(tags, &rx.styles, &rx.brs);
+            dm.overrides = crate::dxf_ext::read_dstyle(tags, &rx.styles, &rx.brs, &rx.ltypes);
             dm.assoc = crate::dxf_ext::read_assoc(tags);
             if let Some(center) = crate::dxf_ext::read_arclen(tags) {
                 dm.kind = DimKind::ArcLength;
@@ -1108,6 +1110,8 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                     Some(c) => HVal::Str(c.to_string()),
                     None => continue,
                 },
+                // $DIMJOGANG is in radians; the variable (like the style) holds degrees.
+                HVal::Real(r) if name == "DIMJOGANG" => HVal::Real((r.to_degrees() * 1e9).round() / 1e9),
                 hv => hv,
             };
             d.header.set(&name, hv);
@@ -1162,6 +1166,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 let units = t.i(70).and_then(|u| u8::try_from(u).ok()).unwrap_or(0);
                 rx.block_props.insert(n.to_ascii_uppercase(), (units, t.i(280).unwrap_or(1) != 0));
                 rx.brs.insert(h.trim().to_ascii_uppercase(), n);
+            }
+            "LTYPE" => {
+                rx.ltypes.insert(h.trim().to_ascii_uppercase(), n);
             }
             _ => {}
         }
@@ -1298,10 +1305,11 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 let mut fields = serde_json::Map::new();
                 for tag in tg.iter().take_while(|x| x.code < 1000) {
                     let Some((field, kind)) = crate::dxf_ext::dim_field(tag.code) else { continue };
-                    if let Some(v) = crate::dxf_ext::decode(kind, tag, &rx.styles, &rx.brs) {
+                    if let Some(v) = crate::dxf_ext::decode(kind, tag, &rx.styles, &rx.brs, &rx.ltypes) {
                         fields.insert(field.to_string(), v);
                     }
                 }
+                fields.extend(crate::dxf_ext::read_newer_dimvars(&tg, &rx.styles, &rx.brs, &rx.ltypes));
                 let mut st = DimStyle { name: name.clone(), annotative: annotative(&tg), ..DimStyle::default() };
                 st.apply_fields(&fields);
                 match d.dim_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&name)) {
