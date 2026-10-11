@@ -15,11 +15,7 @@ fn plotted_mm(opts: Value) -> f64 {
     }
     let bytes = cadcraft_io::plot(&d, &Space::Paper("Layout1".into()), &o).unwrap();
     let text = String::from_utf8_lossy(&bytes).into_owned();
-    let xs: Vec<f64> = text
-        .lines()
-        .filter(|l| l.ends_with(" m") || l.ends_with(" l"))
-        .filter_map(|l| l.split(' ').next()?.parse().ok())
-        .collect();
+    let xs: Vec<f64> = text.lines().filter(|l| l.ends_with(" m") || l.ends_with(" l")).filter_map(|l| l.split(' ').next()?.parse().ok()).collect();
     assert_eq!(xs.len(), 2, "{text}");
     (xs[1] - xs[0]).abs() * 25.4 / 72.0
 }
