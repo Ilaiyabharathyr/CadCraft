@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod array;
 mod constraint;
 mod entity;
 mod extents;
@@ -17,6 +18,7 @@ mod tables;
 
 use std::collections::BTreeMap;
 
+pub use array::*;
 pub use cadcraft_color as color;
 pub use cadcraft_geom as geom;
 pub use constraint::*;
