@@ -5,7 +5,8 @@
 //! away when the drawing is saved or closed and when the app exits normally, so a file left behind
 //! means the app (or the machine) went down; the next start offers it for recovery. A running app
 //! keeps a lock file (`<instance>.lock`) fresh, so another copy running at the same time doesn't
-//! offer its files.
+//! offer its files. SAVEFILEPATH may be a folder other programs use too, so only names built from
+//! an instance id ([`is_instance_id`]) are ever read as ours or deleted.
 //!
 //! [`Autosaver::plan`] decides what to write and delete (no I/O, so it is testable); on the desktop
 //! [`Autosaver::tick`] carries it out, writing on a background thread. SAVETIME and SAVEFILEPATH
@@ -64,13 +65,30 @@ pub fn file_name(title: &str, instance: &str, uid: u64) -> String {
     format!("{stem}_{instance}_{uid}.{EXT}")
 }
 
+/// Whether `s` has the form of an app instance id (`<process id>-<start time in hex>`, see
+/// `instance_id`). Only file names built from one are treated as CADCraft's own, so files of
+/// other programs in the autosave folder are never offered for recovery or deleted.
+pub fn is_instance_id(s: &str) -> bool {
+    let Some((pid, time)) = s.split_once('-') else { return false };
+    (1..=10).contains(&pid.len())
+        && pid.bytes().all(|b| b.is_ascii_digit())
+        && (1..=32).contains(&time.len())
+        && time.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// An autosave file name's parts: the drawing's title, the instance and the drawing uid.
 pub fn parse_file_name(name: &str) -> Option<(&str, &str, u64)> {
     let base = name.strip_suffix(&format!(".{EXT}"))?;
     let (rest, uid) = base.rsplit_once('_')?;
     let (title, instance) = rest.rsplit_once('_')?;
-    (!title.is_empty() && !instance.is_empty()).then_some(())?;
+    let uid_ok = !uid.is_empty() && uid.bytes().all(|b| b.is_ascii_digit());
+    (!title.is_empty() && is_instance_id(instance) && uid_ok).then_some(())?;
     Some((title, instance, uid.parse().ok()?))
+}
+
+/// The instance whose lock file is named `name` (`<instance>.lock`), if it is one of ours.
+pub fn parse_lock_name(name: &str) -> Option<&str> {
+    name.strip_suffix(".lock").filter(|i| is_instance_id(i))
 }
 
 /// What to do with the file system.
@@ -267,8 +285,14 @@ mod native {
     }
 
     /// Delete a recovery file the user discarded (or that was recovered and then saved), and lock
-    /// files of stopped apps that have no files left.
+    /// files of stopped apps that have no files left. Only an autosave file is deleted: a path
+    /// whose name doesn't parse as one ([`parse_file_name`]) is left alone.
     pub fn discard(path: &str) {
+        let ours = Path::new(path).file_name().and_then(|n| n.to_str()).is_some_and(|n| parse_file_name(n).is_some());
+        if !ours {
+            log::warn!("autosave: not deleting {path}: not an autosave file");
+            return;
+        }
         if let Err(e) = std::fs::remove_file(path)
             && e.kind() != std::io::ErrorKind::NotFound
         {
@@ -279,12 +303,14 @@ mod native {
         }
     }
 
-    /// Delete the lock files of apps that are no longer running and left no autosave files.
+    /// Delete the lock files of apps that are no longer running and left no autosave files. Only
+    /// names of the form `<instance id>.lock` are ours ([`parse_lock_name`]): SAVEFILEPATH may
+    /// point at a folder shared with other programs, whose `Cargo.lock` or `foo.lock` stay.
     pub fn prune_locks(dir: &Path) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         let names: Vec<String> = entries.flatten().take(10_000).map(|e| e.file_name().to_string_lossy().to_string()).collect();
         for n in &names {
-            let Some(instance) = n.strip_suffix(".lock") else { continue };
+            let Some(instance) = parse_lock_name(n) else { continue };
             let has_files = names.iter().any(|f| parse_file_name(f).is_some_and(|(_, i, _)| i == instance));
             if !has_files && !instance_alive(lock_age(dir, instance)) {
                 let _ = std::fs::remove_file(dir.join(n));
@@ -376,7 +402,7 @@ mod native {
             }
             self.docs.clear();
             let dir = savefilepath();
-            if !dir.is_empty() {
+            if !dir.is_empty() && is_instance_id(&self.instance) {
                 let _ = std::fs::remove_file(lock_path(Path::new(&dir), &self.instance));
             }
         }

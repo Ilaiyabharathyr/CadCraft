@@ -91,9 +91,41 @@ fn file_names_round_trip() {
     assert_eq!(autosave::parse_file_name(&n), Some(("My plan_v2.dwg", "123-abc", 7)));
     assert_eq!(autosave::file_name("a/b:c*", "1-2", 3), "a-b-c-_1-2_3.sv$");
     assert_eq!(autosave::file_name("..", "1-2", 3), "Drawing_1-2_3.sv$");
-    for bad in ["plan.dxf", "x_1.sv$", "_1-2_3.sv$", "a_1-2_x.sv$"] {
+    for bad in
+        ["plan.dxf", "x_1.sv$", "_1-2_3.sv$", "a_1-2_x.sv$", "x.sv$", "notes_foo_3.sv$", "a_1-xyz_3.sv$", "a_-1_3.sv$", "a_1-2_+3.sv$", "a_1-2_.sv$"]
+    {
         assert_eq!(autosave::parse_file_name(bad), None, "{bad}");
     }
+    assert!(autosave::is_instance_id(&autosave::instance_id()));
+    assert_eq!(autosave::parse_lock_name("123-18f3a2b4c5d.lock"), Some("123-18f3a2b4c5d"));
+    for bad in ["Cargo.lock", "foo.lock", "package-lock.json", "yarn-lock.lock", "1-2.lock.bak", ".lock", "-1.lock", "1-.lock", "1-2-3.lock"] {
+        assert_eq!(autosave::parse_lock_name(bad), None, "{bad}");
+    }
+}
+
+#[test]
+fn files_of_other_programs_in_the_autosave_folder_are_never_deleted() {
+    // SAVEFILEPATH may point at a project folder: only CADCraft's own lock and autosave names
+    // (built from an instance id) are ever pruned or discarded.
+    let dir = temp_dir("foreign");
+    let old = SystemTime::now() - Duration::from_secs(3600);
+    let foreign = ["Cargo.lock", "package-lock.json", "foo.lock", "yarn-lock.lock", "x.sv$", "notes_foo_3.sv$", "a_b-c_1.sv$"];
+    for name in foreign.iter().chain(&["1-a.lock"]) {
+        let f = std::fs::File::create(dir.join(name)).unwrap();
+        f.set_modified(old).unwrap();
+    }
+
+    assert!(autosave::recoverable(&dir, "9-f").is_empty(), "foreign files are not offered");
+    autosave::prune_locks(&dir);
+    assert!(!dir.join("1-a.lock").exists(), "a stopped app's own lock is pruned");
+    for name in foreign {
+        autosave::discard(&dir.join(name).to_string_lossy());
+    }
+    autosave::prune_locks(&dir);
+    for name in foreign {
+        assert!(dir.join(name).exists(), "{name} must survive");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn temp_dir(tag: &str) -> std::path::PathBuf {
@@ -114,11 +146,11 @@ fn recovery_offers_files_of_apps_that_stopped() {
     let lock = std::fs::File::create(dir.join("3-c.lock")).unwrap();
     lock.set_modified(SystemTime::now() - Duration::from_secs(600)).unwrap();
     drop(lock);
-    touch("Mine.dxf_9-z_1.sv$"); // this app's own
+    touch("Mine.dxf_9-f_1.sv$"); // this app's own
     touch("notes.txt");
     std::fs::write(dir.join("Half.dxf_4-d_6.sv$.tmp"), b"").unwrap();
 
-    let found = autosave::recoverable(&dir, "9-z");
+    let found = autosave::recoverable(&dir, "9-f");
     let names: Vec<&str> = found.iter().map(|r| r.drawing.as_str()).collect();
     assert_eq!(names.len(), 2, "{found:?}");
     assert!(names.contains(&"Crashed.dxf") && names.contains(&"Stale.dxf"));
@@ -130,8 +162,8 @@ fn recovery_offers_files_of_apps_that_stopped() {
     assert!(!std::path::Path::new(&stale.path).exists());
     assert!(!dir.join("3-c.lock").exists());
     assert!(dir.join("2-b.lock").exists(), "a running app's lock stays");
-    assert_eq!(autosave::recoverable(&dir, "9-z").len(), 1);
-    assert!(autosave::recoverable(&dir.join("missing"), "9-z").is_empty());
+    assert_eq!(autosave::recoverable(&dir, "9-f").len(), 1);
+    assert!(autosave::recoverable(&dir.join("missing"), "9-f").is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
