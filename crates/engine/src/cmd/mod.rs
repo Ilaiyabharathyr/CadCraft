@@ -1,6 +1,7 @@
 //! The command registry. Ids are AutoCAD command names in lower case; menu paths follow
 //! AutoCAD's menu bar so the catalog doubles as the parity metric.
 
+pub(crate) mod annoscale;
 mod annotate;
 mod array;
 mod audit;
@@ -9,11 +10,14 @@ pub mod clipboard;
 pub mod constraints;
 mod draw;
 mod draw2;
+mod draworder;
 mod edit;
+mod exchange;
 pub mod file;
 mod gripcmds;
+mod griphot;
 pub(crate) mod groups;
-mod hatch;
+pub(crate) mod hatch;
 mod inquiry;
 mod layer;
 mod layout;
@@ -21,12 +25,16 @@ mod mleader_content;
 mod modify;
 mod modify2;
 mod mtext_opts;
+mod overkill;
 mod pline_opts;
 mod props;
+pub use props::MatchProps;
 mod qselect;
+mod selecttools;
 mod settings;
 mod spline_opts;
 mod table;
+mod tolerance;
 mod trimextend;
 mod utility;
 mod view;
@@ -34,6 +42,7 @@ mod view;
 pub mod curves;
 pub mod helpers;
 pub mod machines;
+pub mod options;
 
 use cadcraft_doc::Handle;
 use cadcraft_geom::Vec2;
@@ -160,24 +169,31 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(audit::specs());
         v.extend(edit::specs());
         v.extend(qselect::specs());
+        v.extend(selecttools::specs());
         v.extend(view::specs());
         v.extend(draw::specs());
         v.extend(draw2::specs());
         v.extend(annotate::specs());
+        v.extend(annoscale::specs());
         v.extend(hatch::specs());
+        v.extend(overkill::specs());
         v.extend(blocks::specs());
         v.extend(modify::specs());
+        v.extend(draworder::specs());
         v.extend(array::specs());
         v.extend(modify2::specs());
         v.extend(groups::specs());
         v.extend(gripcmds::specs());
         v.extend(layer::specs());
         v.extend(layout::specs());
+        v.extend(exchange::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());
         v.extend(settings::specs());
+        v.extend(options::specs());
         v.extend(utility::specs());
         v.extend(table::specs());
+        v.extend(tolerance::specs());
         v.extend(constraints::specs());
         v
     })
