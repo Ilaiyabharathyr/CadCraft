@@ -71,3 +71,9 @@ opt-level = 3
 lto = "thin"
 codegen-units = 16
 debug = 0
+
+[profile.android]
+inherits = "release"
+opt-level = 2
+lto = false
+strip = "symbols"

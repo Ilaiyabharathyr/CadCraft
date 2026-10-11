@@ -88,6 +88,8 @@ pub struct CanvasState {
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,
+    /// Stay in navigation mode until every finger of a pinch/pan has lifted.
+    touch_navigation: bool,
 }
 
 /// Tab cycling through the candidate snaps under the cursor: where it started and which
@@ -555,7 +557,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // ---------- input ----------
     let (hover_pos, scroll, mods, middle_down, pressed_primary, pressed_secondary, dbl_middle, dbl_primary) = ui.input(|i| {
         (
-            i.pointer.hover_pos(),
+            i.pointer.hover_pos().or_else(|| i.pointer.interact_pos().filter(|_| i.pointer.any_click())),
             i.smooth_scroll_delta,
             i.modifiers,
             i.pointer.middle_down(),
@@ -565,7 +567,39 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             i.pointer.button_double_clicked(egui::PointerButton::Primary),
         )
     });
-    let inside = hover_pos.is_some_and(|p| rect.contains(p)) && resp.hovered();
+    let touch = ui.input(|i| i.multi_touch());
+    if let Some(gesture) = &touch
+        && rect.contains(gesture.start_pos)
+    {
+        app.canvas.touch_navigation = true;
+        if app.canvas.drag_window {
+            app.session.pending_window = None;
+            app.canvas.drag_window = false;
+        }
+        let d = gesture.translation_delta;
+        if d.is_finite()
+            && let Ok(st) = app.session.state_mut()
+        {
+            let v = st.view();
+            st.set_view_quiet(cadcraft_engine::View {
+                center: v.center - Vec2::new(f64::from(d.x) / scale, -f64::from(d.y) / scale),
+                height: v.height,
+            });
+        }
+        if gesture.zoom_delta.is_finite() && gesture.zoom_delta > 0.0 {
+            let moved = Xf { center: app.session.state().map(|s| s.view().center).unwrap_or(xf.center), ..xf };
+            let _ = app.session.zoom_about(f64::from(gesture.zoom_delta), moved.to_world(gesture.center_pos));
+        }
+    }
+    let navigating = app.canvas.touch_navigation;
+    if !ui.input(|i| i.any_touches()) {
+        app.canvas.touch_navigation = false;
+    }
+    let pressed_primary = pressed_primary && !navigating;
+    let pressed_secondary = pressed_secondary && !navigating;
+    let inside = hover_pos.is_some_and(|p| rect.contains(p))
+        && (resp.hovered() || resp.clicked_by(egui::PointerButton::Primary) || resp.clicked_by(egui::PointerButton::Secondary))
+        && !navigating;
     // Which device is scrolling? On macOS, trackpads (and Magic Mouse) report precise point
     // deltas; notched mouse wheels report lines. The answer is sticky because egui spreads a wheel
     // notch over several frames. Elsewhere (browsers, Wayland smooth-scroll mice) ordinary wheels
@@ -630,7 +664,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let _ = app.session.zoom_extents();
     }
     // ZOOM Realtime: dragging up zooms in, down zooms out.
-    if resp.dragged_by(egui::PointerButton::Primary) && app.session.realtime_zoom_active() {
+    if !navigating && resp.dragged_by(egui::PointerButton::Primary) && app.session.realtime_zoom_active() {
         let _ = app.session.realtime_zoom(f64::from(resp.drag_delta().y));
     }
     // A click in another tile makes it current (or answers -VPORTS Join's prompts).
@@ -765,6 +799,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // that starts while objects are being selected opens a window where the button went down,
     // and letting go closes it. Drags on grips and drags while drawing are left alone.
     if resp.drag_started_by(egui::PointerButton::Primary)
+        && !navigating
         && !middle_down
         && app.session.pending_window.is_none()
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())

@@ -36,6 +36,7 @@ pub mod parametric;
 pub mod plotstyles;
 pub mod quick;
 pub mod shortcut_menus;
+pub mod tablet;
 pub mod theme;
 pub mod viewcube;
 pub mod vpscale;
@@ -170,6 +171,10 @@ pub struct Services {
 }
 
 pub struct CadApp {
+    /// Touch-first chrome selected by the Android host; desktop layouts are independent.
+    pub tablet_mode: bool,
+    /// A request for the Android host's native command-entry keyboard.
+    pub tablet_keyboard_requested: bool,
     pub system_languages: Vec<String>,
     pub session: Session,
     pub ui: UiState,
@@ -209,6 +214,8 @@ pub struct CadApp {
 impl CadApp {
     pub fn new(session: Session, services: Services) -> Self {
         CadApp {
+            tablet_mode: false,
+            tablet_keyboard_requested: false,
             system_languages: Vec::new(),
             session,
             ui: UiState::default(),
@@ -405,6 +412,12 @@ impl CadApp {
             self.shown_theme = Some(shown);
             self.shown_follows_system = follows_system;
         }
+        if self.tablet_mode {
+            ctx.style_mut_of(shown, |style| {
+                style.spacing.interact_size.y = 44.0;
+                style.spacing.button_padding = egui::vec2(8.0, 8.0);
+            });
+        }
         self.drain_control(ctx);
         if !self.synthetic.is_empty() {
             ctx.request_repaint();
@@ -457,8 +470,12 @@ impl CadApp {
         let t0 = now_ms();
         control::begin_frame(ui.ctx());
         let t = theme::Tokens::get();
-        chrome::title_and_toolbar(self, ui);
-        if self.ui.in_window_menu {
+        if self.tablet_mode {
+            tablet::chrome(self, ui);
+        } else {
+            chrome::title_and_toolbar(self, ui);
+        }
+        if self.ui.in_window_menu && !self.tablet_mode {
             menus::menu_bar(self, ui);
         }
         if self.ui.show_status_bar {

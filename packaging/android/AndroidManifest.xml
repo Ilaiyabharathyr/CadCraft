@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.storytold.cadcraft"
+    android:versionCode="5001" android:versionName="0.5.0-tablet-preview.1">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <supports-screens android:smallScreens="false" android:normalScreens="true"
+        android:largeScreens="true" android:xlargeScreens="true" android:anyDensity="true" />
+    <application android:label="CADCraft Tablet Preview" android:icon="@mipmap/cadcraft"
+        android:theme="@style/CADCraftTheme" android:allowBackup="false"
+        android:hasCode="true" android:extractNativeLibs="true" android:usesCleartextTraffic="false">
+        <activity android:name=".MainActivity" android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|density|uiMode"
+            android:resizeableActivity="true" android:windowSoftInputMode="adjustResize">
+            <meta-data android:name="android.app.lib_name" android:value="cadcraft_android" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

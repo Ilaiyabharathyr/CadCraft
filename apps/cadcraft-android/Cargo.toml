@@ -1,0 +1,47 @@
+[package]
+name = "cadcraft-android"
+description = "CADCraft native Android tablet app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Android's loader requires one exported entry symbol. The entry module denies unsafe code
+# except for that attribute; the app, engine and UI contain no unsafe blocks.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[features]
+desktop-preview = ["dep:eframe", "eframe/default_fonts", "eframe/wgpu", "eframe/x11", "eframe/wayland", "eframe/persistence"]
+
+[dependencies]
+cadcraft-engine = { workspace = true }
+cadcraft-ui-egui = { workspace = true }
+cadcraft-io = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "persistence", "android-native-activity"] }
+winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+android_logger = "0.15"
+robius-android-env = "0.2"
+jni = "0.21"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = { workspace = true, optional = true }
+
+[[bin]]
+name = "cadcraft-tablet-preview"
+path = "src/preview.rs"
+required-features = ["desktop-preview"]
