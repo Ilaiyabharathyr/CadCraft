@@ -1,9 +1,10 @@
 //! Hit testing and window/crossing selection.
 
 use cadcraft_doc::{Drawing, Entity, EntityKind, Handle, Prim, Space, entity_bounds};
-use cadcraft_geom::{Bounds2, Line, Vec2};
+use cadcraft_geom::{Bounds2, Line, Vec2, point_in_polygon};
 
 use crate::spatial::{self, SpatialIndex};
+use crate::{Accept, Prompt};
 
 /// Polylines approximating an entity for hit testing, tessellated at `tol`.
 pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
@@ -165,35 +166,49 @@ pub fn select_window(d: &Drawing, space: &Space, bx: Bounds2, crossing: bool) ->
 
 pub(crate) fn select_window_with(d: &Drawing, space: &Space, ix: &Option<std::sync::Arc<SpatialIndex>>, bx: Bounds2, crossing: bool) -> Vec<Handle> {
     let Some(cands) = candidates(d, space, ix, &bx, crossing, false) else { return Vec::new() };
-    let tol = (bx.width() + bx.height()).max(1e-9) / 2000.0;
-    let mut out = Vec::new();
-    for (e, known) in cands {
-        if !selectable(d, e) {
-            continue;
-        }
-        let infinite = is_infinite(e);
-        let eb = bounds_of(d, e, known);
-        if !infinite && bx.contains_box(&eb) {
-            out.push(e.handle);
-            continue;
-        }
-        if !crossing || (!infinite && !eb.intersects(&bx)) {
-            continue;
-        }
-        let polys = hit_polylines(d, e, tol);
-        let hit = polys.iter().any(|pl| {
-            if pl.len() == 1 {
-                pl.first().is_some_and(|p| bx.contains(*p))
-            } else {
-                pl.windows(2).any(|w| w.first().zip(w.get(1)).is_some_and(|(a, b)| seg_hits_box(*a, *b, &bx)))
-            }
-        });
-        // A crossing box entirely inside a filled/text object also selects it.
-        if hit || (eb.contains_box(&bx) && matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Insert(_))) {
-            out.push(e.handle);
-        }
+    let tol = window_tol(&bx);
+    cands.filter(|(e, known)| selectable(d, e) && in_window(d, e, *known, &bx, crossing, tol)).map(|(e, _)| e.handle).collect()
+}
+
+/// The tessellation tolerance window and crossing tests use for a box.
+pub(crate) fn window_tol(bx: &Bounds2) -> f64 {
+    (bx.width() + bx.height()).max(1e-9) / 2000.0
+}
+
+/// Whether a window box (`crossing` false: entirely inside) or a crossing box (inside or
+/// touching its geometry, not just its bounding box) selects `e`.
+pub(crate) fn in_window(d: &Drawing, e: &Entity, known: Option<Bounds2>, bx: &Bounds2, crossing: bool, tol: f64) -> bool {
+    let infinite = is_infinite(e);
+    let eb = bounds_of(d, e, known);
+    if !infinite && bx.contains_box(&eb) {
+        return true;
     }
-    out
+    if !crossing || (!infinite && !eb.intersects(bx)) {
+        return false;
+    }
+    let polys = hit_polylines(d, e, tol);
+    let hit = polys.iter().any(|pl| {
+        if pl.len() == 1 {
+            pl.first().is_some_and(|p| bx.contains(*p))
+        } else {
+            pl.windows(2).any(|w| w.first().zip(w.get(1)).is_some_and(|(a, b)| seg_hits_box(*a, *b, bx)))
+        }
+    });
+    // A crossing box entirely inside a text/block bounding rectangle also selects it.
+    if hit || (eb.contains_box(bx) && matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::Insert(_))) {
+        return true;
+    }
+    // SOLID/TRACE are filled polygons. A crossing window wholly within the
+    // fill must select them even when it does not touch their outline. Check
+    // the polygon, not just its bounding rectangle (which can cover empty
+    // space around triangular solids).
+    if matches!(e.kind, EntityKind::Solid(_) | EntityKind::Trace(_)) && eb.contains_box(bx) {
+        return e.kind.prims().iter().any(|prim| match prim {
+            Prim::Fill(poly) => bx.corners().iter().all(|p| cadcraft_geom::point_in_polygon(poly, *p)),
+            _ => false,
+        });
+    }
+    false
 }
 
 /// Fence selection: entities crossed by the fence polyline.
@@ -228,6 +243,122 @@ pub(crate) fn select_fence_with(d: &Drawing, space: &Space, ix: &Option<std::syn
     out
 }
 
+/// Window polygon selection (entities entirely inside `poly`) or crossing polygon selection
+/// (inside or crossing its edges). The polygon closes back to its first point.
+pub fn select_polygon(d: &Drawing, space: &Space, poly: &[Vec2], crossing: bool) -> Vec<Handle> {
+    let (Some(first), true) = (poly.first(), poly.len() >= 3) else { return Vec::new() };
+    let ix = spatial::index(d, space);
+    let pb = Bounds2::from_points(poly.iter().copied());
+    let tol = (pb.width() + pb.height()).max(1e-9) / 2000.0;
+    let Some(cands) = candidates(d, space, &ix, &pb, crossing, false) else { return Vec::new() };
+    let edges: Vec<Line> =
+        poly.windows(2).filter_map(|w| Some(Line::new(*w.first()?, *w.get(1)?))).chain(poly.last().map(|l| Line::new(*l, *first))).collect();
+    let mut out = Vec::new();
+    for (e, known) in cands {
+        let infinite = is_infinite(e);
+        if !selectable(d, e) || (infinite && !crossing) {
+            continue;
+        }
+        let eb = bounds_of(d, e, known);
+        if !infinite && if crossing { !eb.intersects(&pb) } else { !pb.contains_box(&eb) } {
+            continue;
+        }
+        let polys = hit_polylines(d, e, tol);
+        let crosses = polys.iter().any(|pl| {
+            pl.windows(2).any(|w| {
+                w.first().zip(w.get(1)).is_some_and(|(p, q)| edges.iter().any(|f| cadcraft_geom::line_line(f, &Line::new(*p, *q)).is_some()))
+            })
+        });
+        let mut pts = polys.iter().flatten();
+        let hit = if crossing {
+            crosses || pts.any(|p| point_in_polygon(poly, *p))
+        } else {
+            !crosses && !polys.is_empty() && pts.all(|p| point_in_polygon(poly, *p))
+        };
+        if hit {
+            out.push(e.handle);
+        }
+    }
+    out
+}
+
+/// A selection mode typed at "Select objects", collecting its points before it selects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectKind {
+    /// `W`: objects entirely inside two corners, whichever order they come in.
+    Window,
+    /// `C`: objects inside or crossing two corners, whichever order they come in.
+    Crossing,
+    /// `F`: objects crossed by a series of points; Enter ends it.
+    Fence,
+    /// `WP`: objects entirely inside a polygon; Enter closes it.
+    WPolygon,
+    /// `CP`: objects inside or crossing a polygon; Enter closes it.
+    CPolygon,
+}
+
+/// Most points a fence or polygon collects (typed input is hostile).
+const MAX_MODE_POINTS: usize = 10_000;
+
+/// A typed selection mode in progress and the points given so far.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectMode {
+    pub kind: SelectKind,
+    pub pts: Vec<Vec2>,
+}
+
+impl SelectMode {
+    /// The mode named by text typed at "Select objects" (`W`, `Window`, `C`, `F`, `WP`, `CP`…).
+    pub fn from_keyword(text: &str) -> Option<Self> {
+        let kind = match text.trim().to_ascii_lowercase().as_str() {
+            "w" | "window" => SelectKind::Window,
+            "c" | "crossing" => SelectKind::Crossing,
+            "f" | "fence" => SelectKind::Fence,
+            "wp" | "wpolygon" => SelectKind::WPolygon,
+            "cp" | "cpolygon" => SelectKind::CPolygon,
+            _ => return None,
+        };
+        Some(SelectMode { kind, pts: Vec::new() })
+    }
+    fn is_box(&self) -> bool {
+        matches!(self.kind, SelectKind::Window | SelectKind::Crossing)
+    }
+    /// The prompt shown while the mode collects points.
+    pub fn prompt(&self) -> Prompt {
+        let last = self.pts.last().copied();
+        let (first, next) = match self.kind {
+            SelectKind::Window | SelectKind::Crossing => ("Specify first corner", "Specify opposite corner"),
+            SelectKind::Fence => ("Specify first fence point", "Specify next fence point"),
+            SelectKind::WPolygon | SelectKind::CPolygon => ("Specify first polygon point", "Specify endpoint of line"),
+        };
+        match last {
+            None => Prompt::new(first, Accept::POINT),
+            Some(p) if self.is_box() => Prompt::new(next, Accept::POINT).base(p),
+            Some(p) => Prompt::new(next, Accept::POINT).kw(&["Undo"]).base(p),
+        }
+    }
+    /// Add a point. Returns whether the mode is complete (the second corner of W/C).
+    pub fn push(&mut self, p: Vec2) -> bool {
+        if p.is_finite() && self.pts.len() < MAX_MODE_POINTS {
+            self.pts.push(p);
+        }
+        self.is_box() && self.pts.len() >= 2
+    }
+    /// The objects the mode selects, or `None` while it has too few points.
+    pub fn select(&self, d: &Drawing, space: &Space) -> Option<Vec<Handle>> {
+        match (self.kind, self.pts.as_slice()) {
+            (SelectKind::Window | SelectKind::Crossing, [a, b, ..]) => {
+                Some(select_window(d, space, Bounds2::new(*a, *b), self.kind == SelectKind::Crossing))
+            }
+            (SelectKind::Fence, pts) if pts.len() >= 2 => Some(select_fence(d, space, pts)),
+            (SelectKind::WPolygon | SelectKind::CPolygon, pts) if pts.len() >= 3 => {
+                Some(select_polygon(d, space, pts, self.kind == SelectKind::CPolygon))
+            }
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +383,43 @@ mod tests {
         assert_eq!(fence_hits(EntityKind::Ray(line.clone()), [(-5.0, -5.0), (-5.0, 5.0)]), 0);
         assert_eq!(fence_hits(EntityKind::XLine(line.clone()), [(0.0, 1.0), (0.0, 5.0)]), 0);
         assert_eq!(fence_hits(EntityKind::Ray(line), [(5.0, 1.0), (5.0, 5.0)]), 0);
+    }
+}
+
+#[cfg(test)]
+mod solid_interior_tests {
+    use super::*;
+
+    fn face(kind: bool, triangular: bool) -> Entity {
+        let a = Vec2::new(0.0, 0.0).to3(0.0);
+        let b = Vec2::new(10.0, 0.0).to3(0.0);
+        let c = Vec2::new(0.0, 10.0).to3(0.0);
+        let d = if triangular { c } else { Vec2::new(10.0, 10.0).to3(0.0) };
+        let solid = cadcraft_doc::Solid { corners: [a, b, c, d] };
+        Entity::new(Handle(256), if kind { EntityKind::Solid(solid) } else { EntityKind::Trace(solid) })
+    }
+
+    #[test]
+    fn crossing_window_inside_solid_and_trace_selects_fill() {
+        let inside = Bounds2::new(Vec2::new(4.0, 4.0), Vec2::new(6.0, 6.0));
+        for solid in [true, false] {
+            let mut d = Drawing::default();
+            let e = face(solid, false);
+            assert!(in_window(&d, &e, None, &inside, true, 0.01));
+            assert!(!in_window(&d, &e, None, &inside, false, 0.01));
+            d.model.push(e);
+            assert_eq!(select_window(&d, &Space::Model, inside, true), vec![Handle(256)]);
+            assert!(select_window(&d, &Space::Model, inside, false).is_empty());
+        }
+    }
+
+    #[test]
+    fn crossing_window_in_triangular_bbox_but_outside_fill_does_not_select() {
+        let d = Drawing::default();
+        let e = face(true, true);
+        let empty = Bounds2::new(Vec2::new(7.0, 7.0), Vec2::new(8.0, 8.0));
+        assert!(!in_window(&d, &e, None, &empty, true, 0.01));
+        let inside = Bounds2::new(Vec2::new(3.0, 3.0), Vec2::new(4.0, 4.0));
+        assert!(in_window(&d, &e, None, &inside, true, 0.01));
     }
 }
