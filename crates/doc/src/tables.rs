@@ -488,7 +488,9 @@ impl Default for TableStyle {
 }
 
 mod cellstyle;
+mod tablebreak;
 pub use cellstyle::*;
+pub use tablebreak::*;
 
 /// A block definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

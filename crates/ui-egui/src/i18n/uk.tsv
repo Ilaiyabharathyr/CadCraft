@@ -150,6 +150,7 @@
 	DXF	DXF
 	Dark	Темна
 	Default	Типово
+	Data Link...	Зв’язок із даними...
 	Default Save Format	Типовий формат збереження
 	Define Attributes	Визначити атрибути
 	Define Attributes...	Визначити атрибути...
@@ -898,6 +899,7 @@
 	Toggle PICKADD (on: picks add to the selection)	Перемкнути PICKADD (увімкнено: вибране додається до набору вибраних об'єктів)
 	TOP	ЗВЕРХУ
 	Table	Таблиця
+	Table Breaks	Розриви таблиці
 	Table Cell Style	Стиль комірок таблиці
 	Table Style...	Стиль таблиць...
 	Table style	Стиль таблиць
@@ -942,6 +944,7 @@
 	Unmerge Cells	Розділити комірки
 	Unsaved Layer State	Незбережений стан шарів
 	Up	Угору
+	Update Data Links	Оновити зв’язки з даними
 	Update	Оновити
 	Use System Setting	Як у системі
 	User	Користувач
