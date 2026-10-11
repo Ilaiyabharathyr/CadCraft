@@ -96,7 +96,10 @@ mod native {
                 continue;
             }
             let (rows, cols) = (t.rows.len(), t.columns.len());
-            for r in t.merged_ranges.clone() {
+            // A real table has at most one merge per cell; more ranges than that come from a
+            // damaged file and would only make this rows × cols × ranges.
+            let max_ranges = rows.saturating_mul(cols).min(1 << 16);
+            for r in t.merged_ranges.iter().take(max_ranges).cloned().collect::<Vec<_>>() {
                 // Clamp to the table: the ranges come from the file.
                 let (bottom, right) = (r.bottom_row.min(rows.saturating_sub(1)), r.right_col.min(cols.saturating_sub(1)));
                 if r.top_row > bottom || r.left_col > right || rows == 0 || cols == 0 || (r.top_row, r.left_col) == (bottom, right) {
