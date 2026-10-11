@@ -134,6 +134,9 @@ impl Header {
         h.set_f64("SNAPANG", 0.0);
         h.set("SNAPUNIT", HVal::Point(Vec3::new(0.5, 0.5, 0.0)));
         h.set("GRIDUNIT", HVal::Point(Vec3::new(0.5, 0.5, 0.0)));
+        // Annotation scale of model space; annotative objects of other scales show (1) or not.
+        h.set_str("CANNOSCALE", "1:1");
+        h.set_i64("ANNOALLVISIBLE", 1);
         h
     }
 
