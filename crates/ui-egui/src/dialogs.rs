@@ -21,8 +21,10 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "dsettings" => dsettings(app, ctx, &mut open),
         "units" => units(app, ctx, &mut open),
         "about" => about(ctx, &mut open),
+        "preview" => crate::exchange::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),
+        "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
     if !open {
@@ -317,7 +319,7 @@ fn blocks(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 /// the insertion point.
 fn insert_block(app: &mut CadApp, name: &str) {
     app.start("insert");
-    if !app.session.running.as_ref().is_some_and(|r| r.id == "insert") {
+    if app.session.running.as_ref().is_none_or(|r| r.id != "insert") {
         return;
     }
     if let Err(e) = app.session.input(cadcraft_engine::Input::Text(name.to_string())) {
@@ -388,7 +390,13 @@ fn mtext_editor(app: &mut CadApp, ctx: &egui::Context) {
     ctx.data_mut(|d| d.insert_temp(id, buf));
     if let Some(t) = submit {
         ctx.data_mut(|d| d.remove::<String>(id));
-        let _ = app.session.input(cadcraft_engine::Input::Text(t));
+        // The editor holds the whole contents: one input, then Enter ends MTEXT's text entry.
+        if !t.is_empty() {
+            let _ = app.session.input(cadcraft_engine::Input::Text(t));
+        }
+        if app.session.running.as_ref().is_some_and(|r| r.id == "mtext") {
+            let _ = app.session.input(cadcraft_engine::Input::Enter);
+        }
     } else if cancel {
         ctx.data_mut(|d| d.remove::<String>(id));
         app.session.cancel();
@@ -431,8 +439,10 @@ mod tests {
         assert_eq!(app.session.current_prompt().map(|p| p.message), Some("Specify insertion point".to_string()));
 
         app.session.input(Input::Point(Vec2::new(5.0, 6.0))).unwrap();
-        app.session.input(Input::Enter).unwrap();
-        app.session.input(Input::Enter).unwrap();
+        // X scale, Y scale and rotation take their defaults.
+        for _ in 0..3 {
+            app.session.input(Input::Enter).unwrap();
+        }
         assert!(app.session.running.is_none());
         let d = app.session.doc().unwrap();
         let mut ins = Vec::new();
