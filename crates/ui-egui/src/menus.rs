@@ -13,11 +13,13 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dock", "Arrange Panel", &[], None),
     ("ui.dock.reset", "Reset Panel Layout", &["Window", "Reset Panel Layout"], None),
     ("ui.open", "Open...", &[], Some("Cmd+O")),
+    ("ui.newtemplate", "New from Template...", &["File", "New from Template..."], None),
     ("ui.saveas", "Save As...", &[], None),
     ("ui.sample", "Open Sample Drawing", &["Help", "Open Sample Drawing"], None),
     ("ui.toggle.toolsets", "Tool Sets", &["Window", "Tool Sets"], Some("Cmd+3")),
     ("ui.panel.properties", "Properties Inspector", &["Window", "Properties Inspector"], Some("Cmd+1")),
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
+    ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.toggle.toolbar", "Tool Bar", &["Window", "Tool Bar"], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
@@ -82,6 +84,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         let panel = if id == "ui.panel.properties" { "properties" } else { "layers" };
         return Some(crate::docking::command(app, false, &json!({"operation":"open", "panel":panel})));
     }
+    // QUICKCALC typed or from a menu opens the palette; with parameters it is CAL.
+    if id == "ui.panel.quickcalc" || (matches!(id, "quickcalc" | "qc") && params.is_null()) {
+        return Some(crate::palettes::quickcalc::open(app));
+    }
     if let Some(r) = crate::plotstyles::route(app, id, params) {
         return Some(r);
     }
@@ -108,6 +114,13 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             let picked = app.services.pick_open.as_ref().and_then(|f| f());
             if let Some(p) = picked {
                 app.open_path(&p);
+            }
+            Ok(Value::Null)
+        }
+        // Pick a template (.dwt or .dxf) and start a new drawing from it.
+        "ui.newtemplate" => {
+            if let Some(p) = app.services.pick_open.as_ref().and_then(|f| f()) {
+                return Some(app.session.execute("new", &json!({ "template": p })).map_err(|e| e.to_string()));
             }
             Ok(Value::Null)
         }
@@ -509,6 +522,8 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         (sc(Modifiers::NONE, Key::F1), "ui.dialog.commands"),
         (sc(Modifiers::NONE, Key::F2), "ui.toggle.history"),
         (sc(Modifiers::NONE, Key::F3), "osnap"),
+        (sc(Modifiers::NONE, Key::F5), "isoplane"),
+        (sc(cmd, Key::E), "isoplane"),
         (sc(Modifiers::NONE, Key::F7), "grid"),
         (sc(Modifiers::NONE, Key::F8), "ortho"),
         (sc(Modifiers::NONE, Key::F9), "snap"),
@@ -530,6 +545,13 @@ pub fn shortcuts(app: &mut CadApp, ctx: &egui::Context) {
         }
     });
     for id in fire {
+        // ISOPLANE (F5, Ctrl+E) switches the plane without cancelling the active command.
+        if id == "isoplane" {
+            if let Some(m) = app.session.execute(id, &json!({})).ok().and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string)) {
+                app.session.echo(m);
+            }
+            continue;
+        }
         // Toggles run transparently (they don't cancel the active command).
         let transparent = ["osnap", "grid", "ortho", "snap", "polar", "otrack", "dynmode", "pickstyle"].contains(&id);
         if transparent || id.starts_with("ui.") {

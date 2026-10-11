@@ -621,8 +621,15 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                         if verts.last().is_none_or(|l| !l.p.near(p0, 1e-9)) {
                             verts.push(PolyVertex::new(p0));
                         }
+                        // A full circle (0 to 360) starts and ends on the same point, which one
+                        // bulge can't span: it goes in as two half circles.
+                        let full = (sweep.abs() - std::f64::consts::TAU).abs() < 1e-9;
+                        let bulge = cadcraft_geom::arc_to_bulge(if full { sweep / 2.0 } else { sweep });
                         if let Some(l) = verts.last_mut() {
-                            l.bulge = cadcraft_geom::arc_to_bulge(sweep);
+                            l.bulge = bulge;
+                        }
+                        if full {
+                            verts.push(PolyVertex::with_bulge(Vec2::polar(c, r, s + sweep / 2.0), bulge));
                         }
                         verts.push(PolyVertex::new(p1));
                     }
@@ -633,32 +640,73 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
                         let ratio = f(i + 4);
                         let sa = f(i + 5).to_radians();
                         let ea = f(i + 6).to_radians();
+                        let ccw = get(i + 7).filter(|t| t.code == 73).map(Tag::i64).unwrap_or(1) != 0;
                         i += 8;
-                        let e = cadcraft_geom::Ellipse { center: c, major: m, ratio, start: sa, end: ea };
+                        // A clockwise edge stores its parameters mirrored, as an arc edge does: it
+                        // runs from -start clockwise to -end, the ccw sweep from -end to -start
+                        // walked backwards.
+                        let (s, e) = if ccw { (sa, ea) } else { (-ea, -sa) };
+                        let e = cadcraft_geom::Ellipse { center: c, major: m, ratio, start: s, end: e };
                         let mut pts = Vec::new();
                         e.tessellate(m.len() * 1e-3, &mut pts);
+                        if !ccw {
+                            pts.reverse();
+                        }
                         verts.extend(pts.into_iter().map(PolyVertex::new));
                     }
                     4 => {
-                        // Spline edge: 94 degree, 73 rational, 74 periodic, 95 knots, 96 ctrl.
-                        let _deg = get(i).map(Tag::i64).unwrap_or(3);
-                        while get(i).is_some_and(|x| x.code != 96) {
+                        // Spline edge: 94 degree, 73 rational, 74 periodic, 95 knot count, 96
+                        // control point count, then the 40 knots, the 10/20 control points (each
+                        // with a 42 weight when rational), and 97 fit point count with 11/21 fit
+                        // points and 12/22, 13/23 end tangents (R2010+).
+                        let (mut degree, mut nk, mut nc) = (3, 0, 0);
+                        while let Some(x) = get(i).filter(|x| matches!(x.code, 94 | 73 | 74 | 95 | 96)) {
+                            let n = x.i64().clamp(0, 100_000) as usize;
+                            match x.code {
+                                94 => degree = n,
+                                95 => nk = n,
+                                96 => nc = n,
+                                _ => {}
+                            }
                             i += 1;
                         }
-                        let nc = get(i).map(Tag::i64).unwrap_or(0).clamp(0, 100_000) as usize;
-                        i += 1;
-                        let mut ctrl = Vec::new();
-                        for _ in 0..nc {
-                            if get(i).is_some_and(|t| t.code == 10) {
-                                ctrl.push(Vec2::new(f(i), f(i + 1)));
-                                i += 2;
-                                if get(i).is_some_and(|t| t.code == 42) {
-                                    i += 1;
-                                }
+                        let mut knots = Vec::new();
+                        while knots.len() < nk && get(i).is_some_and(|x| x.code == 40) {
+                            knots.push(f(i));
+                            i += 1;
+                        }
+                        let (mut control, mut weights) = (Vec::new(), Vec::new());
+                        while control.len() < nc && get(i).is_some_and(|x| x.code == 10) {
+                            control.push(Vec2::new(f(i), f(i + 1)));
+                            i += 2;
+                            if get(i).is_some_and(|t| t.code == 42) {
+                                weights.push(f(i));
+                                i += 1;
                             }
                         }
-                        let sp = Spline::from_control(ctrl, 3);
-                        verts.extend(sp.tessellate(1e-3).into_iter().map(PolyVertex::new));
+                        let mut fit = Vec::new();
+                        if get(i).is_some_and(|x| x.code == 97) {
+                            let n = get(i).map(Tag::i64).unwrap_or(0).clamp(0, 100_000) as usize;
+                            i += 1;
+                            while fit.len() < n && get(i).is_some_and(|x| x.code == 11) {
+                                fit.push(Vec2::new(f(i), f(i + 1)));
+                                i += 2;
+                            }
+                        }
+                        if weights.len() != control.len() {
+                            weights.clear();
+                        }
+                        let sp = Spline { degree, knots, control, weights, ..Spline::default() };
+                        let sp = if sp.is_valid() {
+                            sp
+                        } else if sp.control.is_empty() && fit.len() > 1 {
+                            Spline::from_fit_points(&fit)
+                        } else {
+                            Spline::from_control(sp.control, degree)
+                        };
+                        let pts = sp.tessellate(1e-3);
+                        let skip = usize::from(verts.last().zip(pts.first()).is_some_and(|(l, p)| l.p.near(*p, 1e-9)));
+                        verts.extend(pts.into_iter().skip(skip).map(PolyVertex::new));
                     }
                     _ => {}
                 }
@@ -1170,6 +1218,15 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                 vals.push(v);
                 i += 1;
             }
+            // Legacy files keep spacing in HEADER; modern *ACTIVE VPORT entries override it.
+            if matches!(name.as_str(), "SNAPUNIT" | "GRIDUNIT") {
+                let (Some(x), Some(y)) = (vals.iter().find(|t| t.code == 10), vals.iter().find(|t| t.code == 20)) else { continue };
+                let p = Vec2::new(x.f64(), y.f64());
+                if p.is_finite() && if name == "GRIDUNIT" { p.x >= 0.0 && p.y >= 0.0 } else { p.x > 0.0 && p.y > 0.0 } {
+                    d.header.set(&name, HVal::Point(p.to3(0.0)));
+                }
+                continue;
+            }
             let hv = match vals.as_slice() {
                 [x, y, z] if x.code == 10 => HVal::Point(Vec3::new(x.f64(), y.f64(), z.f64())),
                 [x, y] if x.code == 10 => HVal::Point(Vec3::new(x.f64(), y.f64(), 0.0)),
@@ -1326,10 +1383,18 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     None => d.text_styles.push(st),
                 }
             }
-            // The first *ACTIVE viewport holds the snap grid's origin and rotation (degrees).
+            // The first *ACTIVE viewport holds the current snap/grid settings.
             "VPORT" if !active_vport && t.s(2).is_some_and(|n| n.trim().eq_ignore_ascii_case("*ACTIVE")) => {
                 active_vport = true;
                 vport_record(d, &t);
+                for (name, code) in [("SNAPUNIT", 14), ("GRIDUNIT", 15)] {
+                    if let (Some(x), Some(y)) = (t.f(code), t.f(code + 10)) {
+                        let p = Vec2::new(x, y);
+                        if p.is_finite() && if name == "GRIDUNIT" { p.x >= 0.0 && p.y >= 0.0 } else { p.x > 0.0 && p.y > 0.0 } {
+                            d.header.set(name, HVal::Point(p.to3(0.0)));
+                        }
+                    }
+                }
                 if let (Some(x), Some(y)) = (t.f(13), t.f(23))
                     && x.is_finite()
                     && y.is_finite()

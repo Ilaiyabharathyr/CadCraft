@@ -1,6 +1,6 @@
 # Where CADCraft falls short of AutoCAD
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (SPLINE, MTEXT and MLEADER prompt options landed, #408: top-10 row 5, F1 and F10 narrowed) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (German catalog landed, L2 narrowed; SPLINE, MTEXT and MLEADER prompt options landed, #408: top-10 row 5, F1 and F10 narrowed) · **Target:** Autodesk AutoCAD 2027
 
 Every known shortfall, one row each, ranked within each section by user impact. This is the work
 list: agents pick from here (top of a section first), and remove or update a row in the same PR
@@ -84,7 +84,7 @@ Detail: [file-format-parity.md](file-format-parity.md).
 | FF6 | **[alpha blocker]** DWG throughput: a 10 MB DWG took ~2 min to fail (#57) | High for real projects | 6–10 |
 | FF7 | Table record and object handles from other programs' files are renumbered on the first save (entity handles are kept; `*D` blocks no longer duplicate and once reopened, CADCraft's own files keep every handle across saves, #495) | Low | 4–6 |
 | FF8 | SHX fonts (shape and big fonts) not read | Medium-high (text metrics differ) | 8–12 |
-| FF9 | Templates (DWT), user `.lin`/`.pat` files, `.ctb`/`.stb`, `.pc3`, `.pgp` | Medium | 20–30 |
+| FF9 | `.pc3` plotter configuration files; linetype shape (SHX) elements are skipped (templates and `.dwt`, user `.lin`/`.pat` and `.pgp` alias files landed, #552; `.ctb`/`.stb`, #410) | Low-medium | 5–10 |
 | FF10 | PDF: text as real fonts, layers (OCG), multi-sheet; PDF import and underlays; raster image attach | Medium | 30–50 |
 | FF11 | DWF/DWFx, DGN, WMF, EPS, ACIS/STL and other exchange formats | Low-medium | 50–100 |
 | FF12 | DWG in the web build | Medium | 6–10 |
@@ -108,8 +108,8 @@ Detail: [localization-parity.md](localization-parity.md).
 
 | # | Gap | Est. |
 |---|---|---|
-| L1 | Catalog covers the UI (936 rows, #36) but not engine diagnostics, CLI/MCP replies or command history | 4–6 |
-| L2 | AutoCAD for Mac's 7 other languages (zh-Hans, es, fr, ja, de, ko, it) plus pt, hi, ar, id, vi from the standard's list | 40–60 + native review |
+| L1 | Catalog covers the UI (989 rows, #36) but not engine diagnostics, CLI/MCP replies or command history | 4–6 |
+| L2 | AutoCAD for Mac's other languages (zh-Hans, es, fr, ja, ko, it; de landed 2026-10-11) plus pt, hi, ar, id, vi from the standard's list | 35–55 + native review |
 | L3 | Complex-script shaping for Devanagari and other Indic scripts in drawing text; RTL (mirrored) UI. Arabic-script shaping and bidi in drawing text landed (#287) | 20–30 |
 | L4 | IME fixes on every platform (PRs #110–#119); vertical text styles | 6–10 |
 
@@ -154,6 +154,7 @@ Detail: [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | German interface catalog landed: L1 row count 936 → 989, L2 narrowed (de done; 40–60 → 35–55 h) |
 | 2026-10-11 | minor | SPLINE Knots/Tangency/toLerance/Object, MTEXT Height/Justify/Line spacing/Rotation/Style/Width/Columns, MLEADER spline and no-leader types and block content landed (#408): top-10 row 5, F1 and F10 narrowed |
 | 2026-10-11 | minor | Object snap tracking, Extension, Parallel and true Apparent Intersection landed (#379): top-10 row 3 and U1 narrowed to the leftovers |
 | 2026-10-10 | minor | Merged main: closed or narrowed rows for the Ukrainian catalog, UNITS dialog, shortcut display, dynamic input pointer boxes, press-drag windows, SETVAR DIM*, WIPEOUT and gradients, fmt |

@@ -50,6 +50,7 @@
 	<> Not Equal	<> Не дорівнює
 	= Equals	= Дорівнює
 	> Greater than	> Більше ніж
+	A variable name starts with a letter and has only letters, digits and _	Ім'я змінної починається з літери й містить лише літери, цифри та _
 	About	Про програму
 	About CADCraft	Про CADCraft
 	Absolute	Абсолютні
@@ -129,8 +130,10 @@
 	Chamfer	Фаска
 	Change Space	Змінити простір
 	Change to Current Layer	Перенести на поточний шар
+	Changed: {n}	Змінено: {n}
 	Circle	Коло
 	Circumference	Довжина кола
+	Clear History	Очистити журнал
 	Clear	Очистити
 	Clip	Обрізати
 	Clip Viewport	Обрізати видовий екран
@@ -139,6 +142,7 @@
 	Close All	Закрити всі
 	Close All Other Drawings	Закрити всі інші креслення
 	Closed	Замкнений
+	Close Comparison	Закрити порівняння
 	Coincident	Збіг
 	Collapse Tool Sets	Згорнути набори інструментів
 	Collinear	Колінеарність
@@ -147,6 +151,7 @@
 	Color 9	Колір 9
 	Color Index	Індекс кольору
 	Color...	Колір...
+	Command Aliases	Псевдоніми команд
 	Command History	Історія команд
 	Clear Command History	Очистити історію команд
 	Command Line	Командний рядок
@@ -154,6 +159,7 @@
 	Command Reference	Довідник команд
 	Commits	Коміти
 	Company	Компанія
+	Compare Drawings...	Порівняти креслення...
 	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Автоматизоване проєктування та креслення: CAD-програма з відкритим кодом, незалежно розроблена мовою Rust.
 	Concentric	Концентричність
 	Cone	Конус
@@ -164,6 +170,7 @@
 	Continue	Продовжити
 	Contributors	Учасники
 	Control Vertices	Керувальні вершини
+	Convert	Перетворити
 	Copy	Копіювати
 	Copy Full File Path	Копіювати повний шлях до файлу
 	Copy History	Копіювати історію
@@ -172,6 +179,8 @@
 	Copy Selection	Копіювати вибране
 	Copy with Base Point	Копіювати з базовою точкою
 	Count	Кількість
+	Count List	Список підрахунку
+	Count Table	Таблиця підрахунку
 	Create Block	Створити блок
 	Creates a user parameter	Створює параметр користувача
 	Ctrl+Enter to finish	Ctrl+Enter для завершення
@@ -240,6 +249,7 @@
 	Drawing (DWG)	Креслення (DWG)
 	Drawing (DXF)	Креслення (DXF)
 	Drawing Limits	Межі креслення
+	Drawing Template (DWT)	Шаблон креслення (DWT)
 	Drawing Utilities	Утиліти креслення
 	Drawings (DWG, DXF)	Креслення (DWG, DXF)
 	Dynamic	Динамічно
@@ -308,6 +318,7 @@
 	Entire drawing	Усе креслення
 	Equal	Рівність
 	Erase	Стерти
+	Evaluate	Обчислити
 	Exclude from new selection set	Виключити з нового набору вибраних об'єктів
 	Explode	Розчленувати
 	Export	Експортувати
@@ -347,6 +358,7 @@
 	Geometric Constraint	Геометричне обмеження
 	Geometric Constraints	Геометричні обмеження
 	Geometry	Геометрія
+	Get from the Drawing	Взяти з креслення
 	Get Variable	Отримати змінну
 	Get View	Отримати вид
 	Global	Глобально
@@ -372,6 +384,7 @@
 	Group Selection	Вибір груп
 	Hatch	Штрихування
 	Hatch Edit	Редагувати штрихування
+	Hatch Patterns	Зразки штрихування
 	Hatch...	Штрихування...
 	Height	Висота
 	Height: {height}	Висота: {height}
@@ -383,6 +396,7 @@
 	Hide Layer List	Приховати список шарів
 	Hide Objects	Приховати об'єкти
 	Hide Palettes	Приховати палітри
+	History	Журнал
 	Home	Початковий вид
 	Horizontal	Горизонтальність
 	HorizontalDistance	Горизонтальна відстань
@@ -424,6 +438,8 @@
 	Join	Об'єднати
 	Join the ArtCraft Discord…	Приєднатися до Discord ArtCraft…
 	Join us on Discord	Приєднуйтеся до нас у Discord
+	Isometric Plane	Ізометрична площина
+	Isometric snap	Ізометрична крокова прив'язка
 	Language	Мова
 	Last	Останній
 	Last commit	Останній коміт
@@ -532,8 +548,10 @@
 	New Layout	Новий аркуш
 	New VP Freeze	Заморозити в нових ВЕ
 	New Viewports...	Нові видові екрани...
+	New from Template...	Створити із шаблону...
 	New layout	Новий аркуш
 	New state name	Назва нового стану
+	Next Change	Наступна зміна
 	No	Ні
 	No blocks defined in this drawing.	У цьому кресленні немає визначених блоків.
 	No contributor data was built into this copy.	Ця збірка не містить даних про учасників.
@@ -560,6 +578,8 @@
 	On	Увімкнено
 	On/Off	Увімкнути/вимкнути
 	One of the Crafting Apps by the ArtCraft team and community.	Одна з програм Crafting Apps від команди та спільноти ArtCraft.
+	Only in this drawing: {n}	Лише в цьому кресленні: {n}
+	Only in {name}: {n}	Лише в {name}: {n}
 	Open (⌘O)	Відкрити (⌘O)
 	Open Sample Drawing	Відкрити зразок креслення
 	Open sample drawing	Відкрити зразок креслення
@@ -592,6 +612,7 @@
 	Parametric	Параметризація
 	Paste	Вставити
 	Paste as Block	Вставити як блок
+	Paste to Command Line	Вставити в командний рядок
 	Paste to Original Coordinates	Вставити у вихідні координати
 	Path Array	Масив уздовж траєкторії
 	Pattern	Візерунок
@@ -606,6 +627,8 @@
 	Plot Style Manager	Диспетчер стилів друку
 	Plot Style Manager...	Диспетчер стилів друку...
 	Plot Styles...	Стилі друку...
+	Plotter Manager	Диспетчер плотерів
+	Plotter Manager...	Диспетчер плотерів...
 	New CTB	Нова CTB
 	New STB	Нова STB
 	New style	Новий стиль
@@ -650,6 +673,7 @@
 	Position Y	Позиція Y
 	Position Z	Позиція Z
 	Previous	Попередній
+	Previous Change	Попередня зміна
 	Previous Layer	Попередній шар
 	Primitives	Примітиви
 	Print	Друк
@@ -669,6 +693,7 @@
 	Quick Select Properties	Властивості швидкого вибору
 	Quick Select...	Швидкий вибір...
 	QuickCalc	Калькулятор
+	QuickCalc Pick	Вибір для калькулятора
 	Quit CADCraft	Вийти з CADCraft
 	Radius	Радіус
 	Raster Image	Растрове зображення
@@ -684,6 +709,7 @@
 	Rectangle	Прямокутник
 	Recalculate Table Formulas	Перерахувати формули таблиці
 	Rectangular	Прямокутний
+	Rectangular snap	Прямокутна крокова прив'язка
 	Rectangular Array	Прямокутний масив
 	Red	Червоний
 	Redo	Повторити
@@ -693,6 +719,7 @@
 	Regen All	Регенерувати все
 	Region	Область
 	Region/Mass Properties	Властивості області/маси
+	Reinitialize	Переініціалізувати
 	Relative	Відносні
 	Relative to last segment	Відносно останнього сегмента
 	Remove Leader	Видалити виноску
@@ -1020,6 +1047,7 @@
 	Switch between model space in a viewport and paper space	Перемкнути між простором моделі у видовому екрані та простором аркуша
 	Symmetric	Симетрія
 	Synchronize Attributes	Синхронізувати атрибути
+	To	До
 	Toggle PICKADD (off: each pick replaces the selection)	Перемкнути PICKADD (вимкнено: кожен вибір замінює набір вибраних об'єктів)
 	Toggle PICKADD (on: picks add to the selection)	Перемкнути PICKADD (увімкнено: вибране додається до набору вибраних об'єктів)
 	TOP	ЗВЕРХУ
@@ -1069,6 +1097,7 @@
 	Ungroup	Розгрупувати
 	Union	Об'єднання
 	Unisolate Layer	Скасувати ізоляцію шарів
+	Units Conversion	Перетворення одиниць
 	Units...	Одиниці...
 	Unlock Layer	Розблокувати шар
 	Unlock viewport	Розблокувати видовий екран
@@ -1081,10 +1110,12 @@
 	User	Користувач
 	User Parameters	Параметри користувача
 	Username	Ім'я користувача
+	Volume	Об'єм
 	VP Color	Колір ВЕ
 	VP Freeze	Заморожування ВЕ
 	Value	Значення
 	Value:	Значення:
+	Variables	Змінні
 	Version	Версія
 	Version 2000	Версія 2000
 	Version 2004	Версія 2004

@@ -183,11 +183,14 @@ fn adaptive(unit: f64, scale: f64, min_px: f64) -> f64 {
 
 fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     let t = Tokens::get();
-    let s = &app.session.settings;
+    let s = app.session.drafting_settings();
     let wb = xf.world_bounds();
-    if s.gridmode {
+    if s.gridmode && s.isodraft {
+        draw_iso_grid(app, p, xf);
+    } else if s.gridmode {
         let major_n = f64::from(s.gridmajor.max(1));
-        let minor = adaptive(s.gridunit.x, xf.scale, 8.0);
+        let unit = if s.gridunit.x == 0.0 { s.snapunit.x } else { s.gridunit.x };
+        let minor = adaptive(unit, xf.scale, 8.0);
         let major = minor * major_n;
         let mut lines = Vec::new();
         let x0 = (wb.min.x / minor).floor() as i64;
@@ -224,6 +227,28 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     if xf.rect.x_range().contains(o.x) {
         p.line_segment([pos2(o.x, xf.rect.top()), pos2(o.x, xf.rect.bottom())], Stroke::new(1.0, t.axis_y));
     }
+}
+
+/// The isometric grid (SNAPSTYL 1): lines at 30°, 90° and 150° through the snap lattice, GRIDUNIT
+/// Y apart along the axes, coarsened while they would crowd closer than 8 pixels.
+fn draw_iso_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
+    use cadcraft_engine::snap::iso;
+    let t = Tokens::get();
+    let s = app.session.drafting_settings();
+    let mut d = s.gridunit.y.max(1e-12);
+    for _ in 0..40 {
+        if d * 0.866 * xf.scale >= 8.0 {
+            break;
+        }
+        d *= 5.0;
+    }
+    let (origin, angle) = app.session.doc().map(cadcraft_engine::snap::grid_frame).unwrap_or((Vec2::ZERO, 0.0));
+    let lines = iso::grid_lines(xf.world_bounds(), d, origin, angle, s.gridmajor);
+    p.extend(
+        lines.into_iter().map(|l| {
+            Shape::line_segment([xf.to_screen(l.a), xf.to_screen(l.b)], Stroke::new(1.0, if l.major { t.grid_major } else { t.grid_minor }))
+        }),
+    );
 }
 
 fn clip_infinite(xf: &Xf, base: Vec2, dir: Vec2, ray: bool) -> Option<[Pos2; 2]> {
@@ -511,7 +536,7 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
 /// `Session::snap_cursor`: object snaps, acquiring tracking points, grid, tracking paths, ortho).
 fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) -> Vec2 {
     let prompt = app.session.current_prompt();
-    let wants_point = prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
+    let wants_point = prompt.as_ref().is_some_and(cadcraft_engine::pointmod::accepts);
     let base = prompt.as_ref().and_then(|p| p.base);
     let deferred = prompt.as_ref().is_some_and(|p| p.deferred);
     app.canvas.snap = None;
@@ -784,9 +809,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             {
                 app.cmd.buffer.clear();
             }
-            // A deferred tangent/perpendicular goes to the command as such.
-            let input = app.canvas.snap.filter(|h| h.deferred.is_some()).map_or(Input::Point(p), |h| h.input());
-            if let Err(e) = app.session.input(input) {
+            // Preserve a snap's viewport origin for DIST, and its deferred curve where needed.
+            let result = match app.canvas.snap {
+                Some(hit) => app.session.input_snapped(hit),
+                None => app.session.input(Input::Point(p)),
+            };
+            if let Err(e) = result {
                 app.session.echo(e.to_string());
             }
         } else if let Some(g) = grip_at(app, &xf, hover_pos) {
@@ -930,6 +958,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &sel), t.selection, 1.5, true);
     }
     app.canvas.draw_ms = crate::now_ms() - t0;
+    compare::paint(app, ui.ctx(), &painter, &xf_paper, rect);
     // Constraint bars and dynamic dimensional constraints (model space, or inside a viewport).
     if sheet.is_none() || active_vp.is_some() {
         let clip = match &active_vp {
@@ -1024,6 +1053,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_viewcube(app, ui, rect);
     }
     viewport_label(&painter, rect);
+    // Typing and Escape reach the command line even when its overlay is hidden.
+    crate::cmdline::keyboard(app, ui.ctx());
     // Command line overlay.
     if app.ui.show_command_line {
         crate::cmdline::show(app, ui, full);
@@ -1113,7 +1144,7 @@ fn override_cursor(app: &mut CadApp, raw: Vec2, xf: &Xf) {
     let ap = app.session.settings.aperture / xf.scale;
     let cycle = snap_cycle(app, raw, ap);
     let prompt = app.session.current_prompt();
-    let wants_point = prompt.as_ref().is_some_and(|p| p.accept.point && !p.accept.select);
+    let wants_point = prompt.as_ref().is_some_and(cadcraft_engine::pointmod::accepts);
     if (over.is_none() && cycle.is_none()) || !wants_point || app.session.pending_window.is_some() {
         return;
     }
@@ -1155,10 +1186,19 @@ fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox
     let len = (rect.height() * app.session.settings.cursorsize as f32 / 100.0).max(12.0);
     let pb = if pickbox { pickbox_half(app.session.settings.pickbox) } else { None };
     let gap = pb.unwrap_or(0.0);
-    p.line_segment([pos2(at.x - len, at.y), pos2(at.x - gap, at.y)], st);
-    p.line_segment([pos2(at.x + gap, at.y), pos2(at.x + len, at.y)], st);
-    p.line_segment([pos2(at.x, at.y - len), pos2(at.x, at.y - gap)], st);
-    p.line_segment([pos2(at.x, at.y + gap), pos2(at.x, at.y + len)], st);
+    // Along the isometric plane's axes in isometric drafting.
+    if app.session.settings.isodraft {
+        for a in cadcraft_engine::snap::iso::cursor_axes(&app.session.settings) {
+            let dir = vec2(a.cos() as f32, -(a.sin() as f32));
+            p.line_segment([at - dir * len, at - dir * gap], st);
+            p.line_segment([at + dir * gap, at + dir * len], st);
+        }
+    } else {
+        p.line_segment([pos2(at.x - len, at.y), pos2(at.x - gap, at.y)], st);
+        p.line_segment([pos2(at.x + gap, at.y), pos2(at.x + len, at.y)], st);
+        p.line_segment([pos2(at.x, at.y - len), pos2(at.x, at.y - gap)], st);
+        p.line_segment([pos2(at.x, at.y + gap), pos2(at.x, at.y + len)], st);
+    }
     if let Some(pb) = pb {
         p.rect_stroke(Rect::from_center_size(at, vec2(pb * 2.0, pb * 2.0)), 0.0, st, egui::StrokeKind::Middle);
     }
@@ -1529,3 +1569,6 @@ mod tests {
         assert_eq!(ix.prims(2, &b, &hs(&[9, 3])), vec![0, 1]);
     }
 }
+
+/// The COMPARE overlay.
+mod compare;
