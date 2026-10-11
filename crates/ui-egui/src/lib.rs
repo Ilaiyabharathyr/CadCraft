@@ -169,6 +169,8 @@ pub struct CadApp {
     queued_shots: Vec<(u64, f64, u32)>,
     shot_token: u64,
     pub synthetic: Vec<egui::Event>,
+    /// Modifiers forced into egui for synthetic events, until the real ones are restored.
+    synthetic_modifiers: Option<egui::Modifiers>,
     /// Caps the frame rate when presenting without vsync (see [`gpu::FrameCap`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub frame_cap: Option<gpu::FrameCap>,
@@ -202,6 +204,7 @@ impl CadApp {
             queued_shots: Vec::new(),
             shot_token: 0,
             synthetic: Vec::new(),
+            synthetic_modifiers: None,
             #[cfg(not(target_arch = "wasm32"))]
             frame_cap: None,
             styled: false,
@@ -399,9 +402,6 @@ impl CadApp {
         if let Some(cap) = &mut self.frame_cap {
             cap.wait();
         }
-        if self.synthetic.is_empty() {
-            return;
-        }
         let n = match self.synthetic.first() {
             Some(egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }) => 1,
             _ => self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map_or(self.synthetic.len(), |i| i + 1),
@@ -410,6 +410,20 @@ impl CadApp {
             raw.events.push(egui::Event::PointerMoved(*p));
         }
         let n = n.min(self.synthetic.len());
+        // Synthetic clicks and keys carry their modifiers, but the canvas reads the live egui modifier state, which only a
+        // modifier-change event updates and which persists across frames. Deliver it first so `shift:true` acts as a held
+        // Shift for this frame, and hand the real modifiers back once the synthetic events no longer need it.
+        let held = self.synthetic.iter().take(n).find_map(|e| match e {
+            egui::Event::PointerButton { modifiers, .. } | egui::Event::Key { modifiers, .. } => Some(*modifiers),
+            _ => None,
+        });
+        let real = raw.modifiers;
+        let want = held.unwrap_or(real);
+        if want != self.synthetic_modifiers.unwrap_or(real) {
+            raw.modifiers = want;
+            raw.events.push(egui::Event::ModifiersChanged(want));
+        }
+        self.synthetic_modifiers = held.filter(|m| *m != real);
         raw.events.extend(self.synthetic.drain(..n));
     }
 
@@ -545,6 +559,31 @@ mod tests {
         let raw = egui::RawInput { system_theme: system, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| app.logic(ui.ctx()));
         out.textures_delta.clear();
+    }
+
+    /// One frame through the raw-input hook; returns whether egui saw Shift held.
+    fn hooked_frame(app: &mut CadApp, ctx: &egui::Context) -> bool {
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&mut raw);
+        let mut shift = false;
+        let mut out = ctx.run_ui(raw, |ui| shift = ui.ctx().input(|i| i.modifiers.shift));
+        out.textures_delta.clear();
+        shift
+    }
+
+    #[test]
+    fn synthetic_shift_click_holds_shift_for_the_frame() {
+        let mut a = app();
+        let ctx = egui::Context::default();
+        let pos = egui::pos2(10.0, 10.0);
+        let shift = egui::Modifiers { shift: true, ..Default::default() };
+        a.synthetic.push(egui::Event::PointerMoved(pos));
+        a.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: shift });
+        a.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: shift });
+        assert!(!hooked_frame(&mut a, &ctx), "the move alone holds no Shift");
+        assert!(hooked_frame(&mut a, &ctx), "the press sees Shift");
+        assert!(hooked_frame(&mut a, &ctx), "the release sees Shift");
+        assert!(!hooked_frame(&mut a, &ctx), "Shift is released once the click is over");
     }
 
     #[test]
