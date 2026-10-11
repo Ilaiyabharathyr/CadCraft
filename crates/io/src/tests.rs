@@ -53,6 +53,7 @@ fn sample() -> Drawing {
             contents: "line one\\Pline two".into(),
             line_spacing: 1.0,
             line_spacing_exact: false,
+            columns: None,
         }),
     )
     .unwrap();
@@ -93,6 +94,7 @@ fn sample() -> Drawing {
             block: None,
             overrides: Default::default(),
             assoc: Vec::new(),
+            marks: Default::default(),
         }),
     )
     .unwrap();
@@ -105,6 +107,7 @@ fn sample() -> Drawing {
             loops: vec![HatchLoop {
                 vertices: vec![PolyVertex::new(Vec2::ZERO), PolyVertex::new(Vec2::new(2.0, 0.0)), PolyVertex::new(Vec2::new(2.0, 2.0))],
                 outer: true,
+                sources: Vec::new(),
             }],
             scale: 1.0,
             angle: 0.0,
@@ -498,6 +501,8 @@ fn pdf_layout_one_to_one_with_viewport() {
             locked: false,
             frozen_layers: Vec::new(),
             layer_colors: Vec::new(),
+            clip: None,
+            on: true,
         }),
     )
     .unwrap();
@@ -573,6 +578,7 @@ fn dim(kind: DimKind, p13: Vec3, p14: Vec3) -> Dimension {
         block: None,
         overrides: Default::default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     }
 }
 
@@ -599,6 +605,8 @@ fn viewport_frozen_layers_roundtrip() {
             locked: true,
             frozen_layers: frozen,
             layer_colors: Vec::new(),
+            clip: None,
+            on: true,
         })
     };
     d.add(&paper, Common::default(), vp(2, vec!["Walls".into(), "A B".into()])).unwrap();
@@ -632,6 +640,8 @@ fn viewport_layer_colors_roundtrip() {
             locked: false,
             frozen_layers: frozen,
             layer_colors: colors,
+            clip: None,
+            on: true,
         })
     };
     let colors = vec![("Walls".to_string(), Color::Index(5)), ("A B".to_string(), Color::True(cadcraft_color::Rgb(255, 128, 0)))];
@@ -705,6 +715,7 @@ fn full_dim_style() -> DimStyle {
         angular_unit: 1,
         suppress_ext1: true,
         suppress_ext2: true,
+        ..DimStyle::default()
     }
 }
 
@@ -1025,7 +1036,7 @@ fn layer_states_roundtrip_next_to_constraints() {
 }
 
 fn table_sample() -> Table {
-    let cell = |t: &str| TableCell { text: t.into(), merged: None };
+    let cell = |t: &str| TableCell { text: t.into(), ..Default::default() };
     let mut rows = vec![
         vec![cell("Door schedule"), cell(""), cell("")],
         vec![cell("Mark"), cell("Size"), cell("Notes")],
@@ -1043,13 +1054,14 @@ fn table_sample() -> Table {
         text_height: 0.2,
         title: true,
         header: true,
+        ..Table::default()
     }
 }
 
 #[test]
 fn tables_roundtrip_with_title_header_and_merges() {
     let mut d = Drawing::new_imperial();
-    d.table_styles.push(TableStyle { name: "Schedule".into(), text_height: 0.25, margin: 0.1, title: false, header: true });
+    d.table_styles.push(TableStyle { name: "Schedule".into(), text_height: 0.25, margin: 0.1, title: false, header: true, ..TableStyle::default() });
     let t = table_sample();
     d.add(&Space::Model, Common::default(), EntityKind::Table(t.clone())).unwrap();
     let text = write_dxf(&d);
@@ -1129,6 +1141,7 @@ fn intl_sample() -> Drawing {
             contents: format!("{INTL}\\P第二行 Ünïcødé"),
             line_spacing: 1.0,
             line_spacing_exact: false,
+            columns: None,
         }),
     )
     .unwrap();
@@ -1275,7 +1288,7 @@ fn extension_sample() -> Drawing {
     let mut d = sample();
     d.text_styles.push(TextStyle { name: "Romans".into(), font: "romans.shx".into(), backwards: true, annotative: true, ..TextStyle::default() });
     d.dim_styles.push(full_dim_style());
-    d.table_styles.push(TableStyle { name: "Schedule".into(), text_height: 0.25, margin: 0.1, title: true, header: true });
+    d.table_styles.push(TableStyle { name: "Schedule".into(), text_height: 0.25, margin: 0.1, title: true, header: true, ..TableStyle::default() });
     d.add(&Space::Model, Common::default(), EntityKind::Table(table_sample())).unwrap();
     let l1 = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(0.0, 30.0, 0.0), b: Vec3::new(0.0, 35.0, 0.0) })).unwrap();
     let l2 = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(8.0, 30.0, 0.0), b: Vec3::new(8.0, 35.0, 0.0) })).unwrap();
@@ -1321,7 +1334,9 @@ fn extension_sample_roundtrips_and_can_be_exported() {
 fn dwg_roundtrip_keeps_extension_data() {
     let d = extension_sample();
     let back = read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap();
-    assert_eq!(back.dim_style("Mech"), d.dim_style("Mech"));
+    // The bridge loses DIMFXL and DIMJOGANG (0 and its 5° minimum come back).
+    let norm = |s: Option<&DimStyle>| s.cloned().map(|s| DimStyle { fixed_ext_length: 1.0, jog_angle: 45.0, ..s });
+    assert_eq!(norm(back.dim_style("Mech")), norm(d.dim_style("Mech")));
     assert_eq!(back.constraints, d.constraints);
     assert_eq!(back.parametric, d.parametric);
     let dims =
@@ -1339,7 +1354,7 @@ fn dwg_roundtrip_keeps_extension_data() {
 }
 
 #[test]
-fn mleader_is_written_as_leader_and_mtext() {
+fn mleader_is_written_as_multileader() {
     let mut d = Drawing::new_metric();
     let text = cadcraft_doc::MText {
         insert: Vec3::new(12.0, 5.0, 0.0),
@@ -1351,6 +1366,7 @@ fn mleader_is_written_as_leader_and_mtext() {
         style: "Standard".into(),
         line_spacing: 1.0,
         line_spacing_exact: false,
+        columns: None,
     };
     let m = cadcraft_doc::MLeader {
         leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0)]],
@@ -1362,10 +1378,10 @@ fn mleader_is_written_as_leader_and_mtext() {
         spline: false,
         block: None,
     };
-    d.add(&Space::Model, Default::default(), EntityKind::MLeader(m)).unwrap();
+    d.add(&Space::Model, Default::default(), EntityKind::MLeader(m.clone())).unwrap();
     let back = roundtrip(&d);
-    assert!(back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_))));
-    assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MText(t) if t.contents == "Note")));
+    assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MLeader(x) if *x == m)));
+    assert!(!back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_) | EntityKind::MText(_))));
 }
 
 #[test]
@@ -1495,7 +1511,7 @@ fn gradient_sample() -> (Drawing, Vec<Option<Gradient>>) {
         let h = Hatch {
             pattern: "SOLID".into(),
             solid: true,
-            loops: vec![HatchLoop { vertices: square.clone(), outer: true }],
+            loops: vec![HatchLoop { vertices: square.clone(), outer: true, sources: Vec::new() }],
             scale: 1.0,
             angle: 0.0,
             associative: false,
@@ -1672,6 +1688,8 @@ fn autocad_header_dim_variables_are_not_overrides() {
             // Names as AutoCAD may spell them.
             K::Block => (1, v.as_str().unwrap().to_ascii_uppercase()),
             K::TextStyle => (7, v.as_str().unwrap().to_ascii_uppercase()),
+            K::Linetype => (6, v.as_str().unwrap().to_string()),
+            K::Angle => (40, v.as_f64().unwrap().to_radians().to_string()),
         };
         vars.push_str(&format!("  9\r\n${var}\r\n{code}\r\n{val}\r\n"));
     }
@@ -1742,6 +1760,36 @@ fn mirrored_hatch_extrusion_flips_boundary() {
     for (got, want) in [(b.min.x, -3.0), (b.min.y, 0.0), (b.max.x, -1.0), (b.max.y, 2.0)] {
         assert!((got - want).abs() < 1e-9, "extents {b:?}");
     }
+}
+
+/// The model extents of a one-loop solid HATCH whose edge boundary is `edges` (group 72 onwards).
+fn hatch_edge_extents(edges: &str) -> Bounds2 {
+    let n = edges.matches("72\n").count();
+    let text = format!(
+        "0\nSECTION\n2\nENTITIES\n0\nHATCH\n8\n0\n10\n0\n20\n0\n30\n0\n210\n0\n220\n0\n230\n1\n2\nSOLID\n70\n1\n71\n0\n\
+         91\n1\n92\n1\n93\n{n}\n{edges}97\n0\n75\n0\n76\n1\n98\n0\n0\nENDSEC\n0\nEOF\n"
+    );
+    read(text.as_bytes(), "h.dxf").unwrap().extents(&Space::Model)
+}
+
+/// Issues #492, #493, #494: a full-circle arc edge, spline edges (knots come before the control
+/// points) and clockwise ellipse edges all keep their curve.
+#[test]
+fn hatch_edges_keep_full_circles_splines_and_clockwise_ellipses() {
+    let near = |b: Bounds2, want: [f64; 4]| {
+        let got = [b.min.x, b.min.y, b.max.x, b.max.y];
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3), "extents {got:?}, want {want:?}");
+    };
+    // #492: one arc edge from 0 to 360.
+    near(hatch_edge_extents("72\n2\n10\n0\n20\n0\n40\n5\n50\n0\n51\n360\n73\n1\n"), [-5.0, -5.0, 5.0, 5.0]);
+    // #493: a cubic Bezier through (0,0)..(4,0) peaking at y = 3, closed by a line.
+    let spline = "72\n4\n94\n3\n73\n0\n74\n0\n95\n8\n96\n4\n40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n\
+                  10\n0\n20\n0\n10\n0\n20\n4\n10\n4\n20\n4\n10\n4\n20\n0\n97\n0\n";
+    near(hatch_edge_extents(&format!("{spline}72\n1\n10\n4\n20\n0\n11\n0\n21\n0\n")), [0.0, 0.0, 4.0, 3.0]);
+    // #494: the clockwise half-ellipse from 0 to 180 is the lower half, closed by its diameter.
+    let ellipse = |ccw| format!("72\n3\n10\n0\n20\n0\n11\n5\n21\n0\n40\n0.5\n50\n0\n51\n180\n73\n{ccw}\n72\n1\n10\n-5\n20\n0\n11\n5\n21\n0\n");
+    near(hatch_edge_extents(&ellipse(0)), [-5.0, -2.5, 5.0, 0.0]);
+    near(hatch_edge_extents(&ellipse(1)), [-5.0, 0.0, 5.0, 2.5]);
 }
 
 #[test]
