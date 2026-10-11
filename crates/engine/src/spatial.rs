@@ -270,6 +270,8 @@ mod tests {
     fn drawing(seed: u64, n: usize) -> Drawing {
         let mut d = Drawing::new_imperial();
         let mut blk = Block {
+            xref_overlay: false,
+            xref_status: Default::default(),
             name: "B".into(),
             base: Vec3::default(),
             entities: EntityStore::new(),
