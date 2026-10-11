@@ -132,6 +132,9 @@ fn install_io() {
         write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
         plot: Some(|d, space, opts| cadcraft_io::plot(d, space, opts).map_err(|e| e.to_string())),
     });
+    cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
+        cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
+    });
 }
 
 fn open(s: &mut Session, path: &str) -> Result<(), String> {
@@ -182,7 +185,7 @@ fn export_framed(s: &Session, out: &str, window: Option<Bounds2>) -> Result<(), 
     let bytes = cadcraft_io::write_framed(d, out, window).map_err(|e| e.to_string())?;
     std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
     eprintln!("wrote {out} ({} bytes)", bytes.len());
-    if !cadcraft_io::is_image(out) {
+    if cadcraft_engine::cmd::file::drops_unknown(out) {
         let lost = cadcraft_engine::cmd::file::not_saved(d);
         if let Some(m) = cadcraft_engine::cmd::file::not_saved_message(&lost) {
             eprintln!("{m}");

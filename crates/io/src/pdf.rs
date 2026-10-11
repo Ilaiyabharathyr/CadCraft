@@ -87,7 +87,8 @@ impl Default for PdfOptions {
 }
 
 impl PdfOptions {
-    /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, lineweights?, compress?, title?}`.
+    /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, lineweights?, compress?, title?,
+    /// window?: [[x1, y1], [x2, y2]]}`.
     pub fn from_json(v: &Value) -> PdfOptions {
         let num = |k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
         let paper_mm = match (num("width"), num("height")) {
@@ -108,9 +109,21 @@ impl PdfOptions {
             lineweights: v.get("lineweights").and_then(Value::as_bool),
             compress: v.get("compress").and_then(Value::as_bool).unwrap_or(true),
             title: v.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
-            window: None,
+            window: window(v.get("window")),
         }
     }
+}
+
+/// A plot window from `[[x1, y1], [x2, y2]]`: finite corners and a positive size, else `None`.
+fn window(v: Option<&Value>) -> Option<Bounds2> {
+    let corner = |i: usize| {
+        let c = v?.get(i)?;
+        let p = Vec2::new(c.get(0)?.as_f64()?, c.get(1)?.as_f64()?);
+        p.is_finite().then_some(p)
+    };
+    let (a, b) = (corner(0)?, corner(1)?);
+    let w = Bounds2::new(a, b);
+    (w.width() > 0.0 && w.height() > 0.0).then_some(w)
 }
 
 /// Plot with JSON options (the engine's `plot` hook).
@@ -278,7 +291,7 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<SheetPage> {
     let ropts = cadcraft_render::Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights, view_height: 0.0, plot_style_table };
     let k = unit_mm * PT_PER_MM;
     let window = o.window.filter(|w| matches!(space, Space::Model) && !w.is_empty());
-    let fit = window.is_some() || o.fit.unwrap_or(matches!(space, Space::Model));
+    let fit = o.fit.unwrap_or(window.is_some() || matches!(space, Space::Model));
     // Chord tolerance: about 0.05 mm on paper.
     let est = plot_scale(&window.unwrap_or_else(|| d.extents(space)), &sheet, fit, o.scale);
     let tol = 0.05 / unit_mm / est.max(1e-300);
@@ -294,6 +307,9 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<SheetPage> {
     } else {
         Map { from: Vec2::ZERO, s: 1.0, to: Vec2::ZERO, k }
     };
+    // Plot style ends, joins and fill patterns at the plot scale (a layout's are already drawn).
+    let mut list = list;
+    cadcraft_render::pen::apply(&mut list, map.s * unit_mm);
     let media = sheet.size * k;
     let clip_pt = if fit || matches!(space, Space::Model) {
         Bounds2::new(sheet.printable.min * k, sheet.printable.max * k)
