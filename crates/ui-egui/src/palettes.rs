@@ -9,6 +9,9 @@ use crate::CadApp;
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
+/// The QuickCalc palette.
+pub mod quickcalc;
+
 type Tool = (Icon, &'static str, &'static str);
 
 /// Tool Sets groups: (name, large tools, small tools).
@@ -421,9 +424,11 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
                 let (sr, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                 swatch(ui.painter(), sr, *color);
-                if ui.selectable_label(name.eq_ignore_ascii_case(&cur), name).clicked() {
+                let r = ui.selectable_label(name.eq_ignore_ascii_case(&cur), name);
+                if r.clicked() {
                     set_current = Some(name.clone());
                 }
+                crate::shortcut_menus::attach(app, &r, |app| crate::shortcut_menus::layer_entries(app, name));
             });
         }
     }
