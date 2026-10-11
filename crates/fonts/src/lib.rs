@@ -523,8 +523,10 @@ mod tests {
                 _ => bb.min.x,
             };
             assert!((edge - want).abs() < 1e-9, "{h:?}: {edge}");
+            // An installed Arabic-script font may overhang its advance a little (ink outside
+            // the box is normal); a tenth of the height keeps this independent of the machine.
             for q in sh.outlines().iter().flatten() {
-                assert!(q.x >= bb.min.x - 1e-6 && q.x <= bb.max.x + 1e-6, "{h:?}: {} outside {:?}", q.x, bb);
+                assert!(q.x >= bb.min.x - 0.1 && q.x <= bb.max.x + 0.1, "{h:?}: {} outside {:?}", q.x, bb);
             }
         }
     }
