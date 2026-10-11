@@ -400,6 +400,8 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             spline: t.i(72).unwrap_or(0) != 0,
             style: t.s(3).unwrap_or_else(|| "Standard".into()),
         }),
+        // Names behind handles follow in `entity_extras` and `Objects::apply`.
+        "MULTILEADER" | "MLEADER" => EntityKind::MLeader(crate::dxf_mleader::read(tags)),
         "SOLID" | "TRACE" => {
             let corners = [t.p(10), t.p(11), t.p(12), if t.f(13).is_some() { t.p(13) } else { t.p(12) }];
             let corners = corners.map(|p| ocs(&c, p));
@@ -431,6 +433,9 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
             frozen_layers: crate::dxf_ext::read_frozen(tags),
             layer_colors: crate::dxf_ext::read_layer_colors(tags),
+            // Status flags: 65536 = non-rectangular clipping (by the 340 entity), 131072 = off.
+            clip: t.s(340).and_then(|h| Handle::parse_hex(&h)).filter(|h| h.0 != 0 && t.i(90).unwrap_or(0) & 65536 != 0),
+            on: t.i(90).unwrap_or(0) & 131072 == 0,
         }),
         "WIPEOUT" => {
             let o = t.p(10);
@@ -442,6 +447,16 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         }
         // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).
         "IMAGE" => EntityKind::Image(crate::dxf_image::read_entity(tags)),
+        "TOLERANCE" => {
+            let dir = t.p(11);
+            let dir = if dir.xy().is_finite() && dir.xy().len() > 1e-12 { dir } else { Vec3::new(1.0, 0.0, 0.0) };
+            EntityKind::Tolerance(Tolerance {
+                insert: t.p(10),
+                dir,
+                style: t.s(3).unwrap_or_else(|| "Standard".into()),
+                text: t.s(1).unwrap_or_default().chars().take(MAX_FRAME_CHARS).collect(),
+            })
+        }
         other => EntityKind::Unknown(Unknown {
             dxf_type: other.to_string(),
             tags: tags.iter().map(|tg| RawTag { code: tg.code, value: tg.str() }).collect(),
@@ -637,7 +652,30 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         if verts.len() > 1 && verts.first().map(|f| f.p).zip(verts.last().map(|l| l.p)).is_some_and(|(a, b)| a.near(b, 1e-9)) {
             verts.pop();
         }
-        loops.push(HatchLoop { vertices: verts, outer });
+        // 97: number of source boundary objects, then their handles (330). A spline edge's fit
+        // data count is a 97 too, followed by its fit points instead.
+        let mut sources = Vec::new();
+        for _ in 0..2 {
+            while get(i).is_some_and(|x| !matches!(x.code, 97 | 92 | 75)) {
+                i += 1;
+            }
+            if get(i).is_none_or(|x| x.code != 97) {
+                break;
+            }
+            let n = get(i).map(Tag::i64).unwrap_or(0).clamp(0, MAX_HATCH_SOURCES as i64) as usize;
+            i += 1;
+            if get(i).is_some_and(|x| !matches!(x.code, 330 | 92 | 75)) {
+                continue;
+            }
+            while sources.len() < n
+                && let Some(x) = get(i).filter(|x| x.code == 330)
+            {
+                sources.extend(Handle::parse_hex(&x.str()).filter(|h| h.0 != 0));
+                i += 1;
+            }
+            break;
+        }
+        loops.push(HatchLoop { vertices: verts, outer, sources });
     }
     let solid = solid || pattern.eq_ignore_ascii_case("SOLID");
     let (scale, angle) = (t.fd(41, 1.0), t.fd(52, 0.0).to_radians());
@@ -660,6 +698,9 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         pattern_lines,
     }))
 }
+
+/// Upper bound on the source boundary objects of one HATCH loop.
+const MAX_HATCH_SOURCES: usize = 4096;
 
 /// Upper bounds on a HATCH's pattern definition lines and on the dashes of one line.
 const MAX_PATTERN_LINES: usize = 1024;
@@ -808,10 +849,14 @@ struct Rx {
     inserted: std::collections::HashSet<String>,
     /// Tables whose style is known only by TABLESTYLE handle: (table, style handle).
     table_style_fix: Vec<(Handle, String)>,
+    /// Multileaders' style handles and block attribute values, resolved with the objects.
+    mleader_fix: Vec<(Handle, crate::dxf_mleader::Pending)>,
     /// Upper-case xref block name → the external drawing's path (BLOCK group 1).
     xref_paths: HashMap<String, String>,
     /// Plot style name placeholder handle (upper case) → plot style name (`ACAD_PLOTSTYLENAME`).
     pstyles: HashMap<String, String>,
+    /// Upper-case block name → associative array parameters from its BLOCK_RECORD.
+    block_arrays: HashMap<String, cadcraft_doc::ArrayParams>,
 }
 
 /// The plot style names of a file: the entries of the `ACAD_PLOTSTYLENAME` dictionary of the
@@ -892,6 +937,13 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
         }
         ("INSERT", EntityKind::Insert(ins)) => {
             rx.inserted.insert(ins.block.to_ascii_uppercase());
+        }
+        ("MULTILEADER" | "MLEADER", EntityKind::MLeader(m)) => {
+            let pending = crate::dxf_mleader::resolve(tags, m, &rx.styles, &rx.brs);
+            if let Some(b) = &m.block {
+                rx.inserted.insert(b.block.to_ascii_uppercase());
+            }
+            rx.mleader_fix.push((h, pending));
         }
         _ => {}
     }
@@ -1161,6 +1213,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             "BLOCK_RECORD" => {
                 let units = t.i(70).and_then(|u| u8::try_from(u).ok()).unwrap_or(0);
                 rx.block_props.insert(n.to_ascii_uppercase(), (units, t.i(280).unwrap_or(1) != 0));
+                if let Some(a) = crate::dxf_ext::read_array(tg) {
+                    rx.block_arrays.insert(n.to_ascii_uppercase(), a);
+                }
                 rx.brs.insert(h.trim().to_ascii_uppercase(), n);
             }
             _ => {}
@@ -1242,6 +1297,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             // The first *ACTIVE viewport holds the snap grid's origin and rotation (degrees).
             "VPORT" if !active_vport && t.s(2).is_some_and(|n| n.trim().eq_ignore_ascii_case("*ACTIVE")) => {
                 active_vport = true;
+                vport_record(d, &t);
                 if let (Some(x), Some(y)) = (t.f(13), t.f(23))
                     && x.is_finite()
                     && y.is_finite()
@@ -1263,13 +1319,13 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     continue;
                 }
                 let x = crate::dxf_ext::xdata(&tg, crate::dxf_ext::APP);
-                let layer_state = x
-                    .iter()
-                    .position(|t| t.code == 1000 && t.str() == "LAYERSTATE")
-                    .and_then(|i| x.get(i + 1))
-                    .filter(|t| t.code == 1000)
-                    .map(Tag::str);
-                let v = NamedView { name: name.clone(), center, height: h, width: w, layer_state };
+                let field = |key: &str| {
+                    x.iter().position(|t| t.code == 1000 && t.str() == key).and_then(|i| x.get(i + 1)).filter(|t| t.code == 1000).map(Tag::str)
+                };
+                // 70 bit 1: a paper space view; its layout is CADCraft xdata.
+                let layout = (t.i(70).unwrap_or(0) & 1 != 0).then(|| field("LAYOUT").unwrap_or_default());
+                let twist = t.f(50).filter(|a| a.is_finite()).map_or(0.0, |a| a.rem_euclid(360.0).to_radians());
+                let v = NamedView { name: name.clone(), center, height: h, width: w, layer_state: field("LAYERSTATE"), twist, layout };
                 match d.views.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
                     Some(x) => *x = v,
                     None => d.views.push(v),
@@ -1309,8 +1365,43 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     None => d.dim_styles.push(st),
                 }
             }
+            "VPORT" => vport_record(d, &t),
             _ => {}
         }
+    }
+    // One *Active viewport is no tiling: the view is the editor's (it zooms to the extents).
+    d.vports.retain(|c| c.tiles.len() > usize::from(c.is_active()));
+}
+
+/// Most tiles a viewport configuration keeps.
+const MAX_VPORT_TILES: usize = 64;
+
+/// A VPORT record: one tile of the configuration it names (`*ACTIVE` the one shown). Corners
+/// are fractions of the drawing area; unusable tiles are skipped.
+fn vport_record(d: &mut Drawing, t: &T) {
+    let name = t.s(2).map(|n| n.trim().to_string()).unwrap_or_default();
+    let (min, max, center) = (t.p(10).xy(), t.p(11).xy(), t.p(12).xy());
+    let height = t.fd(40, 0.0);
+    let unit = |v: f64| v.is_finite() && (-1e-9..=1.0 + 1e-9).contains(&v);
+    let ok = [min.x, min.y, max.x, max.y].into_iter().all(unit)
+        && max.x > min.x + 1e-6
+        && max.y > min.y + 1e-6
+        && center.is_finite()
+        && height.is_finite()
+        && height > 0.0;
+    if name.is_empty() || !ok {
+        return;
+    }
+    let aspect = t.f(41).filter(|a| a.is_finite() && *a > 0.0).unwrap_or(0.0);
+    let clamp = |p: Vec2| Vec2::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
+    let tile = VportTile { min: clamp(min), max: clamp(max), center, height, aspect };
+    let name = if name.eq_ignore_ascii_case(VportConfig::ACTIVE) { VportConfig::ACTIVE.to_string() } else { name };
+    let room = d.vports.len() < MAX_OBJECTS;
+    match d.vports.iter_mut().find(|c| c.name.eq_ignore_ascii_case(&name)) {
+        Some(c) if c.tiles.len() < MAX_VPORT_TILES => c.tiles.push(tile),
+        Some(_) => {}
+        None if room => d.vports.push(VportConfig { name, tiles: vec![tile] }),
+        None => {}
     }
 }
 
@@ -1417,6 +1508,9 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             _ => {}
         }
     }
+    // A file CADCraft wrote names its own next handle (#495): its table records and objects
+    // are numbered above it and rebuilt on save, so following $HANDSEED would drift every save.
+    let own_seed = objs.xrecord_text(crate::dxf_ext::HANDSEED_KEY).and_then(|t| Handle::parse_hex(t.trim()));
     // Layouts.
     let mut paper_block_for: HashMap<String, String> = HashMap::new();
     layout_objs.sort_by_key(|l| l.1);
@@ -1470,6 +1564,9 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         for (_, _, e) in ents {
             b.entities.push(e);
         }
+        // Array parameters, with the block names the items use (other programs may rename
+        // anonymous blocks); dropped when the items no longer match them.
+        b.array = rx.block_arrays.get(&up).cloned().and_then(|mut a| a.sync_names(b.entities.iter().map(|e| e.as_ref())).then_some(a));
         if let Some(path) = rx.xref_paths.remove(&up) {
             b.xref_path = Some(path);
         }
@@ -1489,11 +1586,12 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             d.model.push(e);
         }
     }
+    apply_sortents(&mut d, &objs.sortents, &rx.brs, &paper_block_for, &first_layout);
     objs.apply(&mut d, &rx);
     crate::dxf_image::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.
     let seed = d.header.str("HANDSEED", "");
-    if let Some(h) = Handle::parse_hex(&seed) {
+    if let Some(h) = own_seed.or_else(|| Handle::parse_hex(&seed)) {
         d.bump_handseed(Handle(h.0.saturating_sub(1)));
     }
     if d.layer("0").is_none() {
@@ -1502,11 +1600,64 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     Ok(d)
 }
 
+/// A SORTENTSTABLE (DXF Reference, OBJECTS section): after its AcDbSortentsTable marker, the
+/// owning block record (330), then pairs of an entity handle (331) and the sort handle (5) it is
+/// drawn by.
+fn sortents_table(tags: &[Tag]) -> Option<(String, HashMap<Handle, u64>)> {
+    let start = tags.iter().position(|t| t.code == 100 && t.str() == "AcDbSortentsTable")?;
+    let tail = tags.get(start + 1..)?;
+    let owner = tail.iter().find(|t| t.code == 330)?.str().trim().to_ascii_uppercase();
+    let mut map = HashMap::new();
+    let mut ent: Option<Handle> = None;
+    for t in tail {
+        match t.code {
+            331 => ent = Handle::parse_hex(&t.str()),
+            5 => {
+                if let (Some(e), Some(k)) = (ent.take(), Handle::parse_hex(&t.str()))
+                    && map.len() < MAX_OBJECTS
+                {
+                    map.insert(e, k.0);
+                }
+            }
+            _ => {}
+        }
+    }
+    (!map.is_empty()).then_some((owner, map))
+}
+
+/// Draw each space with a SORTENTSTABLE in sort-handle order: an entity listed in the table by
+/// its sort handle, any other by its own handle.
+fn apply_sortents(
+    d: &mut Drawing,
+    tables: &[(String, HashMap<Handle, u64>)],
+    brs: &HashMap<String, String>,
+    paper_for: &HashMap<String, String>,
+    first_layout: &str,
+) {
+    for (owner, map) in tables {
+        let Some(name) = brs.get(owner) else { continue };
+        let up = name.to_ascii_uppercase();
+        let key = |e: &Entity| map.get(&e.handle).copied().unwrap_or(e.handle.0);
+        if up == "*MODEL_SPACE" {
+            d.model.sort_by_key(key);
+        } else if up.starts_with("*PAPER_SPACE") {
+            let lname = paper_for.get(&up).map(String::as_str).unwrap_or(first_layout);
+            if let Some(l) = d.layouts.iter_mut().find(|l| l.name == lname) {
+                l.entities.sort_by_key(key);
+            }
+        } else if let Some(b) = d.blocks.get_mut(name.as_str()) {
+            std::sync::Arc::make_mut(b).entities.sort_by_key(key);
+        }
+    }
+}
+
 /// Non-graphical objects applied once every entity is placed.
 #[derive(Default)]
 struct Objects {
     /// Dictionary entry handle (upper case) → entry name.
     names: HashMap<String, String>,
+    /// SCALE objects (the annotation scale list), in file order.
+    scales: Vec<cadcraft_doc::AnnoScale>,
     /// XRECORD handle (upper case) → its groups.
     xrecords: HashMap<String, Vec<Tag>>,
     /// TABLESTYLE objects: (handle, groups).
@@ -1519,6 +1670,8 @@ struct Objects {
     groups: Vec<(String, Vec<Tag>)>,
     /// Saved paper-space views of layouts: (layout name, view).
     layout_views: Vec<(String, (Vec2, f64))>,
+    /// SORTENTSTABLE objects: (owning block record handle, entity handle → sort handle).
+    sortents: Vec<(String, HashMap<Handle, u64>)>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -1527,6 +1680,13 @@ impl Objects {
     fn add(&mut self, kind: &str, tags: &[Tag]) {
         let h = T(tags).s(5).map(|h| h.trim().to_ascii_uppercase()).unwrap_or_default();
         match kind {
+            "SCALE" if self.scales.len() < cadcraft_doc::MAX_SCALES => {
+                if let Some(s) = crate::dxf_ext::read_scale(tags)
+                    && !self.scales.iter().any(|x| x.name.eq_ignore_ascii_case(&s.name))
+                {
+                    self.scales.push(s);
+                }
+            }
             "DICTIONARY" => {
                 let mut name: Option<String> = None;
                 for t in tags {
@@ -1550,6 +1710,11 @@ impl Objects {
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
             "MLEADERSTYLE" if self.mleader_styles.len() < MAX_OBJECTS => self.mleader_styles.push((h, tags.to_vec())),
             "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
+            "SORTENTSTABLE" if self.sortents.len() < MAX_OBJECTS => {
+                if let Some(t) = sortents_table(tags) {
+                    self.sortents.push(t);
+                }
+            }
             "LAYOUT" if self.layout_views.len() < MAX_OBJECTS => {
                 let start = tags.iter().position(|x| x.code == 100 && x.str() == "AcDbLayout").unwrap_or(0);
                 if let (Some(name), Some(view)) = (T(tags.get(start..).unwrap_or(&[])).s(1), layout_view(tags)) {
@@ -1607,6 +1772,16 @@ impl Objects {
             d.constraints = c;
             d.parametric = p;
         }
+        // The annotation scale list (a metric drawing without one gets the metric defaults),
+        // then CADCraft's annotative scaling record.
+        if !self.scales.is_empty() {
+            d.scales = self.scales.clone();
+        } else if d.header.i64("MEASUREMENT", 0) == 1 {
+            d.scales = cadcraft_doc::metric_scales();
+        }
+        if let Some(p) = self.xrecord_text(crate::dxf_ext::ANNOTATION_KEY).and_then(|t| crate::dxf_ext::parse_anno(&t)) {
+            crate::dxf_ext::apply_anno(d, p);
+        }
         // Saved layer states.
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;
@@ -1629,12 +1804,14 @@ impl Objects {
                 landing_gap: num(42, def.landing_gap, 0.0),
                 dogleg: num(43, def.dogleg, 0.0),
                 text_style: text_style.unwrap_or(def.text_style),
+                annotative: t.i(296).unwrap_or(0) != 0,
             };
             match d.mleader_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(name)) {
                 Some(x) => *x = st,
                 None => d.mleader_styles.push(st),
             }
         }
+        crate::dxf_mleader::apply(d, &rx.mleader_fix, &self.names);
         for (name, view) in &self.layout_views {
             if let Some(l) = d.layouts.iter_mut().find(|l| l.name == *name) {
                 l.view = Some(*view);

@@ -5,13 +5,13 @@
 //! constraints).
 //!
 //! CADCraft's own data lives under the registered application `CADCRAFT` (xdata) and the
-//! named-object-dictionary entries `CADCRAFT_CONSTRAINTS`, `CADCRAFT_LAYERSTATES` and
-//! `CADCRAFT_PLOTSTYLES` (XRECORDs). Other readers keep or ignore them.
+//! named-object-dictionary entries `CADCRAFT_CONSTRAINTS`, `CADCRAFT_LAYERSTATES`,
+//! `CADCRAFT_PLOTSTYLES` and `CADCRAFT_HANDSEED` (XRECORDs). Other readers keep or ignore them.
 
 use std::collections::HashMap;
 
 use cadcraft_color::Color;
-use cadcraft_doc::{AssocSnap, Constraint, DimAssoc, DimStyle, Handle, LayerState, Parametric, PlotStyleTable};
+use cadcraft_doc::{ArrayParams, AssocSnap, Constraint, DimAssoc, DimStyle, Handle, LayerState, Parametric, PlotStyleTable};
 use cadcraft_dxf::Tag;
 use cadcraft_render::Arrowhead;
 use serde::{Deserialize, Serialize};
@@ -25,9 +25,13 @@ pub(crate) const CONSTRAINTS_KEY: &str = "CADCRAFT_CONSTRAINTS";
 pub(crate) const LAYER_STATES_KEY: &str = "CADCRAFT_LAYERSTATES";
 /// Named-object-dictionary key of the drawing's plot style tables XRECORD.
 pub(crate) const PLOT_STYLES_KEY: &str = "CADCRAFT_PLOTSTYLES";
+/// Named-object-dictionary key of the annotative scaling XRECORD.
+pub(crate) const ANNOTATION_KEY: &str = "CADCRAFT_ANNOTATION";
 /// Named-object-dictionary key of the plot style names dictionary (DXF Reference): its entries
 /// name `ACDBPLACEHOLDER` objects, and layers and objects point at them with group 390.
 pub(crate) const PLOT_STYLE_NAMES_KEY: &str = "ACAD_PLOTSTYLENAME";
+/// Named-object-dictionary key of the XRECORD holding the drawing's next entity handle (hex).
+pub(crate) const HANDSEED_KEY: &str = "CADCRAFT_HANDSEED";
 /// Most plot style tables and plot style names read from a file.
 pub(crate) const MAX_PLOT_STYLE_TABLES: usize = 1000;
 pub(crate) const MAX_PLOT_STYLE_NAMES: usize = 100_000;
@@ -500,6 +504,42 @@ fn json_chunks(json: &str) -> Vec<String> {
     chars.chunks(250).map(|c| c.iter().collect()).collect()
 }
 
+/// An associative array's parameters as CADCraft xdata on its block record: `1000 ARRAY`,
+/// `1002 {`, the JSON text in `1000` strings short enough for the 255-byte limit even when
+/// characters are written as `\U+XXXX` escapes, `1002 }`.
+pub(crate) fn array_xdata(p: &ArrayParams) -> Vec<Tag> {
+    let Ok(json) = serde_json::to_string(p) else { return Vec::new() };
+    let safe = json_chunks(&json).concat();
+    let mut v = vec![Tag::s(1000, "ARRAY"), Tag::s(1002, "{")];
+    let (mut cur, mut cost) = (String::new(), 0usize);
+    for c in safe.chars() {
+        let n = if c.is_ascii() { 1 } else { 7 * c.len_utf16() };
+        if cost + n > 240 {
+            v.push(Tag::s(1000, std::mem::take(&mut cur)));
+            cost = 0;
+        }
+        cur.push(c);
+        cost += n;
+    }
+    if !cur.is_empty() {
+        v.push(Tag::s(1000, cur));
+    }
+    v.push(Tag::s(1002, "}"));
+    v
+}
+
+/// The array parameters written by [`array_xdata`]; `None` for other records and for
+/// parameters that are not usable.
+pub(crate) fn read_array(tags: &[Tag]) -> Option<ArrayParams> {
+    let list = xdata_list(xdata(tags, APP), "ARRAY");
+    let mut text = String::new();
+    for t in list.iter().take(MAX_XDATA_ITEMS).filter(|t| t.code == 1000) {
+        text.push_str(&t.str());
+    }
+    let p: ArrayParams = serde_json::from_str(&text).ok()?;
+    p.is_valid().then_some(p)
+}
+
 /// The saved layer states stored in the `CADCRAFT_LAYERSTATES` XRECORD.
 #[derive(Serialize, Deserialize)]
 struct LayerStatesPayload {
@@ -558,6 +598,103 @@ pub(crate) fn parse_plot_styles(text: &str) -> Option<Vec<PlotStyleTable>> {
         return None;
     }
     Some(p.tables.into_iter().map(PlotStyleTable::sanitized).filter(|t| !t.name.is_empty()).collect())
+}
+
+/// Annotative scaling stored in the `CADCRAFT_ANNOTATION` XRECORD: the current annotation scale
+/// (CANNOSCALE), ANNOALLVISIBLE, the annotative blocks and the scales each annotative object
+/// supports, by handle. The DXF Reference doesn't document how objects refer to their scales,
+/// so this is CADCraft's own record; the scale list itself is the standard `ACAD_SCALELIST`.
+#[derive(Default, Serialize, Deserialize)]
+pub(crate) struct AnnoPayload {
+    version: u32,
+    #[serde(default)]
+    cannoscale: Option<String>,
+    #[serde(default)]
+    annoallvisible: Option<i64>,
+    #[serde(default)]
+    blocks: Vec<String>,
+    #[serde(default)]
+    objects: Vec<AnnoObject>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AnnoObject {
+    handle: String,
+    scales: Vec<cadcraft_doc::AnnoScale>,
+}
+
+/// Most annotative objects read from one file.
+const MAX_ANNO_OBJECTS: usize = 1_000_000;
+
+/// JSON chunks for the annotative scaling XRECORD, or `None` when nothing differs from a new
+/// drawing (1:1, ANNOALLVISIBLE 1, no annotative objects or blocks).
+pub(crate) fn anno_chunks(d: &cadcraft_doc::Drawing) -> Option<Vec<String>> {
+    let cannoscale = d.header.str("CANNOSCALE", "1:1");
+    let annoallvisible = d.header.i64("ANNOALLVISIBLE", 1);
+    let blocks: Vec<String> = d.blocks.values().filter(|b| b.annotative).map(|b| b.name.clone()).collect();
+    let objects: Vec<AnnoObject> = d
+        .model
+        .iter()
+        .chain(d.layouts.iter().flat_map(|l| l.entities.iter()))
+        .filter(|e| cadcraft_doc::is_annotative(e))
+        .map(|e| AnnoObject { handle: e.handle.hex(), scales: e.common.anno_scales.clone() })
+        .collect();
+    if cannoscale == "1:1" && annoallvisible == 1 && blocks.is_empty() && objects.is_empty() {
+        return None;
+    }
+    let p = AnnoPayload { version: 1, cannoscale: Some(cannoscale), annoallvisible: Some(annoallvisible), blocks, objects };
+    Some(json_chunks(&serde_json::to_string(&p).ok()?))
+}
+
+/// Parse the annotative scaling XRECORD text; `None` when it is not a payload we understand.
+pub(crate) fn parse_anno(text: &str) -> Option<AnnoPayload> {
+    if text.len() > MAX_PAYLOAD {
+        return None;
+    }
+    let p: AnnoPayload = serde_json::from_str(text).ok()?;
+    (p.version == 1 && p.objects.len() <= MAX_ANNO_OBJECTS && p.blocks.len() <= MAX_ANNO_OBJECTS).then_some(p)
+}
+
+/// Apply a parsed annotative scaling record: variables, annotative blocks and each object's
+/// scales (invalid scales and objects that can't be annotative are skipped).
+pub(crate) fn apply_anno(d: &mut cadcraft_doc::Drawing, p: AnnoPayload) {
+    if let Some(c) = p.cannoscale.filter(|c| !c.trim().is_empty() && c.len() <= 255) {
+        d.header.set_str("CANNOSCALE", &c);
+    }
+    if let Some(v) = p.annoallvisible {
+        d.header.set_i64("ANNOALLVISIBLE", i64::from(v != 0));
+    }
+    // Block names compare case-insensitively; one map keeps a long hostile list linear.
+    let by_upper: std::collections::HashMap<String, String> = d.blocks.keys().map(|k| (k.to_ascii_uppercase(), k.clone())).collect();
+    for name in &p.blocks {
+        let key = by_upper.get(&name.to_ascii_uppercase()).cloned();
+        if let Some(b) = key.and_then(|k| d.blocks.get_mut(&k)) {
+            std::sync::Arc::make_mut(b).annotative = true;
+        }
+    }
+    for o in p.objects {
+        let Some(h) = Handle::parse_hex(&o.handle) else { continue };
+        let mut scales: Vec<cadcraft_doc::AnnoScale> = Vec::new();
+        for s in o.scales.into_iter().filter(|s| s.is_valid() && !s.name.trim().is_empty()) {
+            if scales.len() < cadcraft_doc::MAX_SCALES && !scales.iter().any(|x| x.name.eq_ignore_ascii_case(&s.name)) {
+                scales.push(s);
+            }
+        }
+        let _ = d.modify_entity(h, |e| {
+            if cadcraft_doc::can_be_annotative(&e.kind) {
+                e.common.anno_scales = scales;
+            }
+        });
+    }
+}
+
+/// A SCALE object (DXF Reference, OBJECTS section): name (300), paper units (140), drawing
+/// units (141); `None` when unusable.
+pub(crate) fn read_scale(tags: &[Tag]) -> Option<cadcraft_doc::AnnoScale> {
+    let name = tags.iter().find(|t| t.code == 300).map(Tag::str)?;
+    let num = |c: i32| tags.iter().find(|t| t.code == c).map(Tag::f64);
+    let s = cadcraft_doc::AnnoScale::new(name.trim(), num(140)?, num(141)?);
+    (s.is_valid() && !s.name.is_empty() && s.name.len() <= 255).then_some(s)
 }
 
 /// Parse the constraint XRECORD text; `None` when it is not a payload we understand.

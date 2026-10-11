@@ -105,6 +105,7 @@ fn sample() -> Drawing {
             loops: vec![HatchLoop {
                 vertices: vec![PolyVertex::new(Vec2::ZERO), PolyVertex::new(Vec2::new(2.0, 0.0)), PolyVertex::new(Vec2::new(2.0, 2.0))],
                 outer: true,
+                sources: Vec::new(),
             }],
             scale: 1.0,
             angle: 0.0,
@@ -498,6 +499,8 @@ fn pdf_layout_one_to_one_with_viewport() {
             locked: false,
             frozen_layers: Vec::new(),
             layer_colors: Vec::new(),
+            clip: None,
+            on: true,
         }),
     )
     .unwrap();
@@ -599,6 +602,8 @@ fn viewport_frozen_layers_roundtrip() {
             locked: true,
             frozen_layers: frozen,
             layer_colors: Vec::new(),
+            clip: None,
+            on: true,
         })
     };
     d.add(&paper, Common::default(), vp(2, vec!["Walls".into(), "A B".into()])).unwrap();
@@ -632,6 +637,8 @@ fn viewport_layer_colors_roundtrip() {
             locked: false,
             frozen_layers: frozen,
             layer_colors: colors,
+            clip: None,
+            on: true,
         })
     };
     let colors = vec![("Walls".to_string(), Color::Index(5)), ("A B".to_string(), Color::True(cadcraft_color::Rgb(255, 128, 0)))];
@@ -1339,7 +1346,7 @@ fn dwg_roundtrip_keeps_extension_data() {
 }
 
 #[test]
-fn mleader_is_written_as_leader_and_mtext() {
+fn mleader_is_written_as_multileader() {
     let mut d = Drawing::new_metric();
     let text = cadcraft_doc::MText {
         insert: Vec3::new(12.0, 5.0, 0.0),
@@ -1362,10 +1369,10 @@ fn mleader_is_written_as_leader_and_mtext() {
         spline: false,
         block: None,
     };
-    d.add(&Space::Model, Default::default(), EntityKind::MLeader(m)).unwrap();
+    d.add(&Space::Model, Default::default(), EntityKind::MLeader(m.clone())).unwrap();
     let back = roundtrip(&d);
-    assert!(back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_))));
-    assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MText(t) if t.contents == "Note")));
+    assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MLeader(x) if *x == m)));
+    assert!(!back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_) | EntityKind::MText(_))));
 }
 
 #[test]
@@ -1495,7 +1502,7 @@ fn gradient_sample() -> (Drawing, Vec<Option<Gradient>>) {
         let h = Hatch {
             pattern: "SOLID".into(),
             solid: true,
-            loops: vec![HatchLoop { vertices: square.clone(), outer: true }],
+            loops: vec![HatchLoop { vertices: square.clone(), outer: true, sources: Vec::new() }],
             scale: 1.0,
             angle: 0.0,
             associative: false,
