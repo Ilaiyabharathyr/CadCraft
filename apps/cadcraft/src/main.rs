@@ -73,12 +73,17 @@ impl eframe::App for App {
         self.cad.ui(ui);
         self.persist_workspace(false);
     }
+    /// A normal exit: the workspace is saved, and this run's autosave files are not needed (a
+    /// crash leaves them for recovery).
     fn on_exit(&mut self) {
         self.persist_workspace(true);
+        self.cad.shutdown_autosave();
     }
     /// Preferences (the interface theme) survive restarts; window and egui state are not kept.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(cadcraft_ui_egui::options::PROFILE_KEY, self.cad.profile_json());
         storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.cad.prefs_json());
+        storage.set_string(cadcraft_ui_egui::autosave::PREFS_KEY, cadcraft_ui_egui::autosave::prefs_json());
     }
     fn persist_egui_memory(&self) -> bool {
         false
@@ -90,7 +95,10 @@ pub fn install_io() {
     cadcraft_engine::cmd::file::set_io(cadcraft_engine::cmd::file::IoHooks {
         read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
         write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
-        plot: Some(|d, space, opts| cadcraft_io::plot(d, space, opts).map_err(|e| e.to_string())),
+        plot: Some(|d, space, opts| cadcraft_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
+    });
+    cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
+        cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
 }
 
@@ -98,7 +106,7 @@ fn services() -> Services {
     Services {
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter(i18n::t("Drawings (DWG, DXF)"), &["dwg", "dxf"])
+                .add_filter(i18n::t("Drawings (DWG, DXF)"), &["dwg", "dxf", "dwt"])
                 .add_filter(i18n::t("All files"), &["*"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
@@ -117,14 +125,15 @@ fn services() -> Services {
 /// filter's extension, and macOS accepts only listed extensions, replacing any other with the
 /// first one. DWG must be listed for a `.dwg` name to survive, and a drawing opened from DWG
 /// then defaults to DWG; other names keep DXF first.
-fn filters_for_save(name: &str) -> [(&'static str, &'static str); 5] {
-    let mut filters = [("Drawing (DXF)", "dxf"), ("Drawing (DWG)", "dwg"), ("SVG", "svg"), ("PNG", "png"), ("PDF", "pdf")];
+fn filters_for_save(name: &str) -> [(&'static str, &'static str); 6] {
+    let mut filters =
+        [("Drawing (DXF)", "dxf"), ("Drawing (DWG)", "dwg"), ("Drawing Template (DWT)", "dwt"), ("SVG", "svg"), ("PNG", "png"), ("PDF", "pdf")];
     let lower = name.to_ascii_lowercase();
     filters.sort_by_key(|(_, ext)| !lower.ends_with(&format!(".{ext}")));
     filters
 }
 
-/// The per-user settings directory (today it holds `logs/`): `CADCRAFT_CONFIG_DIR` if set, else
+/// The per-user settings directory (it holds `logs/` and `autosave/`): `CADCRAFT_CONFIG_DIR` if set, else
 /// `$XDG_CONFIG_HOME/cadcraft` or `~/.config/cadcraft` on Linux and the BSDs,
 /// `~/Library/Application Support/CADCraft` on macOS, `%APPDATA%\CADCraft` on Windows.
 fn config_dir() -> Option<std::path::PathBuf> {
@@ -255,8 +264,19 @@ fn main() -> eframe::Result {
                 app.set_status(error);
             }
             app.system_languages = std::env::var("CADCRAFT_LOCALE").map(|s| vec![s]).unwrap_or_else(|_| sys_locale::get_locales().collect());
+            // The user profile (Options): drafting settings, selection sizes, drawing-area colours.
+            if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::options::PROFILE_KEY)) {
+                app.load_profile(&profile);
+            }
             if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::PREFS_KEY)) {
                 app.load_prefs(&prefs);
+            }
+            if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::autosave::PREFS_KEY)) {
+                cadcraft_ui_egui::autosave::load_prefs(&prefs);
+            }
+            // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
+            if let Some(dir) = config_dir() {
+                app.enable_autosave(&dir.join("autosave"));
             }
             app.integrated_titlebar = cfg!(target_os = "macos");
             if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
@@ -308,6 +328,7 @@ mod tests {
         assert_eq!(first("Drawing1.dxf"), "dxf");
         assert_eq!(first("Drawing1"), "dxf");
         assert_eq!(first("plan.pdf"), "pdf");
+        assert_eq!(first("office.dwt"), "dwt");
         for name in ["a.dwg", "b.dxf", "c"] {
             let exts: Vec<_> = filters_for_save(name).iter().map(|(_, e)| *e).collect();
             assert!(exts.contains(&"dwg") && exts.contains(&"dxf"), "{name}");
