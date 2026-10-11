@@ -116,6 +116,9 @@ numbers):
 
 ## Quick start
 
+Desktop and web UI builds require Rust 1.95 or later. The core workspace's declared minimum
+remains Rust 1.90.
+
 ```sh
 git clone https://github.com/storytold/cadcraft
 cd cadcraft
@@ -154,6 +157,26 @@ run) an environment variable, steer this:
 | `FONTFALLBACK` | `CADCRAFT_FONTFALLBACK` | Fonts tried first for characters a text's font lacks, comma-separated, e.g. `Noto Sans CJK TC, msjh.ttc`. |
 
 `.` clears either one.
+
+**Your own fonts.** Any `.ttf`, `.otf` or `.ttc` font works: install it in the system font folder
+(Windows `C:\Windows\Fonts` or per-user fonts, macOS `/Library/Fonts` or `~/Library/Fonts`,
+Linux and the BSDs `/usr/share/fonts`, `/usr/local/share/fonts`, `~/.local/share/fonts` or
+`~/.fonts`) and name it in a text style (`STYLE`, or `style {"name":"FA","font":"Vazirmatn"}`)
+by file name (`Vazirmatn-Regular.ttf`) or family name (`Vazirmatn`), or inline in MTEXT with
+`\fVazirmatn;`. Restart CADCraft after installing a font: the font folders are scanned once.
+
+**Right-to-left text (Persian, Arabic, Urdu, Hebrew).** TEXT and MTEXT lines are laid out with the
+Unicode Bidirectional Algorithm (the paragraph direction comes from its first letter, so numbers
+and Latin words inside Persian text keep their own order), and Arabic-script text is shaped with
+OpenType (contextual letter forms, lam-alef and other ligatures, ZWNJ / ZWJ, mark positioning).
+Justification (left, centre, right, MTEXT attachment and wrapping) still refers to the text's box.
+Our stroke font has no Arabic letters, so Persian in a stroke-font style is drawn from an
+installed font that has them: Vazirmatn, Noto Naskh Arabic, Noto Sans Arabic, Segoe UI, Tahoma,
+Arial and DejaVu Sans are looked for first. To choose the font, install a free Persian font such
+as [Vazirmatn](https://github.com/rastikerdar/vazirmatn) (SIL Open Font License) and either use it
+in the text style or set `FONTFALLBACK` (`CADCRAFT_FONTFALLBACK="Vazirmatn"`). Formatting changes
+inside a word (an MTEXT colour change in the middle of a Persian word) break the joining at that
+point.
 
 ### Logs
 
@@ -219,6 +242,14 @@ apps: cadcraft · cadcraft-cli · cadcraft-web
 Nothing below `ui-egui` knows about egui, so the front end can be replaced. `cargo xtask ci`
 checks formatting, clippy, tests, asset attribution, the crate layering and the wasm build.
 
+Drafting and layer-palette icon buttons use the pinned `craft-ui` button component for interaction,
+accessible labels and keyboard focus. CADCraft keeps its multicolor icon painter, dark palette,
+disabled tint and tool commands. The native host saves workspace visibility and toolset choices
+atomically; `CADCRAFT_CONFIG_DIR` selects an isolated profile. Compact toolbar groups move into a
+More menu, and status readouts truncate with a full-value tooltip before they reach layout tabs.
+Painted toolbar and tab controls
+have accessible labels and visible keyboard focus. Property controls remain application-specific.
+
 ## Accessibility
 
 Over the drawing area CADCraft hides the system cursor and draws its own crosshair. Tools that follow the system cursor (Windows Magnifier set to follow or centre the mouse pointer, other screen magnifiers, screen recorders, remote desktops) lose track of it there. Turn on **View ▸ Accessibility ▸ Show System Cursor** to keep a small system crosshair visible at the centre of the drawn one, or start CADCraft with the environment variable `CADCRAFT_SYSTEM_CURSOR=1` (on Windows, set it once with `setx CADCRAFT_SYSTEM_CURSOR 1` and start CADCraft again). Agents can switch it with the control channel: `ui.set {"systemCursor": true}`.
@@ -274,6 +305,8 @@ and web backend defaults are unchanged.
 | Debian/Ubuntu | `cadcraft-<ver>-linux-x86_64.deb` | `cadcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `cadcraft-<ver>-linux-x86_64.rpm` | `cadcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `cadcraft-<ver>-linux-x86_64.tar.gz` | `cadcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
+
+RISC-V (riscv64): `cadcraft-<ver>-linux-riscv64.tar.gz`, cross-compiled; needs glibc 2.39 or newer (Ubuntu 24.04+, Debian 13+).
 
 ### FreeBSD
 
@@ -350,3 +383,5 @@ Forks and modified versions must remove them.
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>
+
+Tool Sets, Layers, and Properties can be regrouped, split, floated within the app window, closed, and reopened. The drawing canvas stays visible and cannot be closed or turned into a tab. Drag a panel header to a target edge or another header. Its context menu offers Float panel, Move to group, and Close panel. Existing panel toggles reopen panels at their saved location; Reset Panel Layout restores the app layout. Floating panels remain inside the current app window.

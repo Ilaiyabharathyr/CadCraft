@@ -90,6 +90,19 @@ fn ocs_n(n: Vec3, p: Vec3) -> Vec3 {
     if (n.z - 1.0).abs() < 1e-12 && n.x.abs() < 1e-12 && n.y.abs() < 1e-12 { p } else { cadcraft_geom::Mat4::ocs(n).apply(p) }
 }
 
+/// The properties an ATTRIB carries itself: those it has groups for. Its layer counts only when
+/// it differs from its block reference's (an attribute defined on layer 0 goes on the reference's
+/// layer, as it is drawn anyway).
+fn attrib_props(t: &T, insert_layer: &str) -> AttribProps {
+    let c = common(t);
+    AttribProps {
+        layer: t.s(8).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case(insert_layer)),
+        color: (t.i(62).is_some() || t.i(420).is_some()).then_some(c.color),
+        linetype: t.s(6).filter(|l| !l.is_empty()),
+        lineweight: t.i(370).is_some().then_some(c.lineweight),
+    }
+}
+
 fn text_from(t: &T) -> Text {
     let h = match t.i(72).unwrap_or(0) {
         1 => HAlign::Center,
@@ -134,9 +147,10 @@ fn mirror_text(t: &mut Text, align: Option<Vec3>, insert: Vec3) {
     let baseline_left = |t: &Text, p: Vec3| if t.valign == VAlign::Baseline { None } else { Some(p) };
     match t.halign {
         HAlign::Left => {
+            // TL/ML/BL are placed by their alignment point, baseline-left text by its start point.
             t.halign = HAlign::Right;
             t.insert = insert;
-            t.align_pt = Some(insert);
+            t.align_pt = Some(if t.valign == VAlign::Baseline { insert } else { align.unwrap_or(insert) });
         }
         HAlign::Right => {
             t.halign = HAlign::Left;
@@ -251,11 +265,23 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             let control = t.pts(10);
             let weights = t.all_f(41);
             let fit = t.pts(11);
-            let mut sp = Spline { degree, knots, control, weights, fit: fit.clone(), closed: t.i(70).unwrap_or(0) & 1 != 0 };
+            let tangent = |c: i32| t.f(c).map(|_| t.p(c).xy());
+            let fit_opts = cadcraft_geom::FitOptions {
+                knots: Default::default(),
+                start_tangent: tangent(12),
+                end_tangent: tangent(13),
+                tolerance: t.fd(44, 0.0),
+            }
+            .sanitized();
+            let closed = t.i(70).unwrap_or(0) & 1 != 0;
+            let mut sp = Spline { degree, knots, control, weights, fit: fit.clone(), closed, fit_opts };
             if !sp.is_valid() && fit.len() >= 2 {
-                sp = Spline::from_fit(&fit, sp.closed);
+                sp = Spline::fit_with(&fit, sp.closed, fit_opts);
             } else if !sp.is_valid() && sp.control.len() >= 2 {
                 sp = Spline::from_control(sp.control.clone(), degree);
+            } else if fit.len() >= 3 {
+                // DXF keeps the knots, not how they were spaced: recover it for later refits.
+                sp.fit_opts.knots = sp.infer_knot_param();
             }
             EntityKind::Spline(sp)
         }
@@ -294,6 +320,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
                 style: t.s(7).unwrap_or_else(|| "Standard".into()),
                 contents,
                 line_spacing: t.fd(44, 1.0),
+                line_spacing_exact: t.i(73) == Some(2),
             })
         }
         "ATTDEF" => EntityKind::AttDef(Attrib {
@@ -302,6 +329,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             invisible: t.i(70).unwrap_or(0) & 1 != 0,
             constant: t.i(70).unwrap_or(0) & 2 != 0,
             prompt: t.s(3).unwrap_or_default(),
+            props: Default::default(),
         }),
         "INSERT" => {
             // A mirrored block reference comes with extrusion (0,0,-1): its insertion point, scale,
@@ -611,12 +639,17 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         }
         loops.push(HatchLoop { vertices: verts, outer });
     }
+    let solid = solid || pattern.eq_ignore_ascii_case("SOLID");
+    let (scale, angle) = (t.fd(41, 1.0), t.fd(52, 0.0).to_radians());
+    // Definition lines matter only for a pattern the library doesn't define.
+    let pattern_lines =
+        if solid || cadcraft_doc::library::pattern(&pattern).is_some() { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
     Some(EntityKind::Hatch(Hatch {
         pattern: pattern.to_ascii_uppercase(),
-        solid: solid || pattern.eq_ignore_ascii_case("SOLID"),
+        solid,
         loops,
-        scale: t.fd(41, 1.0),
-        angle: t.fd(52, 0.0).to_radians(),
+        scale,
+        angle,
         associative: t.i(71).unwrap_or(0) != 0,
         style: t.i(75).unwrap_or(0) as u8,
         // The first 30 is the elevation point's z (boundary points are 2D).
@@ -624,7 +657,61 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
         gradient: gradient(tags),
         origin,
         background,
+        pattern_lines,
     }))
+}
+
+/// Upper bounds on a HATCH's pattern definition lines and on the dashes of one line.
+const MAX_PATTERN_LINES: usize = 1024;
+const MAX_PATTERN_DASHES: usize = 256;
+
+/// The pattern definition lines of a HATCH (groups 78, then per line 53 angle, 43/44 base
+/// point, 45/46 offset, 79 dash count, 49 dash lengths). A file holds them as drawn: scaled,
+/// rotated with the hatch and the offset as a world vector. They are kept the library's way
+/// (unit scale, no hatch rotation, base point relative to the hatch origin, offset as shift
+/// along the line and spacing), which the writer and the renderer turn back. Lines with
+/// non-finite values are skipped.
+fn pattern_definition(tags: &[Tag], scale: f64, angle: f64, origin: Vec2) -> Vec<cadcraft_doc::library::PatternLine> {
+    let Some(at) = tags.iter().position(|x| x.code == 78) else { return Vec::new() };
+    let scale = if scale.is_finite() && scale > 1e-9 { scale } else { 1.0 };
+    let angle = if angle.is_finite() { angle } else { 0.0 };
+    // Raw lines: angle (degrees), base, offset, dashes.
+    let mut raw: Vec<(f64, Vec2, Vec2, Vec<f64>)> = Vec::new();
+    for x in tags.iter().skip(at + 1) {
+        let cur = raw.last_mut();
+        match (x.code, cur) {
+            (53, _) => {
+                if raw.len() >= MAX_PATTERN_LINES {
+                    break;
+                }
+                raw.push((x.f64(), Vec2::ZERO, Vec2::ZERO, Vec::new()));
+            }
+            (43, Some(l)) => l.1.x = x.f64(),
+            (44, Some(l)) => l.1.y = x.f64(),
+            (45, Some(l)) => l.2.x = x.f64(),
+            (46, Some(l)) => l.2.y = x.f64(),
+            (79, Some(_)) => {}
+            (49, Some(l)) => {
+                if l.3.len() < MAX_PATTERN_DASHES {
+                    l.3.push(x.f64());
+                }
+            }
+            _ => break,
+        }
+    }
+    raw.into_iter()
+        .filter(|(a, b, o, d)| a.is_finite() && b.is_finite() && o.is_finite() && d.iter().all(|v| v.is_finite()))
+        .map(|(a, base, offset, dashes)| {
+            let local = (base - origin).rotate(-angle) * (1.0 / scale);
+            let delta = offset.rotate(-a.to_radians()) * (1.0 / scale);
+            cadcraft_doc::library::PatternLine {
+                angle: a - angle.to_degrees(),
+                origin: (local.x, local.y),
+                delta: (delta.x, delta.y),
+                dashes: dashes.into_iter().map(|d| d / scale).collect(),
+            }
+        })
+        .collect()
 }
 
 /// Hatch origin and background colour from `CADCRAFT` xdata: `1000 HATCH`, `1011` origin,
@@ -723,6 +810,62 @@ struct Rx {
     table_style_fix: Vec<(Handle, String)>,
     /// Upper-case xref block name → the external drawing's path (BLOCK group 1).
     xref_paths: HashMap<String, String>,
+    /// Plot style name placeholder handle (upper case) → plot style name (`ACAD_PLOTSTYLENAME`).
+    pstyles: HashMap<String, String>,
+}
+
+/// The plot style names of a file: the entries of the `ACAD_PLOTSTYLENAME` dictionary of the
+/// named object dictionary (the first object), by placeholder handle.
+fn plot_style_names(secs: &[cadcraft_dxf::Section]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(objects) = secs.iter().find(|s| s.name == "OBJECTS") else { return out };
+    let recs = records(&objects.tags);
+    let entries = |tags: &[Tag]| {
+        let mut v: Vec<(String, String)> = Vec::new();
+        let mut name: Option<String> = None;
+        for t in tags {
+            match t.code {
+                3 => name = Some(t.str()),
+                350 | 360 => {
+                    if let Some(n) = name.take() {
+                        v.push((n, t.str().trim().to_ascii_uppercase()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        v
+    };
+    let Some((_, root)) = recs.iter().find(|(k, _)| k == "DICTIONARY") else { return out };
+    let Some((_, dict)) = entries(root).into_iter().find(|(n, _)| n.eq_ignore_ascii_case(crate::dxf_ext::PLOT_STYLE_NAMES_KEY)) else {
+        return out;
+    };
+    let is_dict = |k: &str| k == "DICTIONARY" || k == "ACDBDICTIONARYWDFLT";
+    let Some((_, tags)) = recs.iter().find(|(k, tg)| is_dict(k) && T(tg).s(5).is_some_and(|h| h.trim().eq_ignore_ascii_case(&dict))) else {
+        return out;
+    };
+    for (n, h) in entries(tags).into_iter().take(crate::dxf_ext::MAX_PLOT_STYLE_NAMES) {
+        if !n.trim().is_empty() {
+            out.insert(h, n.chars().take(255).collect());
+        }
+    }
+    out
+}
+
+/// The named plot style an entity record points at (group 390 among its AcDbEntity groups).
+fn entity_plot_style(tags: &[Tag], rx: &Rx) -> Option<String> {
+    let mut in_entity = false;
+    for t in tags {
+        if t.code == 100 {
+            if in_entity {
+                return None;
+            }
+            in_entity = t.str() == "AcDbEntity";
+        } else if t.code == 390 && in_entity {
+            return rx.pstyles.get(&t.str().trim().to_ascii_uppercase()).cloned();
+        }
+    }
+    None
 }
 
 /// Dimension overrides and associativity, table references: data of an entity record that
@@ -764,6 +907,11 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
         let paper = t.i(67) == Some(1);
         let handle = t.s(5).and_then(|h| Handle::parse_hex(&h));
         let mut kindent = entity(kind, tags);
+        if let Some((c, _)) = kindent.as_mut()
+            && let Some(n) = entity_plot_style(tags, rx)
+        {
+            c.plot_style = n;
+        }
         // More entities from this record (the faces of a polyface or polygon mesh).
         let mut extra: Vec<EntityKind> = Vec::new();
         i += 1;
@@ -822,6 +970,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
             "INSERT" => {
                 if t.i(66) == Some(1) {
                     let mut attribs = Vec::new();
+                    let ins_layer = kindent.as_ref().map(|(c, _)| c.layer.clone()).unwrap_or_default();
                     while let Some((k2, t2)) = recs.get(i) {
                         if k2 == "ATTRIB" {
                             let tt = T(t2);
@@ -831,6 +980,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                                 invisible: tt.i(70).unwrap_or(0) & 1 != 0,
                                 constant: false,
                                 prompt: String::new(),
+                                props: attrib_props(&tt, &ins_layer),
                             });
                             i += 1;
                         } else {
@@ -1016,6 +1166,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             _ => {}
         }
     }
+    let mut active_vport = false;
     for (kind, tg) in recs {
         let t = T(&tg);
         match kind.as_str() {
@@ -1040,6 +1191,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 };
                 if let Some(tc) = t.i(420) {
                     l.color = Color::True(Rgb::from_u32(tc as u32));
+                }
+                if let Some(n) = t.s(390).and_then(|h| rx.pstyles.get(&h.trim().to_ascii_uppercase())) {
+                    l.plot_style = n.clone();
                 }
                 let alpha = crate::dxf_ext::xdata(&tg, crate::dxf_ext::LAYER_TRANSPARENCY_APP).iter().find(|x| x.code == 1071);
                 if let Some(pct) = alpha.and_then(|x| crate::dxf_ext::transparency_from_dxf(x.i64())) {
@@ -1083,6 +1237,19 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 match d.text_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&name)) {
                     Some(x) => *x = st,
                     None => d.text_styles.push(st),
+                }
+            }
+            // The first *ACTIVE viewport holds the snap grid's origin and rotation (degrees).
+            "VPORT" if !active_vport && t.s(2).is_some_and(|n| n.trim().eq_ignore_ascii_case("*ACTIVE")) => {
+                active_vport = true;
+                if let (Some(x), Some(y)) = (t.f(13), t.f(23))
+                    && x.is_finite()
+                    && y.is_finite()
+                {
+                    d.header.set("SNAPBASE", HVal::Point(Vec3::new(x, y, 0.0)));
+                }
+                if let Some(a) = t.f(50).filter(|a| a.is_finite()) {
+                    d.header.set_f64("SNAPANG", a);
                 }
             }
             "VIEW" => {
@@ -1193,7 +1360,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     }
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
-    let mut rx = Rx::default();
+    let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
     let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, bool)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
     let mut entities = Vec::new();
@@ -1444,6 +1611,10 @@ impl Objects {
         if let Some(states) = self.xrecord_text(crate::dxf_ext::LAYER_STATES_KEY).and_then(|t| crate::dxf_ext::parse_layer_states(&t)) {
             d.layer_states = states;
         }
+        // The drawing's plot style tables.
+        if let Some(tables) = self.xrecord_text(crate::dxf_ext::PLOT_STYLES_KEY).and_then(|t| crate::dxf_ext::parse_plot_styles(&t)) {
+            d.plot_style_tables = tables;
+        }
         // Multileader styles (named by their ACAD_MLEADERSTYLE dictionary entries).
         for (h, tags) in &self.mleader_styles {
             let Some(name) = self.names.get(h).filter(|n| !n.is_empty()) else { continue };
@@ -1596,8 +1767,10 @@ fn page_setup(t: &T) -> PageSetup {
     if let Some(dev) = t.s(2).map(|s| s.trim().to_string()) {
         p.device = if dev.is_empty() || dev.eq_ignore_ascii_case("none_device") { "None".into() } else { dev };
     }
-    // Plot layout flags: 4 centred, 16 standard scale (75 = 0: scaled to fit), 128 lineweights.
+    // Plot layout flags: 2 display plot styles, 4 centred, 16 standard scale (75 = 0: scaled
+    // to fit), 128 lineweights.
     if let Some(flags) = t.i(70) {
+        p.show_plot_styles = flags & 2 != 0;
         p.center = flags & 4 != 0;
         p.lineweights = flags & 128 != 0;
         p.scale_to_fit = flags & 16 != 0 && t.i(75) == Some(0);
