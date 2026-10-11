@@ -125,7 +125,7 @@ fn dim(s: &Session, kind: DimKind, defpt: Vec2, p13: Vec2, p14: Vec2, p15: Vec2,
         text_rotation: 0.0,
         user_text_pos: false,
         block: None,
-        overrides: Default::default(),
+        overrides: s.doc().map(|d| d.dim_overrides()).unwrap_or_default(),
         assoc: Vec::new(),
     })
 }
@@ -341,14 +341,29 @@ fn chained(s: &Session, prev: &Dimension, next: Vec2, baseline: bool) -> EntityK
     })
 }
 
+/// Most dimensions one DIMCONTINUE/DIMBASELINE call adds.
+const MAX_CHAIN: usize = 100_000;
+
 fn chain_run(s: &mut Session, p: &Value, baseline: bool) -> Result<Value> {
     let id = if baseline { "dimbaseline" } else { "dimcontinue" };
-    let pts = points_param(p, "points").ok_or_else(|| bad(id, "`points` is required"))?;
+    let pts = p.get("points").and_then(Value::as_array).ok_or_else(|| bad(id, "`points` is required"))?;
+    if pts.len() > MAX_CHAIN {
+        return Err(bad(id, format!("at most {MAX_CHAIN} `points` per call")));
+    }
+    let pts = points_param(p, "points").ok_or_else(|| bad(id, "`points` must be a list of points"))?;
+    // One snap index for the whole chain: looking up each new point's object by scanning the
+    // drawing made long chains quadratic (the added dimensions are no snap targets).
+    let snaps = if assoc_enabled(s) { Some(crate::assoc::SnapIndex::new(s.doc()?, &s.space())) } else { None };
     let mut out = Vec::new();
     for q in pts {
         let prev = last_linear(s).ok_or_else(|| bad(id, "no linear dimension to continue"))?;
-        let k = chained(s, &prev, q, baseline);
-        out.push(add_dim(s, k)?.hex());
+        let mut k = chained(s, &prev, q, baseline);
+        if let (Some(ix), EntityKind::Dimension(dm)) = (&snaps, &mut k) {
+            dm.assoc = ix.auto_assoc(&[("p13", dm.p13.xy()), ("p14", dm.p14.xy())]);
+        }
+        let h = s.add_entity(k)?;
+        s.last_dim = Some(h);
+        out.push(h.hex());
     }
     Ok(json!({ "handles": out }))
 }
@@ -760,6 +775,19 @@ fn pick_at(s: &Session, p: Vec2) -> Option<Handle> {
     crate::select::pick(s.doc().ok()?, &s.space(), p, ap)
 }
 
+/// The straight or curved piece of `h` picked at `p`: a line, an arc, or the polyline segment nearest `p`.
+fn segment_at(s: &Session, h: Handle, p: Vec2) -> Option<Segment> {
+    match &s.doc().ok()?.entity(h)?.kind {
+        EntityKind::Line(l) => Some(Segment::Line(cadcraft_geom::Line::new(l.a.xy(), l.b.xy()))),
+        EntityKind::Arc(a) => Some(Segment::Arc { arc: cadcraft_geom::Arc::new(a.center.xy(), a.radius, a.start, a.end), ccw: true }),
+        EntityKind::LwPolyline(pl) => cadcraft_geom::Polyline { vertices: pl.vertices.clone(), closed: pl.closed }
+            .segments()
+            .into_iter()
+            .min_by(|x, y| x.closest(p).dist(p).total_cmp(&y.closest(p).dist(p))),
+        _ => None,
+    }
+}
+
 struct LinearM {
     aligned: bool,
     pts: Vec<Vec2>,
@@ -1003,22 +1031,30 @@ impl Interactive for AngularM {
                     s.echo("*Invalid selection*");
                     return Ok(Step::Continue);
                 };
-                let kind = s.doc()?.entity(h).map(|e| e.kind.clone());
-                match kind {
-                    Some(EntityKind::Arc(a)) if self.first.is_none() => {
-                        let g = cadcraft_geom::Arc::new(a.center.xy(), a.radius, a.start, a.end);
+                let circle = s
+                    .doc()?
+                    .entity(h)
+                    .and_then(|e| if let EntityKind::Circle(c) = &e.kind { Some(cadcraft_geom::Circle::new(c.center.xy(), c.radius)) } else { None });
+                if let Some(g) = circle.filter(|_| self.first.is_none()) {
+                    // The center is the vertex and the pick the first endpoint; ask for the second.
+                    self.vertex = true;
+                    self.vertex_mode = vec![g.center, g.closest(p)];
+                    return Ok(Step::Continue);
+                }
+                match segment_at(s, h, p) {
+                    Some(Segment::Arc { arc: g, .. }) if self.first.is_none() => {
                         self.arc = Some((g.center, g.start_point(), g.end_point()));
                     }
-                    Some(EntityKind::Line(l)) => {
+                    Some(Segment::Line(l)) => {
                         self.handles.push(h);
-                        let seg = (l.a.xy(), l.b.xy());
+                        let seg = (l.a, l.b);
                         if self.first.is_none() {
                             self.first = Some(seg);
                         } else {
                             self.second = Some(seg);
                         }
                     }
-                    _ => s.echo("Select a line or an arc."),
+                    _ => s.echo("Select an arc, circle or line."),
                 }
                 Ok(Step::Continue)
             }

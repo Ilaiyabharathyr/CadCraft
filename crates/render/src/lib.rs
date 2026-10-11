@@ -13,6 +13,7 @@ mod fill;
 mod hatch;
 mod linetype;
 pub mod paper;
+mod point;
 pub mod raster;
 pub mod units;
 
@@ -61,6 +62,8 @@ pub struct DisplayList {
     /// The paper sheet when the list was built for a layout (paper space); the UI draws the
     /// white sheet, its shadow and the printable-area outline from it.
     pub sheet: Option<Sheet>,
+    /// Block contents expanded while building (see [`MAX_BLOCK_EXPANSION`]).
+    pub expanded: usize,
 }
 
 impl DisplayList {
@@ -88,11 +91,14 @@ pub struct Options {
     /// Highlighted (selected) handles are not special here; the canvas overlays them.
     pub fill: bool,
     pub lineweights: bool,
+    /// Height of the visible area in world units of the space being built. Relative point
+    /// sizes (`PDSIZE` <= 0) are a percentage of it; 0 = the height of the space's extents.
+    pub view_height: f64,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false }
+        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, view_height: 0.0 }
     }
 }
 
@@ -111,6 +117,9 @@ struct Ctx<'a> {
     frozen: &'a [String],
     /// Per-viewport layer colour overrides of the viewport being drawn.
     vp_colors: &'a [(String, Color)],
+    /// Extra linetype scale for model space seen through a viewport: 1 / viewport scale when
+    /// `PSLTSCALE` is on (dashes keep their paper-space length at any viewport scale), else 1.
+    lt_factor: f64,
 }
 
 impl Ctx<'_> {
@@ -129,6 +138,12 @@ struct Builder<'a> {
     /// Plotting: skip layers marked "do not plot".
     plotting: bool,
 }
+
+/// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
+/// and entity drawn inside a block counts one). Nested, self-referencing or arrayed block
+/// references in a hostile file would otherwise expand exponentially (`MAX_BLOCK_DEPTH` only
+/// bounds the depth); past the limit the remaining block contents are not drawn.
+pub const MAX_BLOCK_EXPANSION: usize = 2_000_000;
 
 impl Builder<'_> {
     fn polyline(&mut self, ctx: &Ctx, color: Rgb, lw: f32, pts: &[Vec2]) {
@@ -188,6 +203,11 @@ impl Builder<'_> {
         self.list.verts.push(ctx.xf.apply_vec(dir).normalized());
         self.list.prims.push(DPrim { handle: ctx.top, color, lw: 0.0, kind: Kind::Infinite { ray }, start, len: 2 });
     }
+    /// Take one unit of the block-expansion budget; false once it is spent.
+    fn expand(&mut self) -> bool {
+        self.list.expanded = self.list.expanded.saturating_add(1);
+        self.list.expanded <= MAX_BLOCK_EXPANSION
+    }
 }
 
 /// Build the display list for a space. For a layout (paper space) this includes the model-space
@@ -213,10 +233,12 @@ fn top_ctx<'a>(d: &'a Drawing, xf: Mat3, top: Handle, frozen: &'a [String], vp_c
         top,
         frozen,
         vp_colors,
+        lt_factor: 1.0,
     }
 }
 
 fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> DisplayList {
+    let opts = &with_point_view(d, space, opts);
     let mut b = Builder { list: DisplayList::default(), opts, plotting };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
@@ -238,6 +260,18 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
     b.list
 }
 
+/// `opts` with a view height for relative point sizes: the extents height when none is given
+/// and points draw as figures sized relative to the view.
+fn with_point_view(d: &Drawing, space: &Space, opts: &Options) -> Options {
+    let mut o = opts.clone();
+    let relative = d.header.f64("PDSIZE", 0.0) <= 0.0 && point::sized(d.header.i64("PDMODE", 0));
+    if !(o.view_height.is_finite() && o.view_height > 0.0) && relative {
+        let ext = d.extents(space);
+        o.view_height = if ext.is_empty() { 0.0 } else { ext.height().max(ext.width() * 1e-3) };
+    }
+    o
+}
+
 /// Upper bound on viewports drawn per layout (hostile files).
 const MAX_VIEWPORTS: usize = 256;
 
@@ -249,6 +283,9 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     }
     // Border (on the viewport's layer; layer off hides only the border).
     entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+    if b.list.expanded >= MAX_BLOCK_EXPANSION {
+        return;
+    }
     let center = vp.center.xy();
     let ok = |v: f64| v.is_finite() && v > 0.0;
     if !(ok(vp.width) && ok(vp.height) && ok(vp.view_height) && center.is_finite() && vp.view_center.is_finite()) {
@@ -265,6 +302,9 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
     let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting };
+    // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
+    // paper space, whatever the viewport scale.
+    let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
     for me in d.model.iter() {
         if !matches!(me.kind, EntityKind::Ray(_) | EntityKind::XLine(_) | EntityKind::Viewport(_)) {
             let eb = cadcraft_doc::entity_bounds(d, me, 0);
@@ -275,8 +315,9 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         if matches!(me.kind, EntityKind::Viewport(_)) {
             continue;
         }
-        entity(&mut sub, &top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors), me);
+        entity(&mut sub, &Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) }, me);
     }
+    b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
     append_clipped(&mut b.list, &sub.list, &rect);
 }
 
@@ -336,6 +377,15 @@ fn push_raw(dst: &mut DisplayList, p: &DPrim, kind: Kind, pts: &[Vec2]) {
 
 /// Build the display list for a set of loose entities (previews, rubber bands).
 pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents: I, opts: &Options) -> DisplayList {
+    let ents: Vec<&Entity> = ents.into_iter().collect();
+    // Only previews holding points need the model extents for relative point sizes.
+    let with_view;
+    let opts = if ents.iter().any(|e| matches!(e.kind, EntityKind::Point(_))) {
+        with_view = with_point_view(d, &Space::Model, opts);
+        &with_view
+    } else {
+        opts
+    };
     let mut b = Builder { list: DisplayList::default(), opts, plotting: false };
     for e in ents {
         entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
@@ -368,7 +418,7 @@ fn resolve(ctx: &Ctx, e: &Entity, plotting: bool) -> (Rgb, f32, Option<cadcraft_
         _ => e.common.linetype.clone(),
     };
     let lt = d.linetype(&lt_name).filter(|l| !l.pattern.is_empty()).cloned();
-    let scale = d.header.f64("LTSCALE", 1.0) * e.common.ltscale;
+    let scale = d.header.f64("LTSCALE", 1.0) * e.common.ltscale * ctx.lt_factor;
     (rgb, lw_mm, lt, scale, visible)
 }
 
@@ -420,6 +470,9 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             {
                 let sub = sub_ctx(ctx, e, Mat3::IDENTITY);
                 for be in blk.entities.iter() {
+                    if !b.expand() {
+                        break;
+                    }
                     entity(b, &sub, be);
                 }
             } else {
@@ -527,7 +580,18 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 mtext(b, ctx, t, rgb, lw);
             }
         }
-        EntityKind::Point(p) => b.point(ctx, rgb, p.p.xy()),
+        EntityKind::Point(p) => {
+            // Relative sizes follow the view: undo the block / viewport scale.
+            let view = b.opts.view_height / ctx.xf.scale_factor().max(1e-12);
+            let size = point::size(ctx.d.header.f64("PDSIZE", 0.0), view);
+            let fig = point::figure(ctx.d.header.i64("PDMODE", 0), size, p.p.xy(), p.angle, tol);
+            if fig.dot {
+                b.point(ctx, rgb, p.p.xy());
+            }
+            for l in &fig.lines {
+                b.polyline(ctx, rgb, lw, l);
+            }
+        }
         kind => {
             for prim in kind.prims() {
                 match prim {
@@ -790,6 +854,7 @@ fn sub_ctx<'a>(ctx: &Ctx<'a>, e: &Entity, m: Mat3) -> Ctx<'a> {
         top: ctx.top,
         frozen: ctx.frozen,
         vp_colors: ctx.vp_colors,
+        lt_factor: ctx.lt_factor,
     }
 }
 
@@ -800,8 +865,11 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
     if let Some(blk) = ctx.d.block(&ins.block) {
         let cols = ins.cols.clamp(1, 10_000);
         let rows = ins.rows.clamp(1, 10_000);
-        for r in 0..rows {
+        'copies: for r in 0..rows {
             for c in 0..cols {
+                if !b.expand() {
+                    break 'copies;
+                }
                 let off = Vec2::new(ins.col_spacing * f64::from(c), ins.row_spacing * f64::from(r)).rotate(ins.rotation);
                 let m = Mat3::translate(off).then_before(ins.transform(blk.base.xy()));
                 let sub = sub_ctx(ctx, e, m);
@@ -809,6 +877,9 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
                     // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
                     if matches!(be.kind, EntityKind::AttDef(_)) {
                         continue;
+                    }
+                    if !b.expand() {
+                        break 'copies;
                     }
                     entity(b, &sub, be);
                 }

@@ -221,6 +221,12 @@ pub struct Settings {
     /// Major grid line every N minor lines (GRIDMAJOR).
     pub gridmajor: u32,
     pub dynmode: bool,
+    /// DYNPIFORMAT = 1: Dynamic Input shows second and next points as Cartesian `x,y` instead of
+    /// polar `distance<angle` (the default).
+    pub dynpi_cartesian: bool,
+    /// DYNPICOORDS = 1: second and next points typed into Dynamic Input are absolute instead of
+    /// relative to the last point (the default).
+    pub dynpi_absolute: bool,
     pub lwdisplay: bool,
     pub transparency_display: bool,
     pub selection_cycling: bool,
@@ -233,6 +239,8 @@ pub struct Settings {
     pub pickadd: bool,
     pub gripsize: f64,
     pub cursorsize: f64,
+    /// MAXARRAY: the most objects one array command creates (items × selected objects).
+    pub maxarray: u64,
     pub isodraft: bool,
     pub annoallvisible: bool,
     pub annoautoscale: bool,
@@ -253,6 +261,8 @@ impl Default for Settings {
             gridunit: Vec2::new(0.5, 0.5),
             gridmajor: 5,
             dynmode: true,
+            dynpi_cartesian: false,
+            dynpi_absolute: false,
             lwdisplay: false,
             transparency_display: false,
             selection_cycling: false,
@@ -263,6 +273,7 @@ impl Default for Settings {
             pickadd: true,
             gripsize: 5.0,
             cursorsize: 5.0,
+            maxarray: 100_000,
             isodraft: false,
             annoallvisible: true,
             annoautoscale: false,
@@ -627,6 +638,12 @@ impl Session {
             }
             None => run.machine.begin(self),
         };
+        // Redraw what the command has added so far (LINE adds a segment per point), not only when it ends.
+        if let Ok(st) = self.state_mut()
+            && !Arc::ptr_eq(&run.before, &st.doc)
+        {
+            st.revision += 1;
+        }
         match step {
             Ok(Step::Continue) => {
                 self.running = Some(run);
@@ -659,6 +676,12 @@ impl Session {
     }
 
     fn finish(&mut self, run: Running, cancelled: bool) {
+        // A command outside undo that changed the drawing (UNDO, which swapped it for an earlier
+        // one) records no undo step, as in `execute`.
+        if find_command(&run.id).is_some_and(|c| !c.undoable) && self.state().is_ok_and(|st| !Arc::ptr_eq(&run.before, &st.doc)) {
+            self.pending_window = None;
+            return;
+        }
         self.pending_window = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
         let _ = cancelled;
@@ -803,7 +826,8 @@ impl Session {
             }
             let mut rest = line;
             loop {
-                let text_prompt = self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point);
+                // Free text only when the prompt has no keywords; otherwise split so `I 15` reaches the keyword and the value.
+                let text_prompt = self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && p.keywords.is_empty());
                 if text_prompt || self.running.is_none() && rest.contains('{') {
                     self.cmdline(rest)?;
                     break;
@@ -855,6 +879,19 @@ impl Session {
     }
 
     // ---------------- picking without a command ----------------
+
+    /// Open a selection window with one corner at `corner`, for press-and-drag selection
+    /// (AutoCAD's PICKDRAG = 2: a drag opens the window wherever it starts, even over an object;
+    /// the next point, where the drag ends, closes it). Only while objects are being selected: no
+    /// command running, or a command asking for objects. Returns whether a window was opened.
+    pub fn begin_window(&mut self, corner: Vec2) -> bool {
+        let during_command = self.running.is_some();
+        if !corner.is_finite() || (during_command && !self.current_prompt().is_some_and(|p| p.accept.select)) {
+            return false;
+        }
+        self.pending_window = Some(PendingWindow { corner, during_command });
+        true
+    }
 
     /// A click with no command running: pick/toggle objects or start a selection window.
     ///

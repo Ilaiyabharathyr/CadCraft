@@ -28,8 +28,21 @@ Errors come back as `{"id": …, "ok": false, "error": "message"}`.
 | `ui.set` | UiState fields | Show/hide palettes, toolbars, command line, ViewCube…; `theme: "system"\|"light"\|"dark"` (also `engine.execute` with `ui.theme {theme}`); `ui.inspect` reports the theme shown (`theme`: light/dark). |
 | `ui.resize` | `{width, height}` | Resize the window. |
 | `ui.screenshot` | `{path?}` | PNG of the window (needs a presented frame). |
-| `ui.render` | `{path?, width?, height?}` | Headless render of the current view of the drawing. |
+| `ui.render` | `{path?, width?, height?, fit?}` | Headless render. `fit` (default true) frames the whole drawing; `false` uses the current view. Replies `{pngBase64, width, height, bytes, path?}`. |
 | `app.open` / `app.save` / `app.quit` | `{path}` | File operations. |
 
 The MCP server (`cadcraft-cli mcp --connect 127.0.0.1:PORT`) wraps this protocol; headless
 (`cadcraft-cli mcp`) it serves the same methods from an in-process session.
+
+## Interface language
+
+Select a language with `engine.execute` and the UI command `ui.language`:
+
+```json
+{"id":1,"method":"engine.execute","params":{"command":"ui.language","params":{"lang":"uk"}}}
+```
+
+Supported values are `auto`, `en` and `uk`. `ui.set` also accepts
+`{"interfaceLanguage":"uk"}`; `ui.inspect` reports the saved choice in its UI state.
+Invalid choices leave the current language unchanged. Menus, command labels and prompt text
+returned by the control channel retain their English source text. See [localization.md](localization.md).

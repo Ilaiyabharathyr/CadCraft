@@ -172,33 +172,51 @@ fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("layer.set", "`name` is required"))?.to_string();
     let new_name = str_param(p, "newName").map(str::to_string);
-    let d = s.doc_mut()?;
+    // Validate on a copy before borrowing the drawing mutably, so a rejected call
+    // leaves the layer untouched and records no undo step.
+    let d = s.doc()?;
     let cur = d.header.str("CLAYER", "0");
-    let l = d.layer_mut(&name).ok_or_else(|| bad("layer.set", format!("no layer `{name}`")))?;
-    apply(l, p)?;
-    if p.get("frozen").and_then(Value::as_bool) == Some(true) && l.name.eq_ignore_ascii_case(&cur) {
-        l.frozen = false;
+    let mut updated = d.layer(&name).cloned().ok_or_else(|| bad("layer.set", format!("no layer `{name}`")))?;
+    let old = updated.name.clone();
+    apply(&mut updated, p)?;
+    if p.get("frozen").and_then(Value::as_bool) == Some(true) && old.eq_ignore_ascii_case(&cur) {
         return Err(bad("layer.set", "cannot freeze the current layer"));
     }
-    if let Some(nn) = new_name {
-        if l.name == "0" || l.name.eq_ignore_ascii_case("Defpoints") {
+    if let Some(nn) = &new_name {
+        if old == "0" || old.eq_ignore_ascii_case("Defpoints") {
             return Err(bad("layer.set", "cannot rename layer 0 or Defpoints"));
         }
-        if !valid_name(&nn) {
+        if !valid_name(nn) {
             return Err(bad("layer.set", "invalid layer name"));
         }
-        let old = l.name.clone();
+    }
+    let d = s.doc_mut()?;
+    let l = d.layer_mut(&old).ok_or_else(|| bad("layer.set", format!("no layer `{name}`")))?;
+    *l = updated;
+    if let Some(nn) = new_name {
         l.name = nn.clone();
-        // Re-point entities.
-        let hs: Vec<_> = d.model.iter().filter(|e| e.common.layer.eq_ignore_ascii_case(&old)).map(|e| e.handle).collect();
-        for h in hs {
-            d.model.modify(h, |e| e.common.layer = nn.clone());
+        // Re-point entities in model space, every layout and every block definition.
+        repoint(&mut d.model, &old, &nn);
+        for layout in &mut d.layouts {
+            repoint(&mut layout.entities, &old, &nn);
+        }
+        for block in d.blocks.values_mut() {
+            if block.entities.iter().any(|e| e.common.layer.eq_ignore_ascii_case(&old)) {
+                repoint(&mut std::sync::Arc::make_mut(block).entities, &old, &nn);
+            }
         }
         if cur.eq_ignore_ascii_case(&old) {
             d.header.set_str("CLAYER", &nn);
         }
     }
     ok()
+}
+
+fn repoint(store: &mut cadcraft_doc::EntityStore, old: &str, new: &str) {
+    let hs: Vec<_> = store.iter().filter(|e| e.common.layer.eq_ignore_ascii_case(old)).map(|e| e.handle).collect();
+    for h in hs {
+        store.modify(h, |e| e.common.layer = new.to_string());
+    }
 }
 
 fn run_current(s: &mut Session, p: &Value) -> Result<Value> {
@@ -232,7 +250,8 @@ fn run_delete(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("layer.delete", "cannot delete layer 0, Defpoints or the current layer"));
     }
     let used = d.model.iter().any(|e| e.common.layer.eq_ignore_ascii_case(&name))
-        || d.layouts.iter().any(|l| l.entities.iter().any(|e| e.common.layer.eq_ignore_ascii_case(&name)));
+        || d.layouts.iter().any(|l| l.entities.iter().any(|e| e.common.layer.eq_ignore_ascii_case(&name)))
+        || d.blocks.values().any(|b| b.entities.iter().any(|e| e.common.layer.eq_ignore_ascii_case(&name)));
     if used {
         return Err(bad("layer.delete", "layer has objects on it"));
     }
@@ -413,5 +432,57 @@ mod tests {
         let v = s.execute("layer", &json!({})).unwrap();
         let used: Vec<bool> = v["layers"].as_array().unwrap().iter().map(|l| l["used"].as_bool().unwrap()).collect();
         assert!(used.contains(&true) && used.contains(&false));
+    }
+
+    #[test]
+    fn rejected_layer_set_changes_nothing() {
+        let mut s = Session::new();
+        // Layer 0 is current; freezing it is rejected and must not apply the colour either.
+        let before = s.doc().unwrap().layer("0").unwrap().clone();
+        let undo = s.state().unwrap().undo.len();
+        assert!(s.execute("layer.set", &json!({ "name": "0", "frozen": true, "color": 3 })).is_err());
+        assert_eq!(s.doc().unwrap().layer("0").unwrap(), &before);
+        assert_eq!(s.state().unwrap().undo.len(), undo, "no undo step for a rejected call");
+        // Same for a rejected rename.
+        assert!(s.execute("layer.set", &json!({ "name": "0", "newName": "X", "color": 3 })).is_err());
+        assert_eq!(s.doc().unwrap().layer("0").unwrap(), &before);
+        assert_eq!(s.state().unwrap().undo.len(), undo, "no undo step for a rejected call");
+        // A valid colour-only edit of the current layer still applies.
+        s.execute("layer.set", &json!({ "name": "0", "color": 3 })).unwrap();
+        assert_ne!(s.doc().unwrap().layer("0").unwrap(), &before);
+    }
+
+    #[test]
+    fn delete_and_purge_keep_layers_used_by_block_definitions() {
+        let mut s = Session::new();
+        s.execute("layer.new", &json!({ "name": "A", "color": 1 })).unwrap();
+        s.execute("layer.current", &json!({ "name": "A" })).unwrap();
+        let l = s.execute("line", &json!({ "points": [[0, 0], [1, 1]] })).unwrap()["handles"][0].as_str().unwrap().to_string();
+        s.execute("block", &json!({ "name": "B", "base": [0, 0], "handles": [l], "keep": "delete" })).unwrap();
+        s.execute("layer.current", &json!({ "name": "0" })).unwrap();
+        s.execute("insert", &json!({ "name": "B", "at": [5, 5] })).unwrap();
+        assert!(s.execute("layer.delete", &json!({ "name": "A" })).is_err());
+        s.execute("purge", &json!({})).unwrap();
+        assert!(s.doc().unwrap().layer("A").is_some());
+    }
+
+    #[test]
+    fn rename_repoints_paper_space_and_block_entities() {
+        let mut s = Session::new();
+        s.execute("layer.new", &json!({ "name": "A", "color": "red", "current": true })).unwrap();
+        s.execute("line", &json!({ "points": [[0, 0], [1, 1]] })).unwrap();
+        s.execute("selectall", &json!({})).unwrap();
+        s.execute("block", &json!({ "name": "Part", "base": [0, 0], "keep": "delete" })).unwrap();
+        s.execute("layout.set", &json!({ "name": "Layout1" })).unwrap();
+        s.execute("line", &json!({ "points": [[0, 0], [1, 1]] })).unwrap();
+        s.execute("layer.set", &json!({ "name": "A", "newName": "B" })).unwrap();
+        let d = s.doc().unwrap();
+        let on_layer = |name: &str| {
+            let paper = d.layouts.iter().flat_map(|l| l.entities.iter());
+            let blocks = d.blocks.values().flat_map(|b| b.entities.iter());
+            paper.chain(blocks).filter(|e| e.common.layer == name).count()
+        };
+        assert_eq!(on_layer("A"), 0);
+        assert_eq!(on_layer("B"), 2);
     }
 }

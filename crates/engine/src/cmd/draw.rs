@@ -40,7 +40,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("polygon", "Polygon", run_polygon)
             .menu(&["Draw", "Polygon"])
             .alias(&["pol"])
-            .params("{sides, center, radius, inscribed?: bool, angle?} | {sides, edge: [[x,y],[x,y]]}")
+            .params("{sides, center, radius, inscribed?: bool, angle?: deg to a vertex (inscribed) or edge midpoint (default: bottom edge horizontal)} | {sides, edge: [[x,y],[x,y]]}")
             .interactive(|_| Ok(Box::new(PolygonM::default()))),
         CommandSpec::new("ellipse", "Ellipse", run_ellipse)
             .menu(&["Draw", "Ellipse", "Center"])
@@ -172,6 +172,9 @@ fn run_arc(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         return Err(bad("arc", "give {p1,p2,p3}, {start,center,end} or {center,radius,start,end}"));
     };
+    // Zero or non-finite radius (e.g. start == center): refuse, like the interactive ARC and the
+    // arc.* variants, before anything is added (#85).
+    let a = super::curves::finite_arc(a).ok_or_else(|| bad("arc", "these values do not define an arc"))?;
     added(s.add_entity(arc(&a))?)
 }
 
@@ -186,14 +189,13 @@ fn run_polygon(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         let c = point_req("polygon", p, "center")?;
         let r = f64_req("polygon", p, "radius")?;
-        let ang = f64_or(p, "angle", 90.0).to_radians();
         let inscribed = bool_or(p, "inscribed", true);
-        polygon_vertices(
-            c,
-            n,
-            Vec2::polar(c, r, if inscribed { ang } else { ang - std::f64::consts::PI / n as f64 + std::f64::consts::PI / n as f64 }),
-            inscribed,
-        )
+        // Without an angle, the bottom edge is horizontal, as with a typed radius.
+        let rp = match p.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()) {
+            Some(a) => Vec2::polar(c, r, a.to_radians()),
+            None => polygon_typed_radius_point(c, n, r, inscribed),
+        };
+        polygon_vertices(c, n, rp, inscribed)
     };
     added(s.add_entity(lwpoly(vs, true))?)
 }
@@ -242,7 +244,9 @@ fn run_spline(s: &mut Session, p: &Value) -> Result<Value> {
         if c.len() < 2 {
             return Err(bad("spline", "need 2+ control points"));
         }
-        Spline::from_control(c, p.get("degree").and_then(Value::as_u64).unwrap_or(3) as usize)
+        // Degree 1..=10 as at the Degree prompt, `spline.cv` and DXF input (tessellation grows
+        // with its square).
+        Spline::from_control(c, p.get("degree").and_then(Value::as_u64).unwrap_or(3).clamp(1, 10) as usize)
     } else {
         return Err(bad("spline", "`fit` or `control` points are required"));
     };
@@ -441,18 +445,39 @@ impl Interactive for LineM {
 struct PlineM {
     verts: Vec<PolyVertex>,
     arc_mode: bool,
-    width: f64,
+    /// Total width at the start and end of the next segment (Width / Halfwidth answers).
+    start_w: f64,
+    end_w: f64,
     handle: Option<cadcraft_doc::Handle>,
+    /// 1 = asking the starting width, 2 = the ending width.
     asking_width: u8,
+    /// The widths are being asked as half-widths (centre line to edge).
+    half: bool,
 }
 
 impl PlineM {
     fn entity(&self, closed: bool) -> EntityKind {
         let mut k = lwpoly(self.verts.clone(), closed);
         if let EntityKind::LwPolyline(pl) = &mut k {
-            pl.const_width = self.width;
+            // Every segment the same uniform width: store it as the constant width, as before.
+            let segs = if closed { pl.vertices.len() } else { pl.vertices.len().saturating_sub(1) };
+            let w = pl.vertices.first().map_or(0.0, |v| v.start_width);
+            if pl.vertices.iter().take(segs).all(|v| v.start_width == w && v.end_width == w) {
+                pl.const_width = w;
+                for v in &mut pl.vertices {
+                    (v.start_width, v.end_width) = (0.0, 0.0);
+                }
+            }
         }
         k
+    }
+    /// The next segment, starting at the last vertex, takes the requested widths (#104); the
+    /// segments after it are uniform at the ending width, as in AutoCAD.
+    fn begin_segment(&mut self) {
+        if let Some(last) = self.verts.last_mut() {
+            (last.start_width, last.end_width) = (self.start_w, self.end_w);
+            self.start_w = self.end_w;
+        }
     }
     fn sync(&mut self, s: &mut Session, closed: bool) -> Result<()> {
         if self.verts.len() < 2 {
@@ -499,8 +524,10 @@ impl Interactive for PlineM {
     }
     fn prompt(&self, _s: &Session) -> Prompt {
         if self.asking_width > 0 {
-            return Prompt::new(if self.asking_width == 1 { "Specify starting width" } else { "Specify ending width" }, Accept::NUMBER)
-                .default(format!("{:.4}", self.width));
+            let unit = if self.half { "half-width" } else { "width" };
+            let (which, w) = if self.asking_width == 1 { ("starting", self.start_w) } else { ("ending", self.end_w) };
+            let shown = if self.half { w / 2.0 } else { w };
+            return Prompt::new(format!("Specify {which} {unit}"), Accept::NUMBER).default(format!("{shown:.4}"));
         }
         let base = self.verts.last().map(|v| v.p);
         match (self.verts.len(), self.arc_mode) {
@@ -521,11 +548,21 @@ impl Interactive for PlineM {
         if self.asking_width > 0 {
             match i {
                 Input::Text(t) => {
-                    let w = number(&t).ok_or_else(|| crate::EngineError::Other("Requires a distance.".into()))?;
-                    self.width = w.max(0.0);
+                    let w = number(&t).filter(|w| w.is_finite()).ok_or_else(|| crate::EngineError::Other("Requires a distance.".into()))?;
+                    // Halfwidth is centre line to edge: the total width is twice the answer (#83).
+                    let w = w.max(0.0) * if self.half { 2.0 } else { 1.0 };
+                    if self.asking_width == 1 {
+                        self.start_w = w;
+                    } else {
+                        self.end_w = w;
+                    }
                 }
                 Input::Enter => {}
                 _ => return Ok(Step::Continue),
+            }
+            if self.asking_width == 1 {
+                // The ending width defaults to the starting width.
+                self.end_w = self.start_w;
             }
             self.asking_width = if self.asking_width == 1 { 2 } else { 0 };
             return Ok(Step::Continue);
@@ -533,8 +570,9 @@ impl Interactive for PlineM {
         match i {
             Input::Point(p) => {
                 if self.verts.is_empty() {
-                    s.echo(format!("Current line-width is {:.4}", self.width));
+                    s.echo(format!("Current line-width is {:.4}", self.start_w));
                 }
+                self.begin_segment();
                 if self.arc_mode && !self.verts.is_empty() {
                     let b = self.tangent_bulge(p);
                     if let Some(last) = self.verts.last_mut() {
@@ -563,6 +601,8 @@ impl Interactive for PlineM {
                             last.bulge = b;
                         }
                     }
+                    // The closing segment starts at the last vertex.
+                    self.begin_segment();
                     self.sync(s, true)?;
                     Ok(Step::Done)
                 }
@@ -570,11 +610,13 @@ impl Interactive for PlineM {
                     self.verts.pop();
                     if let Some(l) = self.verts.last_mut() {
                         l.bulge = 0.0;
+                        (l.start_width, l.end_width) = (0.0, 0.0);
                     }
                     self.sync(s, false)?;
                     Ok(Step::Continue)
                 }
                 "Width" | "Halfwidth" => {
+                    self.half = k == "Halfwidth";
                     self.asking_width = 1;
                     Ok(Step::Continue)
                 }
@@ -694,6 +736,9 @@ impl Interactive for CircleM {
                 }
             }
             Input::Enter => Ok(Step::Cancel),
+            // Garbage at a point prompt: report it and ask again.
+            Input::Text(_) if self.mode == 0 && self.pts.is_empty() => Err(crate::EngineError::Other("Point or option keyword required.".into())),
+            Input::Text(_) => Err(crate::EngineError::Other("Invalid point.".into())),
             _ => Ok(Step::Continue),
         }
     }
@@ -790,7 +835,7 @@ impl Interactive for PolygonM {
             }
             (Some(c), Some(ins), Input::Text(t)) => {
                 let r = number(&t).ok_or_else(|| crate::EngineError::Other("Requires numeric distance or point.".into()))?;
-                let rp = if ins { c + Vec2::Y * r } else { c - Vec2::Y * r };
+                let rp = polygon_typed_radius_point(c, n, r, ins);
                 s.add_entity(lwpoly(polygon_vertices(c, n, rp, ins), true))?;
                 return Ok(Step::Done);
             }
@@ -820,7 +865,11 @@ struct EllipseM {
     center_mode: bool,
     arc_mode: bool,
     pts: Vec<Vec2>,
+    /// The `Rotation` option: the next value is the rotation around the major axis.
+    rotation: bool,
     ellipse: Option<Ellipse>,
+    /// The `Parameter` option: arc start/end values are ellipse parameters, not true angles.
+    param: bool,
     start: Option<f64>,
 }
 
@@ -844,6 +893,28 @@ impl EllipseM {
         let (major, ratio) = if minor > ml { (u.perp() * minor, ml / minor) } else { (m, minor / ml) };
         (ratio > 1e-9).then_some(Ellipse::full(c, major, ratio.min(1.0)))
     }
+    /// The ellipse seen as a circle on the first axis rotated by `a` around it: ratio = cos(a),
+    /// for rotations up to 89.4°.
+    fn rotated(&self, a: f64) -> Option<Ellipse> {
+        let (c, m) = self.axis()?;
+        let ratio = a.cos().abs();
+        (m.len() >= 1e-12 && ratio >= 89.4f64.to_radians().cos()).then_some(Ellipse::full(c, m, ratio.min(1.0)))
+    }
+    /// The full ellipse is known: draw it, or go on to the arc angles.
+    fn place(&mut self, s: &mut Session, e: Ellipse) -> Result<Step> {
+        if self.arc_mode {
+            self.ellipse = Some(e);
+            return Ok(Step::Continue);
+        }
+        s.add_entity(EntityKind::Ellipse(cadcraft_doc::Ellipse {
+            center: v3(e.center),
+            major: v3(e.major),
+            ratio: e.ratio,
+            start: 0.0,
+            end: cadcraft_geom::TAU,
+        }))?;
+        Ok(Step::Done)
+    }
 }
 
 impl Interactive for EllipseM {
@@ -852,30 +923,46 @@ impl Interactive for EllipseM {
     }
     fn prompt(&self, _s: &Session) -> Prompt {
         if let Some(e) = &self.ellipse {
-            return Prompt::new(if self.start.is_none() { "Specify start angle" } else { "Specify end angle" }, Accept::POINT_OR_NUMBER)
-                .kw(&["Parameter"])
-                .base(e.center);
+            let msg = match (self.start.is_none(), self.param) {
+                (true, false) => "Specify start angle",
+                (false, false) => "Specify end angle",
+                (true, true) => "Specify start parameter",
+                (false, true) => "Specify end parameter",
+            };
+            return Prompt::new(msg, Accept::POINT_OR_NUMBER).kw(if self.param { &["Angle"] } else { &["Parameter"] }).base(e.center);
         }
         match (self.center_mode, self.pts.len()) {
             (false, 0) => Prompt::new("Specify axis endpoint of ellipse", Accept::POINT).kw(&["Arc", "Center"]),
             (false, 1) => Prompt::new("Specify other endpoint of axis", Accept::POINT).base_opt(self.pts.first().copied()),
             (true, 0) => Prompt::new("Specify center of ellipse", Accept::POINT),
             (true, 1) => Prompt::new("Specify endpoint of axis", Accept::POINT).base_opt(self.pts.first().copied()),
+            _ if self.rotation => Prompt::new("Specify rotation around major axis", Accept::POINT_OR_NUMBER).base_opt(self.axis().map(|a| a.0)),
             _ => Prompt::new("Specify distance to other axis", Accept::POINT_OR_NUMBER).kw(&["Rotation"]).base_opt(self.axis().map(|a| a.0)),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Some(e) = self.ellipse {
+            let ge = Ellipse { start: 0.0, end: cadcraft_geom::TAU, ..e };
             let ang = match i {
-                Input::Point(p) => {
-                    let ge = Ellipse { start: 0.0, end: cadcraft_geom::TAU, ..e };
-                    ge.param_of(p)
+                Input::Keyword(k) => {
+                    match k.as_str() {
+                        "Parameter" => self.param = true,
+                        "Angle" => self.param = false,
+                        _ => {}
+                    }
+                    return Ok(Step::Continue);
                 }
+                // A parameter is the angle from the major axis taken as the parameter itself.
+                Input::Point(p) if self.param => cadcraft_geom::norm_angle((p - e.center).angle() - e.major.angle()),
+                Input::Point(p) => ge.param_of(p),
                 Input::Text(t) => {
-                    // A typed angle is a true angle from the major axis; convert it to an ellipse parameter like a picked point.
                     let a = crate::units::parse_angle(&t).ok_or_else(|| crate::EngineError::Other("Requires an angle.".into()))?;
-                    let ge = Ellipse { start: 0.0, end: cadcraft_geom::TAU, ..e };
-                    ge.param_of(e.center + Vec2::from_angle(a + e.major.angle()))
+                    if self.param {
+                        cadcraft_geom::norm_angle(a)
+                    } else {
+                        // A typed angle is a true angle from the major axis; convert it to an ellipse parameter like a picked point.
+                        ge.param_of(e.center + Vec2::from_angle(a + e.major.angle()))
+                    }
                 }
                 _ => return Ok(Step::Continue),
             };
@@ -899,41 +986,30 @@ impl Interactive for EllipseM {
         match i {
             Input::Keyword(k) if k == "Center" => self.center_mode = true,
             Input::Keyword(k) if k == "Arc" => self.arc_mode = true,
-            Input::Point(p) => {
-                if self.pts.len() < 2 {
-                    self.pts.push(p);
-                } else if let Some(e) = self.build(p) {
-                    if self.arc_mode {
-                        self.ellipse = Some(e);
-                        return Ok(Step::Continue);
-                    }
-                    s.add_entity(EntityKind::Ellipse(cadcraft_doc::Ellipse {
-                        center: v3(e.center),
-                        major: v3(e.major),
-                        ratio: e.ratio,
-                        start: 0.0,
-                        end: cadcraft_geom::TAU,
-                    }))?;
-                    return Ok(Step::Done);
+            Input::Keyword(k) if k == "Rotation" && self.pts.len() == 2 => self.rotation = true,
+            Input::Point(p) if self.pts.len() < 2 => self.pts.push(p),
+            Input::Point(p) if self.rotation => {
+                if let Some(e) = self.axis().and_then(|(c, _)| self.rotated((p - c).angle())) {
+                    return self.place(s, e);
                 }
+            }
+            Input::Point(p) => {
+                if let Some(e) = self.build(p) {
+                    return self.place(s, e);
+                }
+            }
+            Input::Text(t) if self.pts.len() == 2 && self.rotation => {
+                let e = crate::units::parse_angle(&t)
+                    .and_then(|a| self.rotated(a))
+                    .ok_or_else(|| crate::EngineError::Other("Requires an angle between 0 and 89.4 degrees.".into()))?;
+                return self.place(s, e);
             }
             Input::Text(t) if self.pts.len() == 2 => {
                 let d = number(&t).ok_or_else(|| crate::EngineError::Other("Requires a distance.".into()))?;
                 if let Some((c, m)) = self.axis()
                     && let Some(e) = self.build(c + m.normalized().perp() * d)
                 {
-                    if self.arc_mode {
-                        self.ellipse = Some(e);
-                        return Ok(Step::Continue);
-                    }
-                    s.add_entity(EntityKind::Ellipse(cadcraft_doc::Ellipse {
-                        center: v3(e.center),
-                        major: v3(e.major),
-                        ratio: e.ratio,
-                        start: 0.0,
-                        end: cadcraft_geom::TAU,
-                    }))?;
-                    return Ok(Step::Done);
+                    return self.place(s, e);
                 }
             }
             Input::Enter => return Ok(Step::Cancel),
@@ -945,17 +1021,17 @@ impl Interactive for EllipseM {
         if self.pts.len() < 2 {
             return self.pts.first().map(|a| vec![line(*a, c)]).unwrap_or_default();
         }
-        self.build(c)
-            .map(|e| {
-                vec![EntityKind::Ellipse(cadcraft_doc::Ellipse {
-                    center: v3(e.center),
-                    major: v3(e.major),
-                    ratio: e.ratio,
-                    start: 0.0,
-                    end: cadcraft_geom::TAU,
-                })]
-            })
-            .unwrap_or_default()
+        let e = if self.rotation { self.axis().and_then(|(ctr, _)| self.rotated((c - ctr).angle())) } else { self.build(c) };
+        e.map(|e| {
+            vec![EntityKind::Ellipse(cadcraft_doc::Ellipse {
+                center: v3(e.center),
+                major: v3(e.major),
+                ratio: e.ratio,
+                start: 0.0,
+                end: cadcraft_geom::TAU,
+            })]
+        })
+        .unwrap_or_default()
     }
 }
 
@@ -1054,13 +1130,26 @@ impl Interactive for XlineM {
 #[derive(Default)]
 struct SplineM {
     pts: Vec<Vec2>,
+    asking_method: bool,
+    /// `Method` > `CV` hands over to the control-vertex machine (`spline.cv`).
+    delegate: Option<Box<dyn Interactive>>,
 }
 
 impl Interactive for SplineM {
     fn name(&self) -> &'static str {
         "SPLINE"
     }
-    fn prompt(&self, _s: &Session) -> Prompt {
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        s.echo("Current settings: Method=Fit   Knots=Chord");
+        Ok(Step::Continue)
+    }
+    fn prompt(&self, s: &Session) -> Prompt {
+        if let Some(d) = &self.delegate {
+            return d.prompt(s);
+        }
+        if self.asking_method {
+            return Prompt::new("Enter spline creation method", super::curves::KW).kw(&["Fit", "CV"]).default("Fit");
+        }
         match self.pts.len() {
             0 => Prompt::new("Specify first point", Accept::POINT).kw(&["Method", "Knots", "Object"]),
             1 => Prompt::new("Enter next point", Accept::POINT).kw(&["start Tangency", "toLerance"]).base_opt(self.pts.last().copied()),
@@ -1071,6 +1160,27 @@ impl Interactive for SplineM {
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if let Some(d) = &mut self.delegate {
+            return d.input(s, i);
+        }
+        if self.asking_method {
+            match i {
+                Input::Keyword(k) if k == "CV" => {
+                    let Some(factory) = find_command("spline.cv").and_then(|c| c.interactive) else {
+                        return Err(crate::EngineError::Other("CV: not available yet".into()));
+                    };
+                    let mut m = factory(s)?;
+                    self.asking_method = false;
+                    let step = m.begin(s)?;
+                    self.delegate = Some(m);
+                    return Ok(step);
+                }
+                Input::Keyword(_) | Input::Enter => self.asking_method = false,
+                Input::Text(_) => return Err(crate::EngineError::Other("Invalid option keyword.".into())),
+                _ => {}
+            }
+            return Ok(Step::Continue);
+        }
         match i {
             Input::Point(p) => {
                 self.pts.push(p);
@@ -1081,13 +1191,18 @@ impl Interactive for SplineM {
                 Ok(Step::Continue)
             }
             Input::Keyword(k) if k == "Close" => {
-                if let Some(f) = self.pts.first().copied() {
-                    self.pts.push(f);
-                }
-                let mut sp = Spline::from_fit_points(&self.pts);
-                sp.closed = true;
-                s.add_entity(EntityKind::Spline(sp))?;
+                // A smooth closed (periodic) curve, not a repeat of the first point.
+                s.add_entity(EntityKind::Spline(Spline::from_fit_points_closed(&self.pts)))?;
                 Ok(Step::Done)
+            }
+            Input::Keyword(k) if k == "Method" => {
+                self.asking_method = true;
+                Ok(Step::Continue)
+            }
+            Input::Keyword(k) => {
+                // Knots, Object, start/end Tangency, toLerance: stay at this prompt.
+                s.echo(format!("{k}: not available yet"));
+                Ok(Step::Continue)
             }
             Input::Enter => {
                 if self.pts.len() >= 2 {
@@ -1095,10 +1210,14 @@ impl Interactive for SplineM {
                 }
                 Ok(Step::Done)
             }
+            Input::Text(_) => Err(crate::EngineError::Other("Point or option keyword required.".into())),
             _ => Ok(Step::Continue),
         }
     }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
+        if let Some(d) = &self.delegate {
+            return d.preview(s, c);
+        }
         if self.pts.is_empty() {
             return Vec::new();
         }
@@ -1243,6 +1362,9 @@ impl Interactive for TextM {
 struct MTextM {
     first: Option<Vec2>,
     second: Option<Vec2>,
+    /// Paragraphs typed so far: one per input line, an empty line ends the text (as on
+    /// AutoCAD's command line and in scripts).
+    lines: Vec<String>,
 }
 
 impl Interactive for MTextM {
@@ -1255,14 +1377,19 @@ impl Interactive for MTextM {
             (Some(a), None) => Prompt::new("Specify opposite corner", Accept::POINT)
                 .kw(&["Height", "Justify", "Line spacing", "Rotation", "Style", "Width", "Columns"])
                 .base(a),
-            _ => Prompt::new("Enter text (use \\P for new paragraphs)", Accept::TEXT),
+            _ if self.lines.is_empty() => Prompt::new("Enter text (use \\P for new paragraphs)", Accept::TEXT),
+            _ => Prompt::new("Enter next line of text (empty line to finish)", Accept::TEXT),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         match (self.first, self.second, i) {
             (None, _, Input::Point(p)) => self.first = Some(p),
             (Some(_), None, Input::Point(p)) => self.second = Some(p),
-            (Some(a), Some(b), Input::Text(t)) => {
+            (Some(_), Some(_), Input::Text(t)) if !t.is_empty() => self.lines.push(t),
+            (Some(a), Some(b), Input::Text(_) | Input::Enter) => {
+                if self.lines.is_empty() {
+                    return Ok(Step::Done);
+                }
                 let d = s.doc()?;
                 let h = d.header.f64("TEXTSIZE", 0.2);
                 let style = d.header.str("TEXTSTYLE", "Standard");
@@ -1274,7 +1401,7 @@ impl Interactive for MTextM {
                     attach: 1,
                     rotation: 0.0,
                     style,
-                    contents: t,
+                    contents: self.lines.join("\\P"),
                     line_spacing: 1.0,
                 }))?;
                 return Ok(Step::Done);
