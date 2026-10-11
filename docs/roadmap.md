@@ -36,7 +36,7 @@ the alpha checklist. Main platform: macOS.
 | Dimension and annotate | partial, not blocking | All core DIM types, associativity, DIMSTYLE variables (43 of ~80), TEXT/MTEXT, MLEADER, tables work; no DIMSTYLE dialog, MTEXT editor not in place, MLEADER thin (F7, F9, F10). A drafter can dimension a sheet end to end | 0 for the gate (beta work) |
 | Use blocks (insert library blocks, edit them, attributes, xrefs) | **partial, blocking** | Static BLOCK/INSERT/attributes work; no block editor (BEDIT) or REFEDIT, so a block can't be edited in place; no xrefs; dynamic blocks from other drawings lose their behaviour (F2, F3) | 35–55 |
 | Layers, layouts and plotting a sheet | **partial, blocking** | Layers, layouts, viewports, page setups, PDF output and plot styles (CTB/STB, #410) work; no plot preview or plot dialog (#160); printers/plotters only via PDF (F14, H3) | 15–25 |
-| Save DWG that AutoCAD opens without loss, and reopen others' DWGs | **no** | Saving drops every entity and object we don't model (Unknown, IMAGE, WIPEOUT, gradients, groups, views, foreign xdata); MULTILEADER becomes LEADER+MTEXT; DWG always written as R2000; never checked in AutoCAD; no real-file tests; a 10 MB DWG failed after ~2 min (#57) (FF1–FF6) | 40–60 + owner (real-file corpus, AutoCAD check) |
+| Save DWG that AutoCAD opens without loss, and reopen others' DWGs | **no** | Saving drops every entity and object we don't model (Unknown, IMAGE, WIPEOUT, gradients, groups, views, foreign xdata); MULTILEADER becomes LEADER+MTEXT; never checked in AutoCAD; no real-file tests; a 10 MB DWG failed after ~2 min (#57) (FF1–FF6) | 40–60 + owner (real-file corpus, AutoCAD check) |
 | **To alpha** | | | **≈ 125–190** |
 
 Ready for real work is ≈ 38%, also under the ~40% alpha bar; closing the gate rows lifts it past
@@ -86,7 +86,7 @@ agents that built each milestone, are in the progress log of [ROADMAP.md](../ROA
 | M10 | Performance: 1M entities at 60 fps, large DWG loads | ≈ 60% (internal numbers only) | 20–40 |
 | M11 | 3D: UCS, orbit, visual styles, solids, surfaces, meshes, sections, rendering | ≈ 2% | 300–450 |
 | M12 | Automation: AutoLISP, SCRIPT, action recorder, sheet sets, Express Tools | ≈ 15% (MCP, CLI, control channel done) | 130–220 |
-| M13 | 1.0 polish: preferences, workspaces, localisation, accessibility, signed packages, docs | ≈ 15% (signed packages for every platform exist; themes done; string catalog with Ukrainian, live language switching, #36) | 110–170 |
+| M13 | 1.0 polish: preferences, workspaces, localisation, accessibility, signed packages, docs | ≈ 15% (signed packages for every platform exist; themes done; string catalog with Ukrainian and German, live language switching, #36) | 110–170 |
 | — | Geometry precision (cross-cutting, see [geometry-parity.md](geometry-parity.md)) | ≈ 40% | 70–110 |
 | — | AI features | ≈ 0% in-app | 40–80 |
 | | **Remaining to full parity** | | **≈ 1,300–2,100** |
