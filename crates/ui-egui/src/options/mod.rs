@@ -9,7 +9,7 @@
 //! | name | value |
 //! |---|---|
 //! | `theme` | `"system"`, `"light"` or `"dark"` |
-//! | `interfaceLanguage` | `"auto"`, `"en"` or `"uk"` |
+//! | `interfaceLanguage` | `"auto"`, `"en"`, `"uk"`, `"pt-BR"`, `"de"`, `"es"` or `"cs"` |
 //! | `saveFormat` | `"dxf"` or `"dwg"`: the format Save As suggests for new drawings |
 //! | `systemCursor` | keep the system cursor visible over the drawing area |
 //! | `historyLines` | command-line history lines, 0–12 |
