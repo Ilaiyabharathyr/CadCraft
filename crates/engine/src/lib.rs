@@ -1027,6 +1027,9 @@ impl Session {
         if self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number) {
             return self.typed(t);
         }
+        // At `Command:` leading blanks before a command name are not Enter (`" LINE"` from the
+        // control channel starts LINE); a line of only blanks still is.
+        let t = if self.running.is_none() && !t.trim().is_empty() { t.trim_start() } else { t };
         self.input_line(t, false)
     }
 

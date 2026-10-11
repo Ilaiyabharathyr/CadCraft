@@ -53,3 +53,16 @@ fn trailing_and_double_spaces_are_enter() {
     s.cmdline("Hello big world ").unwrap();
     assert_eq!(text_value(&s).as_deref(), Some("Hello big world"));
 }
+
+#[test]
+fn leading_blanks_before_a_command_name_are_not_enter() {
+    // `" LINE ..."` at `Command:` starts LINE; it doesn't repeat the last command first.
+    let mut s = Session::new();
+    s.cmdline("  LINE 0,0 5,5").unwrap();
+    s.cmdline("").unwrap();
+    s.cmdline(" ERASE").unwrap();
+    assert!(s.running.is_some(), "ERASE is waiting for objects");
+    s.cmdline("L").unwrap();
+    s.cmdline("").unwrap();
+    assert!(kinds(&s).is_empty());
+}
