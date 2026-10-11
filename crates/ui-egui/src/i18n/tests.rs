@@ -75,6 +75,7 @@ fn every_marked_ui_literal_has_a_translation() {
 fn assert_every_marked_ui_literal_has_a_translation(language: &str) {
     let catalog = catalog(language).unwrap();
     let sources = [
+        include_str!("../xrefs.rs"),
         include_str!("../canvas.rs"),
         include_str!("../chrome.rs"),
         include_str!("../cmdline.rs"),
@@ -84,6 +85,7 @@ fn assert_every_marked_ui_literal_has_a_translation(language: &str) {
         include_str!("../palettes.rs"),
         include_str!("../parametric.rs"),
         include_str!("../quick.rs"),
+        include_str!("../vpscale.rs"),
     ];
     let mut missing = BTreeSet::new();
     for source in sources {

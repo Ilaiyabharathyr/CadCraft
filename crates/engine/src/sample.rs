@@ -31,6 +31,7 @@ fn dim(kind: DimKind, p13: Vec2, p14: Vec2, defpt: Vec2) -> EntityKind {
         block: None,
         overrides: Default::default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     })
 }
 
@@ -137,7 +138,7 @@ pub fn bracket() -> Drawing {
         EntityKind::Hatch(Hatch {
             pattern: "ANSI31".into(),
             solid: false,
-            loops: vec![HatchLoop { vertices: rect_vertices(a, bb), outer: true }],
+            loops: vec![HatchLoop { vertices: rect_vertices(a, bb), outer: true, sources: Vec::new() }],
             scale: 1.0,
             angle: 0.0,
             associative: false,
@@ -180,6 +181,7 @@ pub fn bracket() -> Drawing {
             block: None,
             overrides: Default::default(),
             assoc: Vec::new(),
+            marks: Default::default(),
         }),
     );
     add(
@@ -200,6 +202,7 @@ pub fn bracket() -> Drawing {
             block: None,
             overrides: Default::default(),
             assoc: Vec::new(),
+            marks: Default::default(),
         }),
     );
 
