@@ -241,6 +241,18 @@ fn dimstyle_commands() {
 }
 
 #[test]
+fn dimstyle_delete_refuses_style_used_by_block_dimension() {
+    let mut s = Session::new();
+    s.execute("dimstyle", &json!({ "name": "DS", "DIMTXT": 2 })).unwrap();
+    s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [5, 3] })).unwrap();
+    s.execute("selectall", &json!({})).unwrap();
+    s.execute("block", &json!({ "name": "BD", "base": [0, 0], "keep": "convert" })).unwrap();
+    s.execute("dimstyle.current", &json!({ "name": "Standard" })).unwrap();
+    assert!(s.execute("dimstyle.delete", &json!({ "name": "DS" })).is_err());
+    assert!(s.doc().unwrap().dim_style("DS").is_some());
+}
+
+#[test]
 fn dimension_overrides() {
     let mut s = Session::new();
     let d = h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [5, 2] })).unwrap());

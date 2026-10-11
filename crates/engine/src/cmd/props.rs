@@ -704,6 +704,17 @@ fn dims_using(d: &cadcraft_doc::Drawing, name: &str) -> Vec<(cadcraft_doc::Space
     out
 }
 
+/// True when a dimension or leader inside a block definition uses the dimension style.
+fn block_dims_use(d: &cadcraft_doc::Drawing, name: &str) -> bool {
+    d.blocks.values().any(|b| {
+        b.entities.iter().any(|e| match &e.kind {
+            EntityKind::Dimension(dm) => dm.style.eq_ignore_ascii_case(name),
+            EntityKind::Leader(l) => l.style.eq_ignore_ascii_case(name),
+            _ => false,
+        })
+    })
+}
+
 fn run_dimstyle_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let from = str_param(p, "from").ok_or_else(|| bad("dimstyle.rename", "`from` is required"))?.to_string();
     let to = str_param(p, "to").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("dimstyle.rename", "`to` is required"))?.to_string();
@@ -738,7 +749,7 @@ fn run_dimstyle_delete(s: &mut Session, p: &Value) -> Result<Value> {
     if d.header.str("DIMSTYLE", "Standard").eq_ignore_ascii_case(&name) {
         return Err(bad("dimstyle.delete", "the current dimension style cannot be deleted"));
     }
-    if !dims_using(d, &name).is_empty() {
+    if !dims_using(d, &name).is_empty() || block_dims_use(d, &name) {
         return Err(bad("dimstyle.delete", format!("dimension style `{name}` is in use")));
     }
     let before = d.dim_styles.len();
