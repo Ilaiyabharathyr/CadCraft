@@ -2,8 +2,7 @@
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
 # Written from CADCraft's English strings; no proprietary translations were copied.
 # UTF-8: context<TAB>English source<TAB>German translation.
-# Empty context = ordinary label; @plural = one|other|other forms with {n}
-# (German distinguishes only singular/plural, so the third form repeats the plural).
+# Empty context = ordinary label; @plural = one|other forms with {n}.
 # Keep command IDs, keywords, technology/product names and user data unchanged.
 	  Cancel  	  Abbrechen  
 	  OK  	  OK  
@@ -986,8 +985,8 @@
 	−Bin	−Binär
 	−LOC	−Zeilen
 	⌘↩ to finish	⌘↩ zum Abschließen
-@plural	{n} commit	{n} Commit|{n} Commits|{n} Commits
-@plural	{n} contributor	{n} Mitwirkender|{n} Mitwirkende|{n} Mitwirkende
+@plural	{n} commit	{n} Commit|{n} Commits
+@plural	{n} contributor	{n} Mitwirkender|{n} Mitwirkende
 	Drawing as bytes	Zeichnung als Bytes
 	Services	Dienste
 	Hide CADCraft	CADCraft ausblenden

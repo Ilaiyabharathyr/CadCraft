@@ -3,6 +3,7 @@
 Choose **Edit → Interface Language** and select **Auto (system language)**, **English**,
 **Українська**, or **Deutsch**. The interface updates without restarting, including the native
 macOS menus.
+**Українська**, or **Português (Brasil)**. The interface updates without restarting, including the native macOS menus.
 The choice is saved with the other interface preferences (`cadcraft.prefs`, beside the theme):
 eframe storage on the desktop, browser local storage on the web. Installations without a saved
 choice use Auto.
@@ -13,6 +14,10 @@ resolve to `uk`, German tags such as `de-DE` and `de_AT.UTF-8` resolve to `de`; 
 languages fall back to English. Set `CADCRAFT_LOCALE=uk-UA` to
 override the desktop's locale for a launch. An explicit saved English, Ukrainian or German
 choice takes precedence over that override.
+resolve to `uk`, and Portuguese tags such as `pt-BR` and `pt_BR.UTF-8` resolve to `pt-BR`;
+unsupported languages fall back to English. Set `CADCRAFT_LOCALE=uk-UA` to
+override the desktop's locale for a launch. An explicit saved English, Ukrainian or Brazilian Portuguese choice
+takes precedence over that override.
 
 Automation can select the language through the existing control channel:
 
@@ -23,6 +28,8 @@ Automation can select the language through the existing control channel:
 The `ui.set` method also accepts `{"interfaceLanguage":"uk"}`. Supported values are `auto`,
 `en`, `uk`, and `de`; invalid values are rejected without changing the current selection.
 Resetting palettes keeps the language choice.
+`en`, `uk`, and `pt-BR`; invalid values are rejected without changing the current selection. Resetting
+palettes keeps the language choice.
 
 ## Translation coverage
 
@@ -30,6 +37,10 @@ Ukrainian and German cover command and menu labels, tool groups and tooltips, th
 file and model-space tabs, status controls, object snaps, drafting prompts, property labels,
 dialogs, and the About window's controls. The command reference can be searched by English
 command ID, English label, or translated label.
+The Ukrainian and Brazilian Portuguese catalogs cover command and menu labels, tool groups and tooltips, the Start page, file and
+model-space tabs, status controls, object snaps, drafting prompts, property labels, dialogs,
+and the About window's controls. The command reference can be searched by English command
+ID, English label, or translated label.
 
 Drawing titles, layer/layout/block/style names, parameter names and expressions, text in a
 drawing, and command-line input are user data and retain their original spelling. Clickable
@@ -51,11 +62,14 @@ The implementation follows the display-time catalog pattern used by
 
 - `crates/ui-egui/src/i18n/uk.tsv` and `crates/ui-egui/src/i18n/de.tsv` are UTF-8 with three
   tab-separated columns:
+- `crates/ui-egui/src/i18n/uk.tsv` and `pt_br.tsv` are UTF-8 with three tab-separated columns:
   `context`, `English source`, and `translation`. Ordinary labels have an empty context.
   `@plural` entries hold Ukrainian `one|few|many` forms for integer counts; German uses
   `one|other|other` (singular/plural only, so the third form repeats the plural).
+  `@plural` entries hold the language's plural forms for integer counts: Ukrainian
+  `one|few|many`, Brazilian Portuguese `one|other` (0 and 1 are `one`).
 - Register a new catalog in `i18n::LANGUAGES`, add its preference variant and code/name,
-  and supply its integer plural rule if it uses `@plural` rows.
+  and set its integer plural rule and form count on the `Language` row.
 - Use `crate::tl!("English label")` for a literal, `i18n::t(label)` for a known dynamic UI
   label, and `crate::tf!("Version {version}", version = value)` for named placeholders.
   Translate only at the display boundary; never look up arbitrary user names or identifiers.
