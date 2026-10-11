@@ -5,6 +5,7 @@
 mod dxf_ext;
 mod dxf_image;
 mod dxf_read;
+mod dxf_table;
 mod dxf_write;
 pub mod pdf;
 pub mod svg;
