@@ -9,4 +9,9 @@
         <item name="android:colorAccent">#71b4ff</item>
         <item name="android:windowNoTitle">true</item>
     </style>
+    <style name="CADCommandTheme" parent="android:style/Theme.Material.Dialog.NoActionBar">
+        <item name="android:windowMinWidthMajor">60%</item>
+        <item name="android:windowMinWidthMinor">90%</item>
+        <item name="android:colorAccent">#71b4ff</item>
+    </style>
 </resources>

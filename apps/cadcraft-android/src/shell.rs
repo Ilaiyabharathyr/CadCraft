@@ -227,6 +227,11 @@ impl eframe::App for Shell {
         self.checkpoint(!ctx.input(|i| i.focused));
         ctx.request_repaint_after(Duration::from_secs(5));
         if std::mem::take(&mut self.cad.quit_requested) {
+            #[cfg(target_os = "android")]
+            if let Err(error) = crate::platform::background() {
+                self.cad.set_status(format!("Close: {error}"));
+            }
+            #[cfg(not(target_os = "android"))]
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }

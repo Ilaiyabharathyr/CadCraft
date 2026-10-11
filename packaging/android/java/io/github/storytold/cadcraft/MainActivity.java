@@ -1,7 +1,7 @@
 package io.github.storytold.cadcraft;
 
 import android.app.NativeActivity;
-import android.app.AlertDialog;
+import android.app.Activity;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -10,13 +10,20 @@ import android.provider.OpenableColumns;
 import android.text.InputType;
 import android.text.InputFilter;
 import android.view.WindowManager;
+import android.view.View;
+import android.view.KeyEvent;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.ref.WeakReference;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -25,8 +32,10 @@ import java.util.concurrent.Executors;
 
 /** Android lifecycle and document-provider glue. The drawing engine and UI run in Rust. */
 public final class MainActivity extends NativeActivity {
+    private static volatile WeakReference<MainActivity> current = new WeakReference<>(null);
     private static final int OPEN = 41;
     private static final int EXPORT = 42;
+    private static final int COMMAND = 43;
     private static final long MAX_BYTES = 256L * 1024 * 1024;
     private final ConcurrentLinkedQueue<String> imports = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<String> notices = new ConcurrentLinkedQueue<>();
@@ -36,8 +45,28 @@ public final class MainActivity extends NativeActivity {
     private File exporting;
 
     @Override public void onCreate(Bundle state) {
+        current = new WeakReference<>(this);
         super.onCreate(state);
+        drawingScreen();
     }
+
+    public static MainActivity currentActivity() { return current.get(); }
+
+    private void drawingScreen() {
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
+            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused) drawingScreen();
+    }
+
+    public void background() { runOnUiThread(() -> moveTaskToBack(true)); }
+
+    // Keep the native event loop alive when leaving the root activity. Winit cannot
+    // create a second event loop in the same cached process when the app is reopened.
+    @Override public void onBackPressed() { background(); }
 
     /** Called by Rust; opening the provider and copying its result never blocks the drawing UI. */
     public void pickDrawing() {
@@ -98,35 +127,23 @@ public final class MainActivity extends NativeActivity {
      * coordinates and values, rather than relying on keyboard-specific synthetic key events. */
     public void enterCommand(String initial) {
         runOnUiThread(() -> {
-            EditText input = new EditText(this);
-            input.setSingleLine(true);
-            input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-            input.setImeOptions(EditorInfo.IME_ACTION_DONE);
-            input.setFilters(new InputFilter[] { new InputFilter.LengthFilter(8192) });
-            input.setText(initial);
-            input.setSelection(input.length());
-            int padding = (int) (20 * getResources().getDisplayMetrics().density);
-            input.setPadding(padding, padding, padding, padding);
-            AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Command or value")
-                .setView(input)
-                .setPositiveButton("Enter", (d, which) -> commands.offer(input.getText().toString()))
-                .setNegativeButton("Cancel", null).create();
-            input.setOnEditorActionListener((view, action, event) -> {
-                if (action != EditorInfo.IME_ACTION_DONE) return false;
-                commands.offer(input.getText().toString());
-                dialog.dismiss();
-                return true;
-            });
-            dialog.setOnShowListener(d -> {
-                input.requestFocus();
-                if (dialog.getWindow() != null) dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
-            });
-            dialog.show();
+            if (picking) return;
+            picking = true;
+            try { startActivityForResult(new Intent(this, CommandActivity.class).putExtra("initial", initial), COMMAND); }
+            catch (RuntimeException error) { picking = false; notice("Keyboard", error); }
         });
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == COMMAND) {
+            picking = false;
+            if (result == RESULT_OK && data != null) {
+                String value = data.getStringExtra("command");
+                if (value != null) commands.offer(value);
+            }
+            return;
+        }
         if (request != OPEN && request != EXPORT) return;
         picking = false;
         if (result != RESULT_OK || data == null || data.getData() == null) {
@@ -203,8 +220,69 @@ public final class MainActivity extends NativeActivity {
     }
 
     @Override protected void onDestroy() {
+        if (current.get() == this) current.clear();
         files.shutdown();
         clearExport();
         super.onDestroy();
+    }
+
+    /** A standard Activity gives text entry its own Java input queue and composing IME,
+     * independent of NativeActivity's native input queue. */
+    public static final class CommandActivity extends Activity {
+        private EditText input;
+
+        @Override protected void onCreate(Bundle state) {
+            super.onCreate(state);
+            int padding = (int) (20 * getResources().getDisplayMetrics().density);
+            int fieldHeight = (int) (56 * getResources().getDisplayMetrics().density);
+            LinearLayout panel = new LinearLayout(this);
+            panel.setOrientation(LinearLayout.VERTICAL);
+            panel.setPadding(padding, padding, padding, padding);
+            TextView title = new TextView(this);
+            title.setText("Command or value");
+            title.setTextSize(20);
+            panel.addView(title);
+            input = new EditText(this);
+            input.setId(android.R.id.edit);
+            input.setSingleLine(true);
+            input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+            input.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+            input.setFilters(new InputFilter[] { new InputFilter.LengthFilter(8192) });
+            input.setText(getIntent().getStringExtra("initial"));
+            input.setSelection(input.length());
+            panel.addView(input, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, fieldHeight));
+            LinearLayout buttons = new LinearLayout(this);
+            Button cancel = new Button(this);
+            cancel.setText("Cancel");
+            cancel.setOnClickListener(view -> finish());
+            Button enter = new Button(this);
+            enter.setText("Enter");
+            enter.setOnClickListener(view -> submit());
+            buttons.addView(cancel, new LinearLayout.LayoutParams(0, fieldHeight, 1));
+            buttons.addView(enter, new LinearLayout.LayoutParams(0, fieldHeight, 1));
+            panel.addView(buttons);
+            setContentView(panel);
+            getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            input.setOnEditorActionListener((view, action, event) -> {
+                if (action != EditorInfo.IME_ACTION_DONE
+                    && !(event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN)) return false;
+                submit();
+                return true;
+            });
+            input.requestFocus();
+        }
+
+        @Override public void onWindowFocusChanged(boolean focused) {
+            super.onWindowFocusChanged(focused);
+            if (focused && input != null) {
+                InputMethodManager ime = getSystemService(InputMethodManager.class);
+                if (ime != null) ime.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+            }
+        }
+
+        private void submit() {
+            setResult(RESULT_OK, new Intent().putExtra("command", input.getText().toString()));
+            finish();
+        }
     }
 }

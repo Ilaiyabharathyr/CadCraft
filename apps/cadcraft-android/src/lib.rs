@@ -17,12 +17,17 @@ pub fn android_main(app: winit::platform::android::activity::AndroidApp) {
         log::error!("Android did not provide an application data directory");
         return;
     };
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         android_app: Some(app),
         persistence_path: Some(dir.join("preferences.ron")),
         persist_window: false,
         ..Default::default()
     };
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
+        // A Vulkan probe can leave Android's window bound when GLES is selected afterwards.
+        // Use the GLES baseline directly, including on tablets without usable Vulkan drivers.
+        create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         eframe::run_native("CADCraft", options, Box::new(move |cc| shell::Shell::new(cc, dir).map(|app| Box::new(app) as Box<dyn eframe::App>)))
     }));

@@ -35,7 +35,8 @@ mapfile -t classes < <(find "$stage/classes" -name '*.class' -print)
 python3 - "$stage" <<'PY'
 import pathlib, sys, zipfile
 stage = pathlib.Path(sys.argv[1])
-with zipfile.ZipFile(stage / 'base.apk', 'a', compression=zipfile.ZIP_STORED) as apk:
+# The manifest extracts native libraries, so compression reduces download/install size.
+with zipfile.ZipFile(stage / 'base.apk', 'a', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as apk:
     apk.write(stage / 'dex/classes.dex', 'classes.dex')
     for lib in (stage / 'lib').rglob('*.so'):
         apk.write(lib, 'lib/' + str(lib.relative_to(stage / 'lib')))
