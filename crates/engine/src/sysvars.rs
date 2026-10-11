@@ -4,34 +4,47 @@ use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
 
+mod table;
+
 const SESSION_VARS: &[&str] = &[
     "OSMODE",
     "OSNAPHATCH",
+    "ANNOAUTOSCALE",
     "ORTHOMODE",
     "POLARMODE",
     "POLARANG",
     "POLARADDANG",
+    "POLARDIST",
+    "SNAPTYPE",
     "AUTOSNAP",
     "GRIDMODE",
     "SNAPMODE",
     "SNAPUNIT",
     "GRIDUNIT",
+    "UNDOCTL",
+    "UNDOMARKS",
     "GRIDMAJOR",
     "DYNMODE",
     "DYNPIFORMAT",
     "DYNPICOORDS",
     "LWDISPLAY",
+    "SELECTSIMILARMODE",
+    "OBJECTISOLATIONMODE",
     "QPMODE",
     "PICKBOX",
     "APERTURE",
     "PICKFIRST",
     "PICKADD",
+    "PICKSTYLE",
     "GRIPSIZE",
     "CURSORSIZE",
     "MAXARRAY",
+    "ZOOMFACTOR",
     "LASTPOINT",
     "FONTALT",
     "FONTFALLBACK",
+    "SAVETIME",
+    "SAVEFILEPATH",
 ];
 
 pub fn get(s: &Session, name: &str) -> Option<Value> {
@@ -40,9 +53,15 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
     let v = match n.as_str() {
         "OSMODE" => json!(st.osmode),
         "OSNAPHATCH" => json!(i32::from(st.osnaphatch)),
+        // AutoCAD's values: positive on, negative off (4 = every annotative object).
+        "ANNOAUTOSCALE" => json!(if st.annoautoscale { 4 } else { -4 }),
+        // Paper units per drawing unit of the current annotation scale (1:50 → 0.02).
+        "CANNOSCALEVALUE" => json!(1.0 / s.doc().ok()?.current_anno_scale().factor()),
         "ORTHOMODE" => json!(i32::from(st.orthomode)),
         "POLARMODE" => json!(st.polar_flags),
-        "POLARADDANG" => json!(st.polaraddang.iter().map(|a| format!("{}", (a.to_degrees() * 1e6).round() / 1e6)).collect::<Vec<_>>().join(";")),
+        "POLARADDANG" => json!(format_angle_list(&st.polaraddang)),
+        "POLARDIST" => json!(st.polardist),
+        "SNAPTYPE" => json!(i32::from(st.polarsnap)),
         // Marker, tooltip and tracking tooltip always on (1 + 4 + 32); polar 8, tracking 16.
         "AUTOSNAP" => json!(37 + 8 * u32::from(st.polarmode) + 16 * u32::from(st.otrack)),
         "POLARANG" => json!(st.polarang.to_degrees()),
@@ -55,20 +74,28 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "DYNPIFORMAT" => json!(i32::from(st.dynpi_cartesian)),
         "DYNPICOORDS" => json!(i32::from(st.dynpi_absolute)),
         "LWDISPLAY" => json!(i32::from(st.lwdisplay)),
+        "SELECTSIMILARMODE" => json!(st.selectsimilarmode),
+        // Isolation is temporary: hidden objects show again when the drawing is reopened.
+        "OBJECTISOLATIONMODE" => json!(0),
         "QPMODE" => json!(i32::from(st.qpmode)),
         "PICKBOX" => json!(st.pickbox),
         "APERTURE" => json!(st.aperture),
         "PICKFIRST" => json!(i32::from(st.pickfirst)),
         "PICKADD" => json!(i32::from(st.pickadd)),
+        "PICKSTYLE" => json!(st.pickstyle),
         "GRIPSIZE" => json!(st.gripsize),
         "CURSORSIZE" => json!(st.cursorsize),
         "MAXARRAY" => json!(st.maxarray),
+        "ZOOMFACTOR" => json!(st.zoomfactor),
         "LASTPOINT" => json!([s.last_point.x, s.last_point.y, 0.0]),
         // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
         "ANGBASE" => json!(s.doc().ok()?.header.f64("ANGBASE", 0.0).to_degrees()),
         // Process-wide font substitution (profile settings, not saved in the drawing).
         "FONTALT" => json!(cadcraft_fonts::ttf::font_alt()),
         "FONTFALLBACK" => json!(cadcraft_fonts::ttf::fallback_fonts()),
+        // Autosave (profile settings too).
+        "SAVETIME" => json!(crate::autosave::savetime()),
+        "SAVEFILEPATH" => json!(crate::autosave::savefilepath()),
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         "DWGNAME" => json!(s.state().map(|d| d.title.clone()).unwrap_or_default()),
         "DBMOD" => json!(s.state().map(|d| i32::from(d.is_dirty())).unwrap_or(0)),
@@ -80,6 +107,9 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
                 })
                 .unwrap_or_default()
         ),
+        // UNDO state of the drawing: Control/Auto/group bits and the number of marks.
+        "UNDOCTL" => json!(s.state().ok()?.undo_ctl.bits()),
+        "UNDOMARKS" => json!(s.state().ok()?.undo_marks()),
         "VIEWCTR" => {
             let v = s.state().ok()?.view();
             json!([v.center.x, v.center.y, 0.0])
@@ -92,6 +122,9 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
             json!([p.x, p.y, 0.0])
         }
         _ => {
+            if let Some(v) = table::get(s, &n) {
+                return Some(v);
+            }
             let d = s.doc().ok()?;
             match d.header.get(&n) {
                 Some(h) => serde_json::to_value(h).ok()?,
@@ -122,10 +155,23 @@ fn as_pt(v: &Value) -> Option<cadcraft_geom::Vec2> {
 }
 
 /// Variables `get` reports from session or drawing state that `set` can't change.
-const READ_ONLY: &[&str] = &["CMDNAMES", "DWGNAME", "DBMOD", "CTAB", "LASTPOINT", "VIEWCTR", "VIEWSIZE", "EXTMIN", "EXTMAX"];
+const READ_ONLY: &[&str] = &["CMDNAMES", "DWGNAME", "DBMOD", "CTAB", "LASTPOINT", "VIEWCTR", "VIEWSIZE", "EXTMIN", "EXTMAX", "UNDOCTL", "UNDOMARKS"];
 
 pub fn is_read_only(name: &str) -> bool {
-    READ_ONLY.iter().any(|r| r.eq_ignore_ascii_case(name.trim()))
+    READ_ONLY.iter().any(|r| r.eq_ignore_ascii_case(name.trim())) || table::is_read_only(&name.trim().to_ascii_uppercase())
+}
+
+/// POLARADDANG as typed: up to ten angles in degrees separated by `;` (radians out); `None` when
+/// any is not a number or there are too many.
+pub fn parse_angle_list(text: &str) -> Option<Vec<f64>> {
+    let angles: Option<Vec<f64>> =
+        text.split(';').map(str::trim).filter(|t| !t.is_empty()).map(|t| t.parse::<f64>().ok().filter(|a| a.is_finite())).collect();
+    Some(angles.filter(|a| a.len() <= 10)?.into_iter().map(f64::to_radians).collect())
+}
+
+/// POLARADDANG as shown: degrees separated by `;`.
+pub fn format_angle_list(angles: &[f64]) -> String {
+    angles.iter().map(|a| format!("{}", (a.to_degrees() * 1e6).round() / 1e6)).collect::<Vec<_>>().join(";")
 }
 
 pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
@@ -138,15 +184,18 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     match n.as_str() {
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
         "OSNAPHATCH" => st.osnaphatch = as_bool(v).ok_or_else(bad)?,
+        "ANNOAUTOSCALE" => st.annoautoscale = as_i(v).filter(|i| (-4..=4).contains(i)).ok_or_else(bad)? > 0,
+        // A scale of the drawing's list; ANNOAUTOSCALE adds it to the annotative objects.
+        "CANNOSCALE" => crate::cmd::annoscale::set_current(s, v.as_str().ok_or_else(bad)?)?,
+        "CANNOSCALEVALUE" => return Err(EngineError::BadParams { cmd: "setvar".into(), msg: format!("{n} is read-only") }),
         "ORTHOMODE" => st.orthomode = as_bool(v).ok_or_else(bad)?,
         "POLARMODE" => st.polar_flags = as_i(v).filter(|b| (0..=15).contains(b)).ok_or_else(bad)? as u32,
         "POLARADDANG" => {
             let text = v.as_str().map(str::to_string).or_else(|| as_f64(v).map(|f| f.to_string())).ok_or_else(bad)?;
-            let angles: Option<Vec<f64>> =
-                text.split(';').map(str::trim).filter(|t| !t.is_empty()).map(|t| t.parse::<f64>().ok().filter(|a| a.is_finite())).collect();
-            let angles = angles.filter(|a| a.len() <= 10).ok_or_else(bad)?;
-            st.polaraddang = angles.into_iter().map(f64::to_radians).collect();
+            st.polaraddang = parse_angle_list(&text).ok_or_else(bad)?;
         }
+        "POLARDIST" => st.polardist = as_f64(v).filter(|d| *d >= 0.0 && *d < 1e12).ok_or_else(bad)?,
+        "SNAPTYPE" => st.polarsnap = as_i(v).filter(|b| (0..=1).contains(b)).ok_or_else(bad)? == 1,
         "AUTOSNAP" => {
             let bits = as_i(v).filter(|b| (0..=63).contains(b)).ok_or_else(bad)?;
             st.polarmode = bits & 8 != 0;
@@ -162,16 +211,28 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "DYNPIFORMAT" => st.dynpi_cartesian = as_bool(v).ok_or_else(bad)?,
         "DYNPICOORDS" => st.dynpi_absolute = as_bool(v).ok_or_else(bad)?,
         "LWDISPLAY" => st.lwdisplay = as_bool(v).ok_or_else(bad)?,
+        "SELECTSIMILARMODE" => st.selectsimilarmode = as_i(v).filter(|b| (0..=255).contains(b)).ok_or_else(bad)? as u32,
+        "OBJECTISOLATIONMODE" => match as_i(v) {
+            Some(0) => {}
+            Some(1) => return Err(EngineError::Other("OBJECTISOLATIONMODE 1 (isolation saved with the drawing) is not available yet".into())),
+            _ => return Err(bad()),
+        },
         "QPMODE" => st.qpmode = as_i(v).ok_or_else(bad)? > 0,
         "PICKBOX" => st.pickbox = as_f64(v).ok_or_else(bad)?.clamp(0.0, 50.0),
         "APERTURE" => st.aperture = as_f64(v).ok_or_else(bad)?.clamp(1.0, 50.0),
         "PICKFIRST" => st.pickfirst = as_bool(v).ok_or_else(bad)?,
         "PICKADD" => st.pickadd = as_bool(v).ok_or_else(bad)?,
+        "PICKSTYLE" => st.pickstyle = as_i(v).filter(|b| (0..=3).contains(b)).and_then(|b| u8::try_from(b).ok()).ok_or_else(bad)?,
         "GRIPSIZE" => st.gripsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 255.0),
         "CURSORSIZE" => st.cursorsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 100.0),
         "MAXARRAY" => st.maxarray = as_f64(v).ok_or_else(bad)?.clamp(100.0, 10_000_000.0) as u64,
+        "ZOOMFACTOR" => st.zoomfactor = as_i(v).filter(|z| (3..=100).contains(z)).ok_or_else(bad)? as u32,
         "FONTALT" => cadcraft_fonts::ttf::set_font_alt(v.as_str().ok_or_else(bad)?),
         "FONTFALLBACK" => cadcraft_fonts::ttf::set_fallback_fonts(v.as_str().ok_or_else(bad)?),
+        "SAVETIME" => crate::autosave::set_savetime(
+            as_f64(v).filter(|m| *m >= 0.0 && *m <= f64::from(crate::autosave::MAX_SAVETIME)).ok_or_else(bad)?.round() as u32,
+        ),
+        "SAVEFILEPATH" => crate::autosave::set_savefilepath(v.as_str().ok_or_else(bad)?),
         // A number is in degrees; text is an angle typed in AUNITS (SETVAR at the command line).
         "ANGBASE" => {
             let a = match v {
@@ -182,6 +243,9 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
             s.doc_mut()?.header.set_f64("ANGBASE", cadcraft_geom::norm_angle(a));
         }
         _ => {
+            if let Some(r) = table::set(s, &n, v) {
+                return r;
+            }
             let d = s.doc_mut()?;
             let val = match v {
                 Value::Number(x) if x.is_i64() => cadcraft_doc::HVal::Int(x.as_i64().unwrap_or(0)),
@@ -241,5 +305,6 @@ pub fn list(s: &Session) -> Value {
             }
         }
     }
+    table::list(s, &mut m);
     Value::Object(m)
 }

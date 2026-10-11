@@ -17,6 +17,7 @@ pub mod paper;
 mod plotstyle;
 mod point;
 pub mod raster;
+mod tolerance;
 pub mod units;
 mod wide;
 
@@ -27,6 +28,7 @@ use cadcraft_geom::{Bounds2, Mat3, Polyline, Vec2};
 pub use dim::{ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value};
 pub use fill::triangulate_evenodd;
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
+pub use tolerance::{gdt_points, tolerance_in};
 
 /// Handle carried by model-space geometry drawn inside a paper-space viewport (it belongs to no
 /// single paper-space entity, so selection highlighting never matches it).
@@ -354,18 +356,23 @@ fn with_point_view(d: &Drawing, space: &Space, opts: &Options) -> Options {
 const MAX_VIEWPORTS: usize = 256;
 
 /// A paper-space viewport: its border (as an ordinary entity) and model space seen through it.
-/// Viewport id 1 is the paper-space view itself and is not drawn.
+/// Viewport id 1 is the paper-space view itself and is not drawn. A clipped viewport shows
+/// model space through its clip boundary's outline (the boundary entity draws itself, so the
+/// rectangle is not drawn); a viewport turned off shows only its border.
 fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport) {
-    if vp.id == 1 || !e.common.visible {
+    if vp.id == 1 || !e.common.visible || d.is_hidden_object(e.handle) {
         return;
     }
     // The viewport's layer frozen hides its contents too (layer off hides only the border).
     if d.layer(&e.common.layer).is_some_and(|l| l.frozen) {
         return;
     }
+    let poly = viewport_clip(d, e.handle, vp);
     // Border (on the viewport's layer; layer off hides only the border).
-    entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
-    if b.list.expanded >= MAX_BLOCK_EXPANSION {
+    if poly.is_none() {
+        entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+    }
+    if b.list.expanded >= MAX_BLOCK_EXPANSION || !vp.on {
         return;
     }
     let center = vp.center.xy();
@@ -378,11 +385,15 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         return;
     }
     let half = Vec2::new(vp.width / 2.0, vp.height / 2.0);
-    let rect = Bounds2::new(center - half, center + half);
+    let rect = match &poly {
+        Some(p) => p.bounds(),
+        None => Bounds2::new(center - half, center + half),
+    };
     let xf = Mat3::translate(center).then_before(Mat3::scale(s, s)).then_before(Mat3::translate(-vp.view_center));
-    let mhalf = half / s;
+    let mhalf = Vec2::new(rect.width(), rect.height()) / (2.0 * s);
+    let mcenter = vp.view_center + (rect.center() - center) / s;
     // Model window with slack: entity bounds are approximate (text, dimensions).
-    let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
+    let win = Bounds2::new(mcenter - mhalf, mcenter + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
     let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None };
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
@@ -400,35 +411,75 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         entity(&mut sub, &Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) }, me);
     }
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
-    append_clipped(&mut b.list, &sub.list, &rect);
+    match &poly {
+        Some(p) => append_clipped(&mut b.list, &sub.list, &Clip::Poly(p)),
+        None => append_clipped(&mut b.list, &sub.list, &Clip::Rect(rect)),
+    }
 }
 
-/// Append `src` to `dst`, clipped to `rect`.
-fn append_clipped(dst: &mut DisplayList, src: &DisplayList, rect: &Bounds2) {
+/// The clip region of a clipped viewport: the outline of its clip boundary entity, when that
+/// is a closed shape in the drawing. `None` for a rectangular viewport (or a dangling,
+/// unusable or self-referencing boundary, which falls back to the rectangle).
+pub fn viewport_clip(d: &Drawing, handle: Handle, vp: &cadcraft_doc::Viewport) -> Option<clip::PolyClip> {
+    let h = vp.clip.filter(|h| *h != handle)?;
+    let be = d.entity(h)?;
+    clip::PolyClip::new(&clip::boundary_polygon(&be.kind)?)
+}
+
+/// What viewport contents are clipped to.
+enum Clip<'a> {
+    /// The viewport rectangle (the fast path).
+    Rect(Bounds2),
+    /// A clip boundary's outline.
+    Poly(&'a clip::PolyClip),
+}
+
+/// Append `src` to `dst`, clipped to `clip`.
+fn append_clipped(dst: &mut DisplayList, src: &DisplayList, clip: &Clip) {
     for p in &src.prims {
         let pts = src.points(p);
-        match p.kind {
-            Kind::Polyline => {
+        match (p.kind, clip) {
+            (Kind::Polyline, Clip::Rect(rect)) => {
                 for piece in clip::clip_polyline(pts, rect) {
                     push_raw(dst, p, Kind::Polyline, &piece);
                 }
             }
-            Kind::Tris | Kind::Mask => {
+            (Kind::Polyline, Clip::Poly(c)) => {
+                for piece in c.clip_polyline(pts) {
+                    push_raw(dst, p, Kind::Polyline, &piece);
+                }
+            }
+            (Kind::Tris | Kind::Mask, Clip::Rect(rect)) => {
                 let t = clip::clip_triangles(pts, rect);
                 push_raw(dst, p, p.kind, &t);
             }
-            Kind::Point => {
+            (Kind::Tris | Kind::Mask, Clip::Poly(c)) => {
+                let t = c.clip_triangles(pts);
+                push_raw(dst, p, p.kind, &t);
+            }
+            (Kind::Point, _) => {
+                let inside = |q: Vec2| match clip {
+                    Clip::Rect(rect) => rect.contains(q),
+                    Clip::Poly(c) => c.contains(q),
+                };
                 if let Some(q) = pts.first()
-                    && rect.contains(*q)
+                    && inside(*q)
                 {
                     push_raw(dst, p, Kind::Point, &[*q]);
                 }
             }
-            Kind::Infinite { ray } => {
+            (Kind::Infinite { ray }, Clip::Rect(rect)) => {
                 if let (Some(base), Some(dir)) = (pts.first(), pts.get(1))
                     && let Some((a, c)) = clip::clip_infinite(*base, *dir, ray, rect)
                 {
                     push_raw(dst, p, Kind::Polyline, &[a, c]);
+                }
+            }
+            (Kind::Infinite { ray }, Clip::Poly(c)) => {
+                if let (Some(base), Some(dir)) = (pts.first(), pts.get(1)) {
+                    for piece in c.clip_infinite(*base, *dir, ray) {
+                        push_raw(dst, p, Kind::Polyline, &piece);
+                    }
                 }
             }
         }
@@ -518,6 +569,10 @@ fn default_lineweight(d: &Drawing) -> f32 {
 }
 
 fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
+    // Hidden by ISOLATEOBJECTS / HIDEOBJECTS (and so in viewports and plots too).
+    if ctx.d.is_hidden_object(e.handle) {
+        return;
+    }
     // The entity's named plot style, for everything it draws (block contents set their own).
     let saved = b.named;
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
@@ -526,6 +581,24 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
 }
 
 fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
+    // A top-level annotative object draws at the view's annotation scale: a viewport's scale for
+    // model space seen through it, else the drawing's (CANNOSCALE in model space, 1:1 on paper).
+    if ctx.depth == 0 && cadcraft_doc::is_annotative(e) {
+        let mode = if ctx.top == VIEWPORT_CONTENT {
+            cadcraft_doc::anno_draw(e, 1.0 / ctx.xf.scale_factor().max(1e-12), ctx.d.anno_all_visible())
+        } else {
+            ctx.d.anno_draw(e)
+        };
+        match mode {
+            cadcraft_doc::AnnoDraw::Hidden => return,
+            cadcraft_doc::AnnoDraw::Scaled(f) => {
+                let mut scaled = cadcraft_doc::anno_scaled(e, f);
+                scaled.common.anno_scales.clear();
+                return entity_parts(b, ctx, &scaled);
+            }
+            cadcraft_doc::AnnoDraw::Plain => {}
+        }
+    }
     let (rgb, lw, lt, ltscale, visible) = resolve(ctx, e, b.plotting);
     if !visible {
         return;
@@ -669,6 +742,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             b.polyline(ctx, rgb, lw, &[o + u, o + v]);
         }
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
+        EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),
         EntityKind::Leader(l) => {
             let pts: Vec<Vec2> = l.vertices.iter().map(|v| v.xy()).collect();
             stroke(b, &pts);
