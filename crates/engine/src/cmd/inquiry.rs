@@ -8,8 +8,10 @@ use super::*;
 use crate::units::{format_angle, format_distance};
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
+mod regions;
+
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut v = vec![
         CommandSpec::new("dist", "Distance", run_dist)
             .menu(&["Tools", "Inquiry", "Distance"])
             .alias(&["di"])
@@ -52,7 +54,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(count::PARAMS)
             .interactive(|_| Ok(count::machine()))
             .noundo(),
-    ]
+    ];
+    v.extend(regions::specs());
+    v
 }
 
 fn fmt_d(s: &Session, v: f64) -> String {
@@ -225,6 +229,7 @@ fn object_area(s: &Session, h: Handle) -> Result<(f64, f64)> {
             }
             total
         }
+        EntityKind::Region(r) => (r.area(), r.perimeter()),
         _ => return Err(bad("area", "object has no area")),
     })
 }
