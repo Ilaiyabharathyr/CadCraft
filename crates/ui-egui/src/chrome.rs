@@ -190,7 +190,7 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
             app.ui.start_tab = false;
         }
         x += 24.0;
-        let mut tab = |ui: &mut egui::Ui, label: &str, active: bool, closable: bool, w: f32, id: egui::Id| -> (bool, bool) {
+        let mut tab = |ui: &mut egui::Ui, label: &str, active: bool, closable: bool, w: f32, id: egui::Id| -> (bool, bool, egui::Response) {
             let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height()));
             let resp = ui.interact(tr, id, Sense::click());
             ui.painter().rect_filled(
@@ -222,9 +222,9 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
             icons::describe_control(ui, &resp, label, Some(active), true);
             ui.painter().vline(tr.right(), tr.y_range(), Stroke::new(1.0, t.border));
             x += w;
-            (resp.clicked(), close)
+            (resp.clicked(), close, resp)
         };
-        let (c, _) = tab(ui, crate::tl!("Start"), app.ui.start_tab || app.session.docs.is_empty(), false, 110.0, ui.id().with("tab_start"));
+        let (c, _, _) = tab(ui, crate::tl!("Start"), app.ui.start_tab || app.session.docs.is_empty(), false, 110.0, ui.id().with("tab_start"));
         if c {
             app.ui.start_tab = true;
         }
@@ -238,7 +238,8 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
             .map(|(i, d)| (i, format!("{}{}", d.title, if d.is_dirty() { "*" } else { "" }), i == app.session.active))
             .collect();
         for (i, title, active) in titles {
-            let (c, x) = tab(ui, &title, active && !app.ui.start_tab, true, 170.0, ui.id().with(("tab", i)));
+            let (c, x, resp) = tab(ui, &title, active && !app.ui.start_tab, true, 170.0, ui.id().with(("tab", i)));
+            crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::drawing_tab_entries(app, i));
             if c {
                 switch_to = Some(i);
             }
@@ -309,6 +310,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             if resp.clicked() {
                 switch = Some(name.clone());
             }
+            crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::layout_tab_entries(app, name));
             x += w + 2.0;
             if i == 0 {
                 let pr = Rect::from_min_size(pos2(x, r.top() + 5.0), vec2(16.0, 16.0));
