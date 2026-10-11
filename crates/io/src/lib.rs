@@ -13,6 +13,7 @@ mod dxf_table;
 mod dxf_write;
 mod dxf_xref;
 pub mod pdf;
+pub mod plotter;
 pub mod svg;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).
@@ -103,6 +104,10 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
 /// extents. Formats that are not images (DXF, DWG) ignore the window. The window is checked with
 /// [`check_window`].
 pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<Vec<u8>> {
+    // A drawing template (.dwt) is DWG content.
+    if ext(name) == "dwt" {
+        return write_framed(d, &format!("{name}.dwg"), None);
+    }
     if let Some(w) = &window
         && is_image(name)
     {

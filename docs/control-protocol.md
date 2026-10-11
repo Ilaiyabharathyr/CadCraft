@@ -69,6 +69,8 @@ Panel IDs: `toolSets`, `layers`, `properties`, `externalReferences`. The protect
 
 `ui.dock` accepts `operation`; basic per-panel operations also require `panel`. The advanced `resizeSplit` operation below uses a split `path` instead of a panel. Basic operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|left|right|top|bottom`). Center groups with the target; side zones split beside it. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
 
+The QuickCalc palette (`quickCalc`) is not part of the default arrangement: QUICKCALC (`ui.panel.quickcalc`, Cmd+8) opens it, floating the first time.
+
 Invoke these UI commands through `engine.execute`, for example `{"command":"ui.dock","params":{"operation":"float","panel":"layers","rect":[100,100,320,440]}}`.
 
 Advanced `ui.dock` operations use the same validated transaction as pointer gestures:
@@ -113,7 +115,7 @@ Select a language with `engine.execute` and the UI command `ui.language`:
 {"id":1,"method":"engine.execute","params":{"command":"ui.language","params":{"lang":"uk"}}}
 ```
 
-Supported values are `auto`, `en` and `uk`. `ui.set` also accepts
+Supported values are `auto`, `en`, `uk` and `de`. `ui.set` also accepts
 `{"interfaceLanguage":"uk"}`; `ui.inspect` reports the saved choice in its UI state.
 Invalid choices leave the current language unchanged. Menus, command labels and prompt text
 returned by the control channel retain their English source text. See [localization.md](localization.md).

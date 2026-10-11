@@ -27,6 +27,7 @@ mod modify2;
 mod mtext_opts;
 mod overkill;
 mod pline_opts;
+pub mod plotters;
 mod props;
 pub use props::MatchProps;
 mod qselect;
@@ -166,6 +167,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
     SPECS.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(file::specs());
+        v.extend(file::alias_specs());
         v.extend(audit::specs());
         v.extend(edit::specs());
         v.extend(qselect::specs());
@@ -184,6 +186,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(modify2::specs());
         v.extend(groups::specs());
         v.extend(gripcmds::specs());
+        v.extend(file::compare::specs());
         v.extend(layer::specs());
         v.extend(layout::specs());
         v.extend(exchange::specs());
@@ -205,10 +208,14 @@ pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
 }
 
 /// Resolve a typed name or alias (AutoCAD-style short names such as `L`, `C`, `PL`) to an id.
+/// Command names win; the user's aliases (ALIASEDIT, REINIT) come before the built-in ones.
 pub fn resolve_alias(name: &str) -> String {
     let l = name.to_ascii_lowercase();
     if find_command(&l).is_some() {
         return l;
+    }
+    if let Some(id) = file::user_alias(&l) {
+        return id;
     }
     command_specs().iter().find(|c| c.aliases.iter().any(|a| a.eq_ignore_ascii_case(&l))).map(|c| c.id.to_string()).unwrap_or(l)
 }
