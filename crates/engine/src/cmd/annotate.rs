@@ -60,7 +60,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|s| Ok(Box::new(ChainM::new(s, true)))),
         CommandSpec::new("qdim", "Quick Dimension", run_qdim)
             .menu(&["Dimension", "Quick Dimension"])
-            .params("{handles?, at: [x,y], vertical?: bool}"),
+            .params("{handles?, at: [x,y], vertical?: bool}")
+            .interactive(|_| Ok(Box::new(QdimM::default()))),
         CommandSpec::new("dim", "Dimension", run_linear)
             .menu(&["Dimension", "Dimension"])
             .params("{p1, p2, at}")
@@ -746,6 +747,54 @@ fn run_dimspace(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
     }
     Ok(json!({ "spaced": others.len() }))
+}
+
+/// QDIM at the command line: select objects, then the dimension line location.
+#[derive(Default)]
+struct QdimM {
+    sel: super::machines::SelectPhase,
+    picked: Vec<Handle>,
+}
+
+impl Interactive for QdimM {
+    fn name(&self) -> &'static str {
+        "QDIM"
+    }
+    fn begin(&mut self, s: &mut Session) -> Result<Step> {
+        self.sel = super::machines::SelectPhase::begin(s);
+        if self.sel.done {
+            self.picked = self.sel.picked.clone();
+        }
+        Ok(Step::Continue)
+    }
+    fn prompt(&self, _s: &Session) -> Prompt {
+        if self.sel.done {
+            Prompt::new("Specify dimension line position", Accept::POINT)
+        } else {
+            self.sel.prompt()
+        }
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        if !self.sel.done {
+            return match self.sel.feed(s, &i)? {
+                super::machines::SelOutcome::More => Ok(Step::Continue),
+                super::machines::SelOutcome::Empty => Ok(Step::Done),
+                super::machines::SelOutcome::Done(hs) => {
+                    self.picked = hs;
+                    Ok(Step::Continue)
+                }
+            };
+        }
+        match i {
+            Input::Point(at) => {
+                let hs: Vec<String> = self.picked.iter().map(|h| h.hex()).collect();
+                run_qdim(s, &json!({ "handles": hs, "at": [at.x, at.y] }))?;
+                s.set_selection(Vec::new());
+                Ok(Step::Done)
+            }
+            _ => Ok(Step::Continue),
+        }
+    }
 }
 
 /// DIMOVERRIDE at the command line: variable, value (repeat), Enter, then select dimensions.

@@ -508,3 +508,33 @@ fn linetype_rename_updates_references() {
     assert!(s.execute("rename", &json!({ "table": "linetype", "from": "ByLayer", "to": "X" })).is_err());
     assert_eq!(s.doc().unwrap().entity(by_layer).unwrap().common.linetype, "ByLayer");
 }
+
+#[test]
+fn qdim_accepts_selection_and_location_interactively() {
+    let mut s = Session::new();
+    let l = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    s.cmdline("qdim").unwrap();
+    assert!(s.running.is_some());
+    s.input(crate::Input::Pick(vec![l])).unwrap();
+    s.cmdline("").unwrap();
+    s.input(crate::Input::Point(Vec2::new(0.0, 5.0))).unwrap();
+    assert!(s.running.is_none());
+    let d = s.doc().unwrap().model.last().unwrap().handle;
+    let dm = dim(&s, d);
+    assert!(near(dm.p13.xy(), Vec2::new(0.0, 0.0)));
+    assert!(near(dm.p14.xy(), Vec2::new(10.0, 0.0)));
+    assert!(near(dm.defpt.xy(), Vec2::new(0.0, 5.0)));
+}
+
+#[test]
+fn qdim_cancelled_before_location_creates_nothing() {
+    let mut s = Session::new();
+    let l = line(&mut s, [0.0, 0.0], [10.0, 0.0]);
+    let n = s.doc().unwrap().model.len();
+    s.cmdline("qdim").unwrap();
+    s.input(crate::Input::Pick(vec![l])).unwrap();
+    s.cmdline("").unwrap();
+    s.cancel();
+    assert!(s.running.is_none());
+    assert_eq!(s.doc().unwrap().model.len(), n);
+}
