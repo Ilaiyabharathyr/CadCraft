@@ -393,7 +393,7 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    needs: [version, macos, windows, linux, flatpak, web, freebsd]
+    needs: [version, macos, windows, linux, linux-riscv64, flatpak, web, freebsd]
     # Only the `release` branch publishes; a dry run on another branch stops before this job.
     if: github.ref == 'refs/heads/release'
     runs-on: ubuntu-latest
