@@ -85,7 +85,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     let r = match id {
         "ui.language" => {
             let Some(preference) = params.get("lang").and_then(Value::as_str).and_then(crate::i18n::Preference::parse) else {
-                return Some(Err("language must be auto, en or uk".into()));
+                return Some(Err("language must be auto, en, es or uk".into()));
             };
             app.ui.interface_language = preference;
             Ok(json!({"interfaceLanguage": preference.code()}))
@@ -155,10 +155,6 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "ui.toggle.filetabs" => {
             toggle(&mut app.ui.show_file_tabs, params);
             Ok(Value::Null)
-        }
-        // Typed or chosen from a menu or the tool bar: ask for the file (or show the preview).
-        "export" | "exp" | "import" | "imp" | "publish" | "preview" | "pre" if params.is_null() && app.session.state().is_ok() => {
-            return Some(crate::exchange::route(app, id));
         }
         "ui.toggle.statusbar" => {
             toggle(&mut app.ui.show_status_bar, params);
