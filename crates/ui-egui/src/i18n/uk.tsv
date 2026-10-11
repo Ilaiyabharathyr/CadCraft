@@ -27,6 +27,7 @@
 	<> Not Equal	<> Не дорівнює
 	= Equals	= Дорівнює
 	> Greater than	> Більше ніж
+	A variable name starts with a letter and has only letters, digits and _	Ім'я змінної починається з літери й містить лише літери, цифри та _
 	About	Про програму
 	About CADCraft	Про CADCraft
 	Absolute	Абсолютні
@@ -102,6 +103,7 @@
 	Change to Current Layer	Перенести на поточний шар
 	Circle	Коло
 	Circumference	Довжина кола
+	Clear History	Очистити журнал
 	Clear	Очистити
 	Clipboard	Буфер обміну
 	Close	Закрити
@@ -131,6 +133,7 @@
 	Continue	Продовжити
 	Contributors	Учасники
 	Control Vertices	Керувальні вершини
+	Convert	Перетворити
 	Copy	Копіювати
 	Copy Layout	Копіювати аркуш
 	Copy Nested Objects	Копіювати вкладені об'єкти
@@ -259,6 +262,7 @@
 	Entire drawing	Усе креслення
 	Equal	Рівність
 	Erase	Стерти
+	Evaluate	Обчислити
 	Exclude from new selection set	Виключити з нового набору вибраних об'єктів
 	Explode	Розчленувати
 	Export	Експортувати
@@ -294,6 +298,7 @@
 	Geometric Constraint	Геометричне обмеження
 	Geometric Constraints	Геометричні обмеження
 	Geometry	Геометрія
+	Get from the Drawing	Взяти з креслення
 	Get Variable	Отримати змінну
 	Get View	Отримати вид
 	Global	Глобально
@@ -324,6 +329,7 @@
 	Hide All Dynamic Dimensions	Приховати всі динамічні розміри
 	Hide Layer List	Приховати список шарів
 	Hide Palettes	Приховати палітри
+	History	Журнал
 	Home	Початковий вид
 	Horizontal	Горизонтальність
 	HorizontalDistance	Горизонтальна відстань
@@ -516,6 +522,7 @@
 	Parametric	Параметризація
 	Paste	Вставити
 	Paste as Block	Вставити як блок
+	Paste to Command Line	Вставити в командний рядок
 	Paste to Original Coordinates	Вставити у вихідні координати
 	Path Array	Масив уздовж траєкторії
 	Pattern	Візерунок
@@ -585,6 +592,7 @@
 	Quick Select Properties	Властивості швидкого вибору
 	Quick Select...	Швидкий вибір...
 	QuickCalc	Калькулятор
+	QuickCalc Pick	Вибір для калькулятора
 	Quit CADCraft	Вийти з CADCraft
 	Radius	Радіус
 	Raster Image	Растрове зображення
@@ -889,6 +897,7 @@
 	Switch between model space in a viewport and paper space	Перемкнути між простором моделі у видовому екрані та простором аркуша
 	Symmetric	Симетрія
 	Synchronize Attributes	Синхронізувати атрибути
+	To	До
 	Toggle PICKADD (off: each pick replaces the selection)	Перемкнути PICKADD (вимкнено: кожен вибір замінює набір вибраних об'єктів)
 	Toggle PICKADD (on: picks add to the selection)	Перемкнути PICKADD (увімкнено: вибране додається до набору вибраних об'єктів)
 	TOP	ЗВЕРХУ
@@ -931,6 +940,7 @@
 	Ungroup	Розгрупувати
 	Union	Об'єднання
 	Unisolate Layer	Скасувати ізоляцію шарів
+	Units Conversion	Перетворення одиниць
 	Units...	Одиниці...
 	Unlock Layer	Розблокувати шар
 	Unmerge Cells	Розділити комірки
@@ -941,10 +951,12 @@
 	User	Користувач
 	User Parameters	Параметри користувача
 	Username	Ім'я користувача
+	Volume	Об'єм
 	VP Color	Колір ВЕ
 	VP Freeze	Заморожування ВЕ
 	Value	Значення
 	Value:	Значення:
+	Variables	Змінні
 	Version	Версія
 	Version {version}	Версія {version}
 	Vertical	Вертикальність
