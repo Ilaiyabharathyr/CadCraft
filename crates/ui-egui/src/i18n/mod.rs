@@ -15,17 +15,20 @@ pub enum Preference {
     Auto,
     #[serde(rename = "en")]
     English,
+    #[serde(rename = "es")]
+    Spanish,
     #[serde(rename = "uk")]
     Ukrainian,
 }
 
 impl Preference {
-    pub const ALL: [Self; 3] = [Self::Auto, Self::English, Self::Ukrainian];
+    pub const ALL: [Self; 4] = [Self::Auto, Self::English, Self::Spanish, Self::Ukrainian];
 
     pub fn code(self) -> &'static str {
         match self {
             Self::Auto => "auto",
             Self::English => "en",
+            Self::Spanish => "es",
             Self::Ukrainian => "uk",
         }
     }
@@ -34,6 +37,7 @@ impl Preference {
         match self {
             Self::Auto => t("Auto (system language)"),
             Self::English => "English",
+            Self::Spanish => "Español",
             Self::Ukrainian => "Українська",
         }
     }
@@ -50,6 +54,7 @@ impl Preference {
     pub fn resolve(self, locales: &[String]) -> &'static str {
         match self {
             Self::English => "en",
+            Self::Spanish => "es",
             Self::Ukrainian => "uk",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
@@ -63,12 +68,13 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 2] = [
+pub static LANGUAGES: [Language; 3] = [
     Language { code: "en", name: "English", source: "", catalog: OnceLock::new() },
+    Language { code: "es", name: "Español", source: include_str!("es.tsv"), catalog: OnceLock::new() },
     Language { code: "uk", name: "Українська", source: include_str!("uk.tsv"), catalog: OnceLock::new() },
 ];
 
-/// BCP 47 and POSIX locale tags, including `uk-UA` and `uk_UA.UTF-8`.
+/// BCP 47 and POSIX locale tags, including `es-MX`, `es_ES.UTF-8` and `uk-UA`.
 pub fn locale_language(tag: &str) -> Option<&'static str> {
     let primary = tag.trim().split(['-', '_', '.', '@']).next()?;
     LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(primary)).map(|l| l.code)
@@ -164,7 +170,9 @@ pub fn plural_uk(n: u64) -> usize {
 pub fn count(n: u64, one: &str, other: &str) -> String {
     let language = CURRENT.get();
     let source = catalog(language).and_then(|c| c.get(&("@plural", one))).copied();
-    let form = source.and_then(|s| s.split('|').nth(plural_uk(n))).unwrap_or(if n == 1 { one } else { other });
+    // English and Spanish use one/other for integer counts; Ukrainian uses one/few/many.
+    let index = if language == "uk" { plural_uk(n) } else { usize::from(n != 1) };
+    let form = source.and_then(|s| s.split('|').nth(index)).unwrap_or(if n == 1 { one } else { other });
     format(form, &[("n", n.to_string())])
 }
 
