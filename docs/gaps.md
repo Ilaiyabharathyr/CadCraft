@@ -110,9 +110,6 @@ Detail: [localization-parity.md](localization-parity.md).
 |---|---|---|
 | L1 | Catalog covers the UI (989 rows, #36) but not engine diagnostics, CLI/MCP replies or command history | 4–6 |
 | L2 | AutoCAD for Mac's other languages (zh-Hans, es, fr, ja, ko, it; de landed 2026-10-11) plus pt, hi, ar, id, vi from the standard's list | 35–55 + native review |
-| L3 | Complex-script shaping (Arabic, Devanagari) and bidi/RTL in drawing text and UI | 30–45 |
-| L1 | Catalog covers the UI (936 rows, #36) but not engine diagnostics, CLI/MCP replies or command history | 4–6 |
-| L2 | AutoCAD for Mac's 7 other languages (zh-Hans, es, fr, ja, de, ko, it) plus pt, hi, ar, id, vi from the standard's list | 40–60 + native review |
 | L3 | Complex-script shaping for Devanagari and other Indic scripts in drawing text; RTL (mirrored) UI. Arabic-script shaping and bidi in drawing text landed (#287) | 20–30 |
 | L4 | IME fixes on every platform (PRs #110–#119); vertical text styles | 6–10 |
 

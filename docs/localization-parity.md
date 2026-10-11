@@ -1,7 +1,6 @@
 # Localization parity
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (German catalog landed: second non-English language, per-language plural rules) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (right-to-left drawing text and Arabic-script shaping, #287) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How far CADCraft's interface and drawing text are from AutoCAD's languages. Summarised in
 [ROADMAP.md](../ROADMAP.md#languages); work items in [gaps.md](gaps.md#localization).
@@ -66,7 +65,7 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Vietnamese | vi | 0 (0%) | 0% | Latin with stacked diacritics: renders per code point, untested | no | none | 3–5 h |
 | Ukrainian | uk | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in Ukrainian | Cyrillic: yes (bundled egui fonts) | translated by a contributor; no second review | partial | 2–4 h |
 
-Other languages shipped: Ukrainian and German (both partial). AutoCAD for Mac ships 7
+Other languages shipped: Ukrainian, Brazilian Portuguese and German (all partial). AutoCAD for Mac ships 7
 non-English languages (zh-Hans, es, fr, ja, de, ko, it); of those, CADCraft now ships German,
 and additionally Ukrainian, which AutoCAD for Mac doesn't ship.
 
