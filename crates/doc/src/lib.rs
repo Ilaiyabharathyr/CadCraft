@@ -9,19 +9,21 @@
 mod constraint;
 mod entity;
 mod extents;
+mod gdt;
 mod header;
 pub mod library;
 mod plotstyle;
 mod store;
 mod tables;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub use cadcraft_color as color;
 pub use cadcraft_geom as geom;
 pub use constraint::*;
 pub use entity::*;
 pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
+pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;
 pub use store::EntityStore;
@@ -75,6 +77,9 @@ pub struct Drawing {
     pub parametric: Parametric,
     /// Next free handle.
     pub handseed: u64,
+    /// Objects hidden for this session by ISOLATEOBJECTS / HIDEOBJECTS. Never written to a file:
+    /// a drawing opens with everything shown again.
+    pub hidden_objects: BTreeSet<Handle>,
 }
 
 impl Default for Drawing {
@@ -122,6 +127,7 @@ impl Drawing {
             constraints: Vec::new(),
             parametric: Parametric::default(),
             handseed: 0x100,
+            hidden_objects: BTreeSet::new(),
         }
     }
 
@@ -267,9 +273,15 @@ impl Drawing {
         Ok(h)
     }
 
-    /// Effective visibility of an entity (its own flag, its layer on/thawed).
+    /// Effective visibility of an entity (its own flag, its layer on/thawed, not hidden by object
+    /// isolation).
     pub fn is_visible(&self, e: &Entity) -> bool {
-        e.common.visible && self.layer(&e.common.layer).is_none_or(Layer::visible)
+        e.common.visible && self.layer(&e.common.layer).is_none_or(Layer::visible) && !self.is_hidden_object(e.handle)
+    }
+
+    /// Whether ISOLATEOBJECTS / HIDEOBJECTS hid `h` for this session.
+    pub fn is_hidden_object(&self, h: Handle) -> bool {
+        !self.hidden_objects.is_empty() && self.hidden_objects.contains(&h)
     }
 
     /// Bounds of all visible entities in a space.
