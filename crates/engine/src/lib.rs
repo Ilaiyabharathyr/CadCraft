@@ -307,7 +307,7 @@ pub struct Settings {
     /// MAXARRAY: the most objects one array command creates (items × selected objects).
     pub maxarray: u64,
     pub isodraft: bool,
-    /// ANNOAUTOSCALE on: changing the annotation scale adds it to the annotative objects.
+    pub annoallvisible: bool,
     pub annoautoscale: bool,
     /// QPMODE: show the Quick Properties palette when objects are selected.
     pub qpmode: bool,
@@ -346,6 +346,7 @@ impl Default for Settings {
             cursorsize: 5.0,
             maxarray: 100_000,
             isodraft: false,
+            annoallvisible: true,
             annoautoscale: false,
             qpmode: false,
             polar_flags: 0,
