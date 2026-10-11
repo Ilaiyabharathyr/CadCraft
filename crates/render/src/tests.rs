@@ -77,7 +77,7 @@ fn hatch_pattern_and_solid() {
     let h = Hatch {
         pattern: "ANSI31".into(),
         solid: false,
-        loops: vec![HatchLoop { vertices: sq.clone(), outer: true }],
+        loops: vec![HatchLoop { vertices: sq.clone(), outer: true, sources: Vec::new() }],
         scale: 1.0,
         angle: 0.0,
         associative: false,
@@ -135,6 +135,8 @@ fn vp(center: Vec2, w: f64, h: f64, view_center: Vec2, view_height: f64, id: u32
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: Vec::new(),
+        clip: None,
+        on: true,
     }
 }
 
@@ -285,6 +287,7 @@ fn truetype_mtext_and_dimension_text() {
             contents: "A{\\C1;B}\\P\\S1/2;".into(),
             line_spacing: 1.0,
             line_spacing_exact: false,
+            columns: None,
         }),
     )
     .unwrap();
@@ -315,6 +318,7 @@ fn lin_dim() -> cadcraft_doc::Dimension {
         block: None,
         overrides: Default::default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     }
 }
 

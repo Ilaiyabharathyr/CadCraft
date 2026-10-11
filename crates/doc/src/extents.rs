@@ -49,6 +49,14 @@ fn blank(s: &str) -> bool {
 }
 
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
+    // A top-level annotative object measures as it draws at the current annotation scale.
+    if depth == 0 {
+        match d.anno_draw(e) {
+            crate::AnnoDraw::Plain => {}
+            crate::AnnoDraw::Hidden => return Bounds2::EMPTY,
+            crate::AnnoDraw::Scaled(f) => return bounds_in(d, &crate::anno_scaled(e, f), 0, &mut HashMap::new()),
+        }
+    }
     bounds_in(d, e, depth, &mut HashMap::new())
 }
 
@@ -65,8 +73,13 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
         EntityKind::MText(t) => {
             let lines = t.contents.split("\\P").count().max(1);
             let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
-            let w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
-            let h = t.height * 1.66 * lines as f64;
+            let mut w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
+            let mut h = t.height * 1.66 * lines as f64;
+            if let Some(c) = t.columns.as_ref().filter(|_| t.width > 0.0) {
+                // Columns side by side, the text flowing down each in turn.
+                w = c.total_width(t.width);
+                h = if c.max_height() > 0.0 { c.max_height() } else { h };
+            }
             let (dx, dy) = match t.attach {
                 2 | 5 | 8 => (-w / 2.0, 0.0),
                 3 | 6 | 9 => (-w, 0.0),
@@ -162,6 +175,8 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             let h: f64 = t.row_heights.iter().sum();
             Bounds2::new(t.insert.xy(), t.insert.xy() + Vec2::new(w, -h))
         }
+        // Text widths estimated like `text_box`; the renderer measures the font.
+        EntityKind::Tolerance(t) => t.layout(d, &|s, h| h * 0.9 * s.chars().count() as f64).bounds,
         EntityKind::Image(i) => {
             let o = i.insert.xy();
             let u = i.u.xy() * i.size.x;

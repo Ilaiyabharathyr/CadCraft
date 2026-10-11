@@ -13,10 +13,12 @@ mod fill;
 mod hatch;
 mod linetype;
 mod linetype_text;
+mod mline;
 pub mod paper;
 mod plotstyle;
 mod point;
 pub mod raster;
+mod tolerance;
 pub mod units;
 mod wide;
 
@@ -27,6 +29,7 @@ use cadcraft_geom::{Bounds2, Mat3, Polyline, Vec2};
 pub use dim::{ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value};
 pub use fill::triangulate_evenodd;
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
+pub use tolerance::{gdt_points, tolerance_in};
 
 /// Handle carried by model-space geometry drawn inside a paper-space viewport (it belongs to no
 /// single paper-space entity, so selection highlighting never matches it).
@@ -354,18 +357,23 @@ fn with_point_view(d: &Drawing, space: &Space, opts: &Options) -> Options {
 const MAX_VIEWPORTS: usize = 256;
 
 /// A paper-space viewport: its border (as an ordinary entity) and model space seen through it.
-/// Viewport id 1 is the paper-space view itself and is not drawn.
+/// Viewport id 1 is the paper-space view itself and is not drawn. A clipped viewport shows
+/// model space through its clip boundary's outline (the boundary entity draws itself, so the
+/// rectangle is not drawn); a viewport turned off shows only its border.
 fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport) {
-    if vp.id == 1 || !e.common.visible {
+    if vp.id == 1 || !e.common.visible || d.is_hidden_object(e.handle) {
         return;
     }
     // The viewport's layer frozen hides its contents too (layer off hides only the border).
     if d.layer(&e.common.layer).is_some_and(|l| l.frozen) {
         return;
     }
+    let poly = viewport_clip(d, e.handle, vp);
     // Border (on the viewport's layer; layer off hides only the border).
-    entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
-    if b.list.expanded >= MAX_BLOCK_EXPANSION {
+    if poly.is_none() {
+        entity(b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+    }
+    if b.list.expanded >= MAX_BLOCK_EXPANSION || !vp.on {
         return;
     }
     let center = vp.center.xy();
@@ -378,11 +386,15 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         return;
     }
     let half = Vec2::new(vp.width / 2.0, vp.height / 2.0);
-    let rect = Bounds2::new(center - half, center + half);
+    let rect = match &poly {
+        Some(p) => p.bounds(),
+        None => Bounds2::new(center - half, center + half),
+    };
     let xf = Mat3::translate(center).then_before(Mat3::scale(s, s)).then_before(Mat3::translate(-vp.view_center));
-    let mhalf = half / s;
+    let mhalf = Vec2::new(rect.width(), rect.height()) / (2.0 * s);
+    let mcenter = vp.view_center + (rect.center() - center) / s;
     // Model window with slack: entity bounds are approximate (text, dimensions).
-    let win = Bounds2::new(vp.view_center - mhalf, vp.view_center + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
+    let win = Bounds2::new(mcenter - mhalf, mcenter + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
     let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None };
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
@@ -400,35 +412,75 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
         entity(&mut sub, &Ctx { lt_factor, ..top_ctx(d, xf, VIEWPORT_CONTENT, &vp.frozen_layers, &vp.layer_colors) }, me);
     }
     b.list.expanded = b.list.expanded.saturating_add(sub.list.expanded);
-    append_clipped(&mut b.list, &sub.list, &rect);
+    match &poly {
+        Some(p) => append_clipped(&mut b.list, &sub.list, &Clip::Poly(p)),
+        None => append_clipped(&mut b.list, &sub.list, &Clip::Rect(rect)),
+    }
 }
 
-/// Append `src` to `dst`, clipped to `rect`.
-fn append_clipped(dst: &mut DisplayList, src: &DisplayList, rect: &Bounds2) {
+/// The clip region of a clipped viewport: the outline of its clip boundary entity, when that
+/// is a closed shape in the drawing. `None` for a rectangular viewport (or a dangling,
+/// unusable or self-referencing boundary, which falls back to the rectangle).
+pub fn viewport_clip(d: &Drawing, handle: Handle, vp: &cadcraft_doc::Viewport) -> Option<clip::PolyClip> {
+    let h = vp.clip.filter(|h| *h != handle)?;
+    let be = d.entity(h)?;
+    clip::PolyClip::new(&clip::boundary_polygon(&be.kind)?)
+}
+
+/// What viewport contents are clipped to.
+enum Clip<'a> {
+    /// The viewport rectangle (the fast path).
+    Rect(Bounds2),
+    /// A clip boundary's outline.
+    Poly(&'a clip::PolyClip),
+}
+
+/// Append `src` to `dst`, clipped to `clip`.
+fn append_clipped(dst: &mut DisplayList, src: &DisplayList, clip: &Clip) {
     for p in &src.prims {
         let pts = src.points(p);
-        match p.kind {
-            Kind::Polyline => {
+        match (p.kind, clip) {
+            (Kind::Polyline, Clip::Rect(rect)) => {
                 for piece in clip::clip_polyline(pts, rect) {
                     push_raw(dst, p, Kind::Polyline, &piece);
                 }
             }
-            Kind::Tris | Kind::Mask => {
+            (Kind::Polyline, Clip::Poly(c)) => {
+                for piece in c.clip_polyline(pts) {
+                    push_raw(dst, p, Kind::Polyline, &piece);
+                }
+            }
+            (Kind::Tris | Kind::Mask, Clip::Rect(rect)) => {
                 let t = clip::clip_triangles(pts, rect);
                 push_raw(dst, p, p.kind, &t);
             }
-            Kind::Point => {
+            (Kind::Tris | Kind::Mask, Clip::Poly(c)) => {
+                let t = c.clip_triangles(pts);
+                push_raw(dst, p, p.kind, &t);
+            }
+            (Kind::Point, _) => {
+                let inside = |q: Vec2| match clip {
+                    Clip::Rect(rect) => rect.contains(q),
+                    Clip::Poly(c) => c.contains(q),
+                };
                 if let Some(q) = pts.first()
-                    && rect.contains(*q)
+                    && inside(*q)
                 {
                     push_raw(dst, p, Kind::Point, &[*q]);
                 }
             }
-            Kind::Infinite { ray } => {
+            (Kind::Infinite { ray }, Clip::Rect(rect)) => {
                 if let (Some(base), Some(dir)) = (pts.first(), pts.get(1))
                     && let Some((a, c)) = clip::clip_infinite(*base, *dir, ray, rect)
                 {
                     push_raw(dst, p, Kind::Polyline, &[a, c]);
+                }
+            }
+            (Kind::Infinite { ray }, Clip::Poly(c)) => {
+                if let (Some(base), Some(dir)) = (pts.first(), pts.get(1)) {
+                    for piece in c.clip_infinite(*base, *dir, ray) {
+                        push_raw(dst, p, Kind::Polyline, &piece);
+                    }
                 }
             }
         }
@@ -518,6 +570,10 @@ fn default_lineweight(d: &Drawing) -> f32 {
 }
 
 fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
+    // Hidden by ISOLATEOBJECTS / HIDEOBJECTS (and so in viewports and plots too).
+    if ctx.d.is_hidden_object(e.handle) {
+        return;
+    }
     // The entity's named plot style, for everything it draws (block contents set their own).
     let saved = b.named;
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
@@ -526,6 +582,24 @@ fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
 }
 
 fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
+    // A top-level annotative object draws at the view's annotation scale: a viewport's scale for
+    // model space seen through it, else the drawing's (CANNOSCALE in model space, 1:1 on paper).
+    if ctx.depth == 0 && cadcraft_doc::is_annotative(e) {
+        let mode = if ctx.top == VIEWPORT_CONTENT {
+            cadcraft_doc::anno_draw(e, 1.0 / ctx.xf.scale_factor().max(1e-12), ctx.d.anno_all_visible())
+        } else {
+            ctx.d.anno_draw(e)
+        };
+        match mode {
+            cadcraft_doc::AnnoDraw::Hidden => return,
+            cadcraft_doc::AnnoDraw::Scaled(f) => {
+                let mut scaled = cadcraft_doc::anno_scaled(e, f);
+                scaled.common.anno_scales.clear();
+                return entity_parts(b, ctx, &scaled);
+            }
+            cadcraft_doc::AnnoDraw::Plain => {}
+        }
+    }
     let (rgb, lw, lt, ltscale, visible) = resolve(ctx, e, b.plotting);
     if !visible {
         return;
@@ -590,10 +664,11 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                     entity(b, &sub, be);
                 }
             } else {
-                dimension(b, ctx, e, dm, lw);
+                dimension(b, ctx, e, dm, lw, lt.as_ref(), ltscale);
             }
         }
         EntityKind::Hatch(h) => hatch::draw(b, ctx, e, h, rgb, lw, tol),
+        EntityKind::MLine(m) => mline::draw(b, ctx, e, m, rgb, lw, tol),
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {
             if b.opts.fill && ctx.d.header.i64("FILLMODE", 1) != 0 {
                 match &lt {
@@ -669,6 +744,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             b.polyline(ctx, rgb, lw, &[o + u, o + v]);
         }
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
+        EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),
         EntityKind::Leader(l) => {
             let pts: Vec<Vec2> = l.vertices.iter().map(|v| v.xy()).collect();
             stroke(b, &pts);
@@ -678,7 +754,8 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 let st = ctx.d.dim_style(&l.style);
                 // DIMASZ × DIMSCALE of the leader's style (the drawing's DIMSCALE when it is 0).
                 let size = st.map(|s| s.arrow_size).unwrap_or(0.18) * leader_scale(ctx.d, st);
-                let kind = dim::Arrowhead::parse(st.map(|s| s.arrow_block.as_str()).unwrap_or(""));
+                // DIMLDRBLK ("" = closed filled).
+                let kind = dim::Arrowhead::parse(st.map(|s| s.leader_arrow_block.as_str()).unwrap_or(""));
                 let g = dim::arrowhead(kind, *a, (*a - *n).normalized(), size);
                 for l in &g.lines {
                     b.polyline(ctx, rgb, lw, l);
@@ -790,6 +867,14 @@ pub fn layout_mtext_entity(d: &Drawing, t: &cadcraft_doc::MText) -> cadcraft_fon
         font: cadcraft_fonts::TextFont::resolve(&ts.font),
         width_factor: ts.width_factor,
         oblique: ts.oblique,
+        columns: t.columns.as_ref().map(|c| cadcraft_fonts::MTextColumnSpec {
+            dynamic: c.kind == cadcraft_doc::MTextColumnType::Dynamic,
+            count: usize::from(c.count.max(1)),
+            gutter: c.gutter,
+            height: c.height,
+            heights: if c.kind == cadcraft_doc::MTextColumnType::Dynamic && !c.auto_height { c.heights.clone() } else { Vec::new() },
+            reversed: c.flow_reversed,
+        }),
     };
     cadcraft_fonts::layout_mtext_with(&t.contents, &params)
 }
@@ -826,7 +911,25 @@ pub fn dimension_in(d: &Drawing, dm: &cadcraft_doc::Dimension) -> DimGeometry {
     dim::dimension_geometry_with(dm, &style, d.header.f64("DIMSCALE", 1.0), &dim_text(d, &st))
 }
 
-fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimension, lw: f32) {
+/// Draw a polyline with a linetype (None: continuous).
+fn stroke_with(b: &mut Builder, ctx: &Ctx, rgb: Ink, lw: f32, lt: Option<&cadcraft_doc::Linetype>, ltscale: f64, pts: &[Vec2]) {
+    match lt {
+        Some(lt) => {
+            let min = b.opts.min_dash / ctx.xf.scale_factor().max(1e-12);
+            for dash in linetype::apply(pts, lt, ltscale, min) {
+                match dash.as_slice() {
+                    [p] => b.point(ctx, rgb, *p),
+                    _ => b.polyline(ctx, rgb, lw, &dash),
+                }
+            }
+        }
+        None => b.polyline(ctx, rgb, lw, pts),
+    }
+}
+
+/// `lw` / `lt` are the dimension's own lineweight and linetype (ByBlock in DIMLWD, DIMLWE,
+/// DIMLTYPE, DIMLTEX1 and DIMLTEX2).
+fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimension, lw: f32, lt: Option<&cadcraft_doc::Linetype>, ltscale: f64) {
     let d = ctx.d;
     let style = d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides);
     let g = dimension_in(d, dm);
@@ -841,8 +944,37 @@ fn dimension(b: &mut Builder, ctx: &Ctx, e: &Entity, dm: &cadcraft_doc::Dimensio
     let dim_rgb = ink(style.dim_line_color, layer_color, own);
     let ext_rgb = ink(style.ext_line_color, layer_color, own);
     let txt_rgb = ink(style.text_color, layer_color, own);
-    for (l, role) in g.lines.iter().zip(g.line_roles.iter().chain(std::iter::repeat(&LineRole::Dim))) {
-        b.polyline(ctx, if *role == LineRole::Ext { ext_rgb } else { dim_rgb }, lw, l);
+    let layer = d.layer(layer_name);
+    let weight = |v: i16| -> f32 {
+        if !b.opts.lineweights {
+            return 0.0;
+        }
+        match Lineweight::from_dxf(v) {
+            Lineweight::ByBlock => lw,
+            Lineweight::Mm100(x) => f32::from(x) / 100.0,
+            Lineweight::ByLayer => match layer.map(|l| l.lineweight) {
+                Some(Lineweight::Mm100(x)) => f32::from(x) / 100.0,
+                _ => default_lineweight(d),
+            },
+            Lineweight::Default => default_lineweight(d),
+        }
+    };
+    let ltype = |name: &str| -> Option<cadcraft_doc::Linetype> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "" | "byblock" => lt.cloned(),
+            "bylayer" => layer.and_then(|l| d.linetype(&l.linetype)).filter(|l| !l.pattern.is_empty()).cloned(),
+            _ => d.linetype(name.trim()).filter(|l| !l.pattern.is_empty()).cloned(),
+        }
+    };
+    let (dim_lw, ext_lw) = (weight(style.dim_lineweight), weight(style.ext_lineweight));
+    let (dim_lt, ext1_lt, ext2_lt) = (ltype(&style.dim_linetype), ltype(&style.ext_linetype1), ltype(&style.ext_linetype2));
+    for (i, (l, role)) in g.lines.iter().zip(g.line_roles.iter().chain(std::iter::repeat(&LineRole::Dim))).enumerate() {
+        let (rgb, w, t) = match role {
+            LineRole::Ext if g.ext2_lines.contains(&i) => (ext_rgb, ext_lw, ext2_lt.as_ref()),
+            LineRole::Ext => (ext_rgb, ext_lw, ext1_lt.as_ref()),
+            LineRole::Dim => (dim_rgb, dim_lw, dim_lt.as_ref()),
+        };
+        stroke_with(b, ctx, rgb, w, t, ltscale, l);
     }
     for t in &g.fills {
         b.tris(ctx, dim_rgb, t);
