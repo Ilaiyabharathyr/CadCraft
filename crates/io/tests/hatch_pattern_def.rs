@@ -111,13 +111,13 @@ fn library_named_patterns_keep_the_files_definition() {
 fn file_definition_is_drawn_instead_of_the_librarys() {
     let prims = |lines: Vec<PatternLine>| {
         let mut d = Drawing::new_imperial();
-        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch("AR-CONC", 1.0, 0.0, Vec2::ZERO, lines))).expect("add");
+        d.add(&Space::Model, Common::default(), EntityKind::Hatch(hatch("ANSI31", 1.0, 0.0, Vec2::ZERO, lines))).expect("add");
         cadcraft_render::build(&d, &Space::Model, &cadcraft_render::Options::default()).prims.len()
     };
     // One horizontal family 5 units apart from y = 2.5 across the 10 × 10 square: two lines.
     let sparse = vec![PatternLine { angle: 0.0, origin: (0.0, 2.5), delta: (0.0, 5.0), dashes: vec![] }];
     assert_eq!(prims(sparse), 2);
-    // Without file lines, the library's (much denser) AR-CONC is drawn.
+    // Without file lines, the library's ANSI31 (0.125 apart) is drawn.
     assert!(prims(vec![]) > 100);
 }
 

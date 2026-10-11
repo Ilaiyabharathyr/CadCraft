@@ -916,7 +916,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.i(77, 0);
                 // The lines read from the file, else the library's pattern of that name.
                 let lines = if h.pattern_lines.is_empty() {
-                    cadcraft_doc::library::pattern(&h.pattern).map(|p| p.lines).unwrap_or_default()
+                    cadcraft_doc::library::pattern_for(d, &h.pattern).map(|p| p.lines).unwrap_or_default()
                 } else {
                     h.pattern_lines.clone()
                 };
