@@ -10,6 +10,7 @@
 
 pub mod assoc;
 pub mod audit;
+pub mod autosave;
 pub mod cmd;
 mod finite;
 pub mod grips;
@@ -99,6 +100,8 @@ pub struct DocState {
     pub views: Vec<(Space, View)>,
     pub view_history: Vec<View>,
     pub uid: u64,
+    /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
+    pub binary_dxf: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -121,6 +124,7 @@ impl DocState {
             views: Vec::new(),
             view_history: Vec::new(),
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            binary_dxf: false,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -295,6 +299,10 @@ pub struct Settings {
     pub lwdisplay: bool,
     pub transparency_display: bool,
     pub selection_cycling: bool,
+    /// SELECTSIMILARMODE: what SELECTSIMILAR matches besides the object type (bits: 1 colour,
+    /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
+    /// 128 name).
+    pub selectsimilarmode: u32,
     pub otrack: bool,
     /// PICKBOX in pixels.
     pub pickbox: f64,
@@ -302,6 +310,9 @@ pub struct Settings {
     pub aperture: f64,
     pub pickfirst: bool,
     pub pickadd: bool,
+    /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
+    /// with their boundaries (stored, not used yet).
+    pub pickstyle: u8,
     pub gripsize: f64,
     pub cursorsize: f64,
     /// MAXARRAY: the most objects one array command creates (items × selected objects).
@@ -337,11 +348,13 @@ impl Default for Settings {
             lwdisplay: false,
             transparency_display: false,
             selection_cycling: false,
+            selectsimilarmode: 130,
             otrack: true,
             pickbox: 3.0,
             aperture: 10.0,
             pickfirst: true,
             pickadd: true,
+            pickstyle: 1,
             gripsize: 5.0,
             cursorsize: 5.0,
             maxarray: 100_000,
@@ -463,6 +476,9 @@ pub struct Session {
     pub active: usize,
     pub settings: Settings,
     pub running: Option<Running>,
+    /// The command suspended while a transparent command (`'ZOOM`, `'PAN`…) prompts inside it;
+    /// it resumes when that command ends. One level, as in AutoCAD.
+    pub suspended: Option<Running>,
     pub log: Vec<String>,
     pub last_command: Option<String>,
     /// LASTPOINT.
@@ -514,6 +530,7 @@ impl Session {
             active: 0,
             settings: Settings::default(),
             running: None,
+            suspended: None,
             log: Vec::new(),
             last_command: None,
             last_point: Vec2::ZERO,
@@ -704,19 +721,32 @@ impl Session {
                 self.echo(format!(">>{}", spec.label));
                 return self.execute(spec.id, &Value::Null).map(|_| ());
             }
+            if self.suspended.is_some() {
+                self.echo("A transparent command is already in progress.");
+                return Ok(());
+            }
         }
-        if self.running.is_some() {
+        let nested = transparent && spec.transparent && self.running.is_some() && spec.interactive.is_some();
+        if !nested && self.running.is_some() {
             self.cancel();
         }
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
-        self.last_command = Some(spec.id.to_string());
-        self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
+        if nested {
+            // The outer command stays the one Enter repeats.
+            self.echo(format!(">>{}", spec.id.to_ascii_uppercase()));
+        } else {
+            self.last_command = Some(spec.id.to_string());
+            self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
+        }
         match spec.interactive {
             Some(factory) => {
                 let machine = guard::Guarded::create(spec.id, factory, self)?;
                 let st = self.state()?;
                 let before = st.doc.clone();
                 let selection_before = st.selection.clone();
+                if nested {
+                    self.suspended = self.running.take();
+                }
                 self.running = Some(Running { id: spec.id.to_string(), machine, before, selection_before });
                 self.pending_window = None;
                 // Some commands complete immediately (e.g. ERASE with a pickfirst selection).
@@ -815,10 +845,10 @@ impl Session {
                 if let Some(pw) = self.pending_window.take() {
                     let crossing = p.x < pw.corner.x;
                     let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
-                    return Ok(Some(Input::Pick(hs)));
+                    return Ok(Some(Input::Pick(cmd::groups::expand(self, hs))));
                 }
                 match select::pick(self.doc()?, &space, p, ap) {
-                    Some(h) => Ok(Some(Input::Pick(vec![h]))),
+                    Some(h) => Ok(Some(Input::Pick(cmd::groups::expand(self, vec![h])))),
                     None => {
                         self.pending_window = Some(PendingWindow { corner: p, during_command: true });
                         Ok(None)
@@ -836,7 +866,7 @@ impl Session {
                     _ => None,
                 };
                 match picked {
-                    Some(hs) => Ok(Some(Input::Pick(hs))),
+                    Some(hs) => Ok(Some(Input::Pick(cmd::groups::expand(self, hs)))),
                     None => Ok(Some(input)),
                 }
             }
@@ -922,11 +952,13 @@ impl Session {
             }
             Ok(Step::Done) => {
                 self.finish(run, false);
+                self.resume_suspended();
                 Ok(())
             }
             Ok(Step::Cancel) => {
                 self.echo("*Cancel*");
                 self.finish(run, true);
+                self.resume_suspended();
                 Ok(())
             }
             Err(EngineError::Internal(id, m)) => {
@@ -935,6 +967,7 @@ impl Session {
                     st.doc = run.before.clone();
                 }
                 self.echo(format!("Internal error in {id}: {m}"));
+                self.resume_suspended();
                 Err(EngineError::Internal(id, m))
             }
             Err(e) => {
@@ -962,11 +995,21 @@ impl Session {
             return;
         }
         self.pending_window = None;
+        self.select_mode = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
         let _ = cancelled;
         cmd::groups::after_command(self, Some(&run.before));
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);
+        if self.suspended.is_some() {
+            // A transparent command's changes belong to the undo step of the command it ran inside.
+            if let Ok(st) = self.state_mut()
+                && !Arc::ptr_eq(&run.before, &st.doc)
+            {
+                st.revision += 1;
+            }
+            return;
+        }
         if let Ok(st) = self.state_mut()
             && !Arc::ptr_eq(&run.before, &st.doc)
         {
@@ -976,10 +1019,25 @@ impl Session {
         }
     }
 
-    /// Cancel the running command (Esc). With no command, clears the selection.
+    /// After a transparent command ends, the command it interrupted prompts again.
+    fn resume_suspended(&mut self) {
+        if let Some(outer) = self.suspended.take() {
+            self.echo(format!("Resuming {} command.", outer.id.to_ascii_uppercase()));
+            self.running = Some(outer);
+        }
+    }
+
+    /// Cancel the running command (Esc). With no command, clears the selection. Inside a
+    /// transparent command, cancels it and the command it interrupted.
     pub fn cancel(&mut self) {
         self.point_mods.clear();
         if self.running.is_some() {
+            if self.suspended.is_some() {
+                if let Some(nested) = self.running.take() {
+                    self.finish(nested, true);
+                }
+                self.running = self.suspended.take();
+            }
             let _ = self.feed(Some(Input::Cancel));
         } else {
             self.pending_window = None;
@@ -1010,6 +1068,7 @@ impl Session {
     /// The text shown on the command line: the active prompt, or "Command:".
     pub fn prompt_text(&self) -> String {
         match &self.running {
+            Some(r) if self.suspended.is_some() => format!(">>{} {}", r.id.to_ascii_uppercase(), r.machine.prompt(self).display()),
             Some(r) => format!("{} {}", r.id.to_ascii_uppercase(), r.machine.prompt(self).display()),
             None => "Command:".into(),
         }
@@ -1022,17 +1081,36 @@ impl Session {
         r.machine.preview(self, cursor).into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
     }
 
-    /// Process one line typed at the command line (Enter pressed).
+    /// Process one line typed at the command line (Enter pressed). Spaces separate inputs as in a
+    /// script line (see [`Session::script`]), so `MOVE L  0,0 5,5` ends the selection with the
+    /// second space and `ERASE L ` with the trailing one. Input after the command ends is ignored.
     pub fn cmdline(&mut self, text: &str) -> Result<()> {
         let t = text.trim_end_matches(['\r', '\n']);
-        match &self.running {
-            None => {
-                let t = t.trim();
-                if t.is_empty() {
-                    return self.input(Input::Enter);
+        // The command line types spaces literally at free-text prompts: the line is one input.
+        if self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number) {
+            return self.typed(t);
+        }
+        // At `Command:` leading blanks before a command name are not Enter (`" LINE"` from the
+        // control channel starts LINE); a line of only blanks still is.
+        let t = if self.running.is_none() && !t.trim().is_empty() { t.trim_start() } else { t };
+        self.input_line(t, false)
+    }
+
+    /// One line of input: each space ends an input and an empty input (two spaces in a row, a
+    /// trailing space, an empty line) is Enter, which at `Command:` repeats the last command. In a
+    /// script, a free-text prompt (TEXT/MTEXT contents) takes the rest of the line, a prompt with
+    /// keywords still splits so `I 15` reaches the keyword and the value, and the line goes on
+    /// after its command ends; at the command line the rest after the command ends is ignored.
+    fn input_line(&mut self, line: &str, script: bool) -> Result<()> {
+        let mut rest = line;
+        let mut first = true;
+        loop {
+            if self.running.is_none() {
+                if !script && !first {
+                    return Ok(());
                 }
                 // `cmd {json}`: programmatic call with parameters.
-                if let Some((name, json)) = t.split_once(' ')
+                if let Some((name, json)) = rest.trim().split_once(' ')
                     && json.trim_start().starts_with('{')
                 {
                     let params: Value =
@@ -1044,31 +1122,24 @@ impl Session {
                     }
                     return Ok(());
                 }
-                // Expressions like "LINE 0,0 5,5" in one line: first token is the command.
-                let mut parts = t.split_whitespace();
-                let name = parts.next().unwrap_or("");
-                self.start(name)?;
-                for rest in parts {
-                    if self.running.is_none() {
-                        break;
-                    }
-                    self.typed(rest)?;
-                }
-                Ok(())
+            } else if script && self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number && p.keywords.is_empty()) {
+                return self.typed(rest);
             }
-            Some(_) => {
-                // Space acts as Enter except where the prompt wants free text.
-                let text_prompt = self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number);
-                if text_prompt || !t.contains(' ') {
-                    return self.typed(t);
-                }
-                for tok in t.split_whitespace() {
-                    if self.running.is_none() {
-                        break;
-                    }
-                    self.typed(tok)?;
-                }
-                Ok(())
+            first = false;
+            let (tok, more) = match rest.split_once([' ', '\t']) {
+                Some((tok, more)) => (tok, Some(more)),
+                None => (rest, None),
+            };
+            if self.running.is_some() {
+                self.typed(tok)?;
+            } else if tok.trim().is_empty() {
+                self.input(Input::Enter)?;
+            } else {
+                self.start(tok)?;
+            }
+            match more {
+                Some(more) => rest = more,
+                None => return Ok(()),
             }
         }
     }
@@ -1121,45 +1192,17 @@ impl Session {
         self.input(Input::Text(tt.to_string()))
     }
 
-    /// Run a script: one input per line; within a line, spaces separate inputs except at text
-    /// prompts (as AutoCAD scripts do).
+    /// Run a script, as AutoCAD reads one: a space or a line end ends an input, and an empty
+    /// input (two spaces in a row, a space at the end of a line, an empty line) is Enter. At
+    /// free-text prompts spaces are part of the text. Lines starting with `;` are comments.
     pub fn script(&mut self, text: &str) -> Result<()> {
         for line in text.lines() {
-            let line = line.trim_end();
+            // Trailing spaces are inputs (Enter); other trailing whitespace (`\r`) is not.
+            let line = line.trim_end_matches(|c: char| c.is_whitespace() && c != ' ');
             if line.trim_start().starts_with(';') {
                 continue;
             }
-            if line.is_empty() {
-                self.cmdline("")?;
-                continue;
-            }
-            let mut rest = line;
-            loop {
-                // Free text only when the prompt has no keywords; otherwise split so `I 15` reaches the keyword and the value.
-                let text_prompt = self.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && p.keywords.is_empty());
-                if text_prompt || self.running.is_none() && rest.contains('{') {
-                    self.cmdline(rest)?;
-                    break;
-                }
-                match rest.split_once(' ') {
-                    Some((tok, r)) => {
-                        if self.running.is_none() {
-                            self.start(tok)?;
-                        } else {
-                            self.typed(tok)?;
-                        }
-                        rest = r;
-                    }
-                    None => {
-                        if self.running.is_none() {
-                            self.start(rest)?;
-                        } else {
-                            self.typed(rest)?;
-                        }
-                        break;
-                    }
-                }
-            }
+            self.input_line(line, true)?;
         }
         Ok(())
     }
@@ -1214,6 +1257,7 @@ impl Session {
         if let Some(pw) = self.pending_window.take() {
             let crossing = p.x < pw.corner.x;
             let hs = select::select_window(self.doc()?, &space, Bounds2::new(pw.corner, p), crossing);
+            let hs = cmd::groups::expand(self, hs);
             let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
             if shift && pickadd {
                 sel.retain(|h| !hs.contains(h));
@@ -1226,12 +1270,14 @@ impl Session {
         let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
         match select::pick(self.doc()?, &space, p, ap) {
             Some(h) => {
+                // With group selection the object's selectable groups come (or go) with it.
+                let hs = cmd::groups::expand(self, vec![h]);
                 let mut sel = if pickadd || shift { self.selection() } else { Vec::new() };
                 let had = sel.contains(&h);
                 if shift && (pickadd || had) {
-                    sel.retain(|x| *x != h);
+                    sel.retain(|x| !hs.contains(x));
                 } else if !had {
-                    sel.push(h);
+                    sel.extend(hs);
                 }
                 self.set_selection(sel);
             }
