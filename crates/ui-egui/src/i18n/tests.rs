@@ -152,7 +152,12 @@ fn locale_and_saved_preference_resolution() {
         assert_eq!(locale_language(tag), Some("pt-BR"), "{tag}");
     }
     assert_eq!(locale_language("ptolemy"), None);
-    assert_eq!(Preference::Auto.resolve(&["es-ES".into(), "pt-BR".into()]), "pt-BR");
+    assert_eq!(Preference::Auto.resolve(&["fr-FR".into(), "pt-BR".into()]), "pt-BR");
+    for tag in ["es", "es-ES", "es_MX.UTF-8", "ES-ar"] {
+        assert_eq!(locale_language(tag), Some("es"), "{tag}");
+    }
+    assert_eq!(Preference::Auto.resolve(&["es-ES".into(), "pt-BR".into()]), "es");
+    assert_eq!(Preference::parse("es"), Some(Preference::Spanish));
     assert_eq!(Preference::BrazilianPortuguese.resolve(&["uk-UA".into()]), "pt-BR");
     assert_eq!(Preference::parse("pt-BR"), Some(Preference::BrazilianPortuguese));
     let locales = vec!["pl-PL".into(), "uk-UA".into(), "en-US".into()];
