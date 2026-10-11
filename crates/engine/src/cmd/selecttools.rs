@@ -223,8 +223,11 @@ fn run_isolate(s: &mut Session, p: &Value) -> Result<Value> {
     if !keep.iter().any(|h| d.entity(*h).is_some()) {
         return Err(bad("isolateobjects", "none of the given objects exist"));
     }
-    let others: Vec<Handle> =
-        d.space(&s.space()).map(|st| st.iter().take(MAX_SCAN).filter(|e| !keep.contains(&e.handle)).map(|e| e.handle).collect()).unwrap_or_default();
+    let keep_set: std::collections::HashSet<Handle> = keep.iter().copied().collect();
+    let others: Vec<Handle> = d
+        .space(&s.space())
+        .map(|st| st.iter().take(MAX_SCAN).filter(|e| !keep_set.contains(&e.handle)).map(|e| e.handle).collect())
+        .unwrap_or_default();
     let n = hide(s, others)?;
     Ok(json!({ "hidden": n, "message": hidden_message(n) }))
 }
