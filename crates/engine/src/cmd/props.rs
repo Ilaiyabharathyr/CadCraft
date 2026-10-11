@@ -1,6 +1,9 @@
 //! Properties: per-object property edits, current properties, MATCHPROP, linetypes, units, RENAME.
 
+mod matchprop;
 mod rename;
+
+pub use matchprop::MatchProps;
 
 use cadcraft_color::Color;
 use cadcraft_doc::{EntityKind, Lineweight, Transparency};
@@ -14,9 +17,18 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("properties", "Properties", run_get).menu(&["Modify", "Properties"]).alias(&["pr", "props", "ch"]).params("{handles?} → properties of the selection").noundo(),
         CommandSpec::new("properties.set", "Set Properties", run_set).params("{handles?, layer?, color?, linetype?, lineweight?, ltscale?, transparency?: \"ByLayer\" | \"ByBlock\" | 0..90, visible?, <geometry fields: radius, center, start, end, text, height, rotation…>}"),
-        CommandSpec::new("matchprop", "Match Properties", run_matchprop).menu(&["Modify", "Match Properties"]).alias(&["ma", "painter"]).params("{source, targets: [hex]}"),
+        CommandSpec::new("matchprop", "Match Properties", matchprop::run_matchprop)
+            .menu(&["Modify", "Match Properties"])
+            .alias(&["ma", "painter"])
+            .params("{source, targets?: [hex] (default: selection), properties?: [name] | {name: bool} (default: all; names: color, layer, linetype, ltscale, lineweight, transparency, thickness, plotStyle, dimension, text, hatch, polyline, viewport, table, multileader)} → {changed}")
+            .interactive(|_| Ok(Box::new(matchprop::MatchPropM::new()))),
         CommandSpec::new("color", "Color...", run_color).menu(&["Format", "Color..."]).alias(&["col", "colour"]).params("{color: \"ByLayer\" | \"red\" | 1..255 | \"r,g,b\"}"),
-        CommandSpec::new("linetype", "Linetype...", run_linetype).menu(&["Format", "Linetype..."]).alias(&["lt", "ltype"]).params("{current?: name, load?: name | \"*\"}"),
+        CommandSpec::new("linetype", "Linetype...", run_linetype).menu(&["Format", "Linetype..."]).alias(&["lt", "ltype"]).params("{current?: name, load?: name | \"*\" (with a file: comma-separated names, wildcards), file?: path to a .lin file | text?: its contents, reload?: bool}"),
+        CommandSpec::new("hatch.patterns", "Hatch Patterns", super::hatch::run_patterns)
+            .params("{file?: path to a .pat file | text?: its contents, clear?: bool} → {standard, user, added, warnings} (HATCH also takes patternFile | patternText)")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("-linetype", "Linetype", run_linetype).params("{current?, load?, file? | text?, reload?} (as LINETYPE)").interactive(|_| Ok(Box::new(linfile::DashLinetype::new()))),
         CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}"),
         CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}"),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
@@ -43,11 +55,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("tablestyle", "Table Style...", run_tablestyle)
             .menu(&["Format", "Table Style..."])
             .alias(&["ts"])
-            .params("{name, textHeight?, margin?, title?, header?, current?} → styles"),
+            .params("{name, textHeight?, margin?, title?, header?, current?, cellStyle?: {name, …} (see tablestyle.cellstyle)} → styles"),
         CommandSpec::new("mleaderstyle", "Multileader Style...", run_mleaderstyle)
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
-            .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, current?} → styles"),
+            .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, annotative?, current?} → styles"),
         CommandSpec::new("ddptype", "Point Style...", run_ptype).menu(&["Format", "Point Style..."]).params("{pdmode, pdsize}"),
         CommandSpec::new("rename", "Rename...", run_rename)
             .menu(&["Format", "Rename..."])
@@ -69,6 +81,12 @@ pub(super) fn entity_props(d: &cadcraft_doc::Drawing, e: &cadcraft_doc::Entity) 
         "transparency": transparency_value(e.common.transparency),
         "visible": e.common.visible,
     });
+    if cadcraft_doc::can_be_annotative(&e.kind)
+        && let Some(o) = v.as_object_mut()
+    {
+        o.insert("annotative".into(), json!(cadcraft_doc::is_annotative(e)));
+        o.insert("annotativeScales".into(), json!(e.common.anno_scales.iter().map(|s| s.name.clone()).collect::<Vec<_>>()));
+    }
     let geo = serde_json::to_value(&e.kind).unwrap_or(Value::Null);
     if let (Some(o), Some(g)) = (v.as_object_mut(), geo.as_object()) {
         o.insert("geometry".into(), Value::Object(g.clone()));
@@ -181,8 +199,13 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let dim_style = str_param(p, "dimStyle")
         .map(|n| d.dim_style(n).map(|st| st.name.clone()).ok_or_else(|| bad("properties.set", format!("dimension style `{n}` not found"))))
         .transpose()?;
+    let anno_scale = d.current_anno_scale();
     for h in &hs {
         d.modify_entity(*h, |e| {
+            // Annotative: Yes supports the current annotation scale; No drops every scale.
+            if let Some(a) = p.get("annotative").and_then(Value::as_bool) {
+                cadcraft_doc::set_annotative(e, a, &anno_scale);
+            }
             if let Some(l) = str_param(p, "layer") {
                 e.common.layer = l.to_string();
             }
@@ -331,6 +354,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 EntityKind::Hatch(h) => {
                     if let Some(v) = str_param(p, "pattern") {
+                        if !h.pattern.eq_ignore_ascii_case(v) {
+                            h.pattern_lines = super::hatch::lines_for(v);
+                        }
                         h.pattern = v.to_ascii_uppercase();
                         h.solid = h.pattern == "SOLID";
                         if !h.solid {
@@ -352,29 +378,6 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "changed": hs.len() }))
 }
 
-fn run_matchprop(s: &mut Session, p: &Value) -> Result<Value> {
-    let src =
-        p.get("source").and_then(Value::as_str).and_then(cadcraft_doc::Handle::parse_hex).ok_or_else(|| bad("matchprop", "`source` is required"))?;
-    let tg: Vec<cadcraft_doc::Handle> = p
-        .get("targets")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().and_then(cadcraft_doc::Handle::parse_hex)).collect())
-        .unwrap_or_default();
-    let d = s.doc_mut()?;
-    let c = d.entity(src).map(|e| e.common.clone()).ok_or_else(|| bad("matchprop", "no such source"))?;
-    for h in &tg {
-        d.modify_entity(*h, |e| {
-            e.common.layer = c.layer.clone();
-            e.common.color = c.color;
-            e.common.linetype = c.linetype.clone();
-            e.common.lineweight = c.lineweight;
-            e.common.ltscale = c.ltscale;
-            e.common.transparency = c.transparency;
-        })?;
-    }
-    Ok(json!({ "changed": tg.len() }))
-}
-
 fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     let c = p.get("color").and_then(parse_color).ok_or_else(|| bad("color", "`color` is required"))?;
     let d = s.doc_mut()?;
@@ -391,7 +394,12 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+mod linfile;
+
 fn run_linetype(s: &mut Session, p: &Value) -> Result<Value> {
+    if linfile::has_file(p) {
+        return linfile::run(s, p);
+    }
     let d = s.doc_mut()?;
     if let Some(load) = str_param(p, "load") {
         let lib = cadcraft_doc::library::standard_linetypes_for(d);
@@ -704,11 +712,30 @@ fn dims_using(d: &cadcraft_doc::Drawing, name: &str) -> Vec<(cadcraft_doc::Space
                 let uses = match &e.kind {
                     EntityKind::Dimension(dm) => dm.style.eq_ignore_ascii_case(name),
                     EntityKind::Leader(l) => l.style.eq_ignore_ascii_case(name),
+                    EntityKind::Tolerance(t) => t.style.eq_ignore_ascii_case(name),
                     _ => false,
                 };
                 if uses {
                     out.push((space.clone(), e.handle));
                 }
+            }
+        }
+    }
+    out
+}
+
+/// Dimensions and leaders inside block definitions that use the style (block name, entity handle).
+fn block_dims_using(d: &cadcraft_doc::Drawing, name: &str) -> Vec<(String, cadcraft_doc::Handle)> {
+    let mut out = Vec::new();
+    for (bname, b) in &d.blocks {
+        for e in b.entities.iter() {
+            let uses = match &e.kind {
+                EntityKind::Dimension(dm) => dm.style.eq_ignore_ascii_case(name),
+                EntityKind::Leader(l) => l.style.eq_ignore_ascii_case(name),
+                _ => false,
+            };
+            if uses {
+                out.push((bname.clone(), e.handle));
             }
         }
     }
@@ -734,8 +761,18 @@ fn run_dimstyle_rename(s: &mut Session, p: &Value) -> Result<Value> {
         d.modify_entity(h, |e| match &mut e.kind {
             EntityKind::Dimension(dm) => dm.style = to.clone(),
             EntityKind::Leader(l) => l.style = to.clone(),
+            EntityKind::Tolerance(t) => t.style = to.clone(),
             _ => {}
         })?;
+    }
+    for (bname, h) in block_dims_using(d, &from) {
+        if let Some(b) = d.blocks.get_mut(&bname) {
+            std::sync::Arc::make_mut(b).entities.modify(h, |e| match &mut e.kind {
+                EntityKind::Dimension(dm) => dm.style = to.clone(),
+                EntityKind::Leader(l) => l.style = to.clone(),
+                _ => {}
+            });
+        }
     }
     Ok(dimstyles_json(d))
 }
@@ -749,7 +786,7 @@ fn run_dimstyle_delete(s: &mut Session, p: &Value) -> Result<Value> {
     if d.header.str("DIMSTYLE", "Standard").eq_ignore_ascii_case(&name) {
         return Err(bad("dimstyle.delete", "the current dimension style cannot be deleted"));
     }
-    if !dims_using(d, &name).is_empty() {
+    if !dims_using(d, &name).is_empty() || !block_dims_using(d, &name).is_empty() {
         return Err(bad("dimstyle.delete", format!("dimension style `{name}` is in use")));
     }
     let before = d.dim_styles.len();
@@ -822,6 +859,7 @@ fn run_tablestyle(s: &mut Session, p: &Value) -> Result<Value> {
                 st.header = b;
             }
         }
+        super::table::tablestyle_cell_style(d, name, p)?;
         if bool_or(p, "current", true) {
             d.header.set_str("CTABLESTYLE", name);
         }
@@ -855,6 +893,9 @@ fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
             }
             if let Some(t) = str_param(p, "textStyle") {
                 st.text_style = t.to_string();
+            }
+            if let Some(a) = p.get("annotative").and_then(Value::as_bool) {
+                st.annotative = a;
             }
         }
         if bool_or(p, "current", true) {
