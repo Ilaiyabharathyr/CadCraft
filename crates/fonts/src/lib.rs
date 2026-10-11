@@ -14,6 +14,7 @@ pub mod ttf;
 
 use cadcraft_geom::{Bounds2, Vec2};
 
+pub use mtext::para::{DEFAULT_TAB, ListStyle, MTextColumnSpec, ParaAlign, ParaProps, Paragraphs, TabKind, list_contents};
 pub use mtext::{MTextColor, MTextLayout, MTextParams, MTextPiece, layout_mtext, layout_mtext_with, plain_mtext};
 
 /// Name of the built-in font.
