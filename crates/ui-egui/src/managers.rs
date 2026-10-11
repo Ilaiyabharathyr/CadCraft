@@ -475,10 +475,9 @@ fn page_setup(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
                 ui.end_row();
                 ui.label("Plot area");
                 egui::ComboBox::from_id_salt("pagesetup_area").selected_text(page.plot_area.as_str()).show_ui(ui, |ui| {
-                    for a in ["layout", "extents", "display", "limits"] {
-                        if ui.selectable_label(page.plot_area == a, a).clicked() && page.plot_area != a {
-                            action = set("plotArea", json!(a));
-                        }
+                    // Layout plotting always prints the whole sheet, so only that area is offered.
+                    if ui.selectable_label(page.plot_area == "layout", "layout").clicked() && page.plot_area != "layout" {
+                        action = set("plotArea", json!("layout"));
                     }
                 });
                 ui.end_row();
