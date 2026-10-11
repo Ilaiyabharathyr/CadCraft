@@ -9,6 +9,9 @@ use crate::CadApp;
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
+/// The QuickCalc palette.
+pub mod quickcalc;
+
 type Tool = (Icon, &'static str, &'static str);
 
 /// Tool Sets groups: (name, large tools, small tools).
@@ -304,6 +307,9 @@ fn swatch(p: &egui::Painter, r: Rect, c: Color) {
 }
 
 pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
+    if !app.ui.show_palettes {
+        return;
+    }
     let t = Tokens::get();
     egui::Panel::right("cc_palettes").exact_size(300.0).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
         let r = ui.max_rect();
@@ -315,7 +321,13 @@ pub fn right_palettes(app: &mut CadApp, ui: &mut egui::Ui) {
             let br = Rect::from_center_size(pos2(r.left() + 30.0 + i as f32 * 52.0, r.top() + tab_h / 2.0), vec2(20.0, 20.0));
             icons::paint(&p, br, *icon, false);
         }
-        icons::paint(&p, Rect::from_center_size(pos2(r.right() - 14.0, r.top() + tab_h / 2.0), vec2(14.0, 14.0)), Icon::ChevronRight, false);
+        let cr = Rect::from_center_size(pos2(r.right() - 14.0, r.top() + tab_h / 2.0), vec2(14.0, 14.0));
+        let cresp = ui.interact(cr, ui.id().with("palettes_collapse"), Sense::click());
+        icons::paint(&p, cr, Icon::ChevronRight, false);
+        icons::describe_control(ui, &cresp, "Collapse Palettes", None, false);
+        if cresp.on_hover_text(crate::tl!("Collapse Palettes")).clicked() {
+            app.ui.show_palettes = false;
+        }
         let body = Rect::from_min_max(pos2(r.left(), r.top() + tab_h), r.max);
         ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -454,9 +466,11 @@ pub(crate) fn layers_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 }
                 let (sr, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                 swatch(ui.painter(), sr, *color);
-                if ui.selectable_label(name.eq_ignore_ascii_case(&cur), name).clicked() {
+                let r = ui.selectable_label(name.eq_ignore_ascii_case(&cur), name);
+                if r.clicked() {
                     set_current = Some(name.clone());
                 }
+                crate::shortcut_menus::attach(app, &r, |app| crate::shortcut_menus::layer_entries(app, name));
             });
         }
     }

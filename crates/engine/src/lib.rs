@@ -13,6 +13,7 @@ pub mod audit;
 pub mod autosave;
 pub mod cmd;
 mod finite;
+pub mod grip_dims;
 pub mod grips;
 mod guard;
 pub mod pointmod;
@@ -302,7 +303,8 @@ impl DocState {
     }
 }
 
-/// Session-level drafting settings (the AutoCAD system variables stored in the registry/profile).
+/// Session-level drafting settings. [`Session::drafting_settings`] supplies the active drawing's
+/// snap/grid spacing in the corresponding fields for UI and JSON consumers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -313,9 +315,11 @@ pub struct Settings {
     pub polarang: f64,
     pub gridmode: bool,
     pub snapmode: bool,
+    /// SNAPUNIT in a drafting settings snapshot; stored in the drawing header.
     pub snapunit: Vec2,
     /// OSNAPHATCH: object snaps find hatch objects (off by default, as in AutoCAD).
     pub osnaphatch: bool,
+    /// GRIDUNIT in a drafting settings snapshot; zero components follow SNAPUNIT.
     pub gridunit: Vec2,
     /// Major grid line every N minor lines (GRIDMAJOR).
     pub gridmajor: u32,
@@ -324,12 +328,21 @@ pub struct Settings {
     /// -VIEW sEttings > Layer snapshot: named views save the layer settings with them.
     pub view_layer_snapshot: bool,
     pub dynmode: bool,
+    /// DYNDIGRIP: which dimensions grip dimensional input shows while a grip is stretched (bits:
+    /// 1 resulting length, 2 length change, 4 absolute angle, 8 angle change, 16 radius); read
+    /// when DYNDIVIS = 2.
+    pub dyndigrip: u32,
+    /// DYNDIVIS: how many of them: 0 the first, 1 the first two (default), 2 all DYNDIGRIP asks for.
+    pub dyndivis: u8,
     /// DYNPIFORMAT = 1: Dynamic Input shows second and next points as Cartesian `x,y` instead of
     /// polar `distance<angle` (the default).
     pub dynpi_cartesian: bool,
     /// DYNPICOORDS = 1: second and next points typed into Dynamic Input are absolute instead of
     /// relative to the last point (the default).
     pub dynpi_absolute: bool,
+    /// DYNPROMPT: Dynamic Input shows the prompt beside the cursor, and Down Arrow opens the
+    /// prompt's options there (on by default).
+    pub dynprompt: bool,
     pub lwdisplay: bool,
     pub transparency_display: bool,
     pub selection_cycling: bool,
@@ -351,7 +364,10 @@ pub struct Settings {
     pub cursorsize: f64,
     /// MAXARRAY: the most objects one array command creates (items × selected objects).
     pub maxarray: u64,
+    /// SNAPSTYL 1: isometric snap and grid, ortho and crosshair along the isometric plane's axes.
     pub isodraft: bool,
+    /// SNAPISOPAIR: the current isometric plane (ISOPLANE, F5).
+    pub isoplane: snap::iso::IsoPlane,
     pub annoallvisible: bool,
     pub annoautoscale: bool,
     /// QPMODE: show the Quick Properties palette when objects are selected.
@@ -384,8 +400,11 @@ impl Default for Settings {
             zoomfactor: 60,
             view_layer_snapshot: true,
             dynmode: true,
+            dyndigrip: 31,
+            dyndivis: 1,
             dynpi_cartesian: false,
             dynpi_absolute: false,
+            dynprompt: true,
             lwdisplay: false,
             transparency_display: false,
             selection_cycling: false,
@@ -400,6 +419,7 @@ impl Default for Settings {
             cursorsize: 5.0,
             maxarray: 100_000,
             isodraft: false,
+            isoplane: snap::iso::IsoPlane::Left,
             annoallvisible: true,
             annoautoscale: false,
             qpmode: false,
@@ -539,6 +559,10 @@ pub struct Session {
     /// The deferred tangent/perpendicular snap under the cursor, if any (from the UI; lets the
     /// rubber band show the line it resolves to).
     pub cursor_deferred: Option<snap::Deferred>,
+    /// Origin of the point currently being fed by `input_snapped`; never reused by typed points.
+    picked_viewport: Option<snap::ViewportPoint>,
+    /// The last drawing comparison (COMPARE), drawn over the drawing it was made for.
+    pub compare: Option<cmd::file::compare::Comparison>,
     /// Object snap tracking: acquired points and the path under the cursor (from the UI's
     /// [`Session::snap_cursor`] calls; direct distance entry follows the path).
     pub tracking: snap::tracking::Tracker,
@@ -587,6 +611,8 @@ impl Session {
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
+            picked_viewport: None,
+            compare: None,
             tracking: snap::tracking::Tracker::default(),
             viewport_px: (1200.0, 800.0),
             clipboard: Vec::new(),
@@ -635,6 +661,15 @@ impl Session {
     /// Copy-on-write access to the drawing.
     pub fn doc_mut(&mut self) -> Result<&mut Drawing> {
         Ok(Arc::make_mut(&mut self.state_mut()?.doc))
+    }
+    /// Settings for the active drawing, without caching drawing variables in the profile.
+    pub fn drafting_settings(&self) -> Settings {
+        let mut settings = self.settings.clone();
+        if let Ok(d) = self.doc() {
+            settings.snapunit = d.header.snap_unit();
+            settings.gridunit = d.header.grid_unit();
+        }
+        settings
     }
     /// The space commands act on (model space while working inside a layout viewport).
     pub fn space(&self) -> Space {
@@ -819,6 +854,16 @@ impl Session {
                 Ok(())
             }
         }
+    }
+
+    /// Feed an object-snap pick, retaining its viewport origin for measurements. Point modifiers
+    /// that combine or constrain coordinates produce ordinary drawing-space points.
+    pub fn input_snapped(&mut self, hit: snap::SnapHit) -> Result<()> {
+        let source = hit.viewport.filter(|_| self.point_mods.iter().all(|f| matches!(f, pointmod::Frame::Snap { mode } if *mode != 0)));
+        let previous = std::mem::replace(&mut self.picked_viewport, source);
+        let result = self.input(hit.input());
+        self.picked_viewport = previous;
+        result
     }
 
     /// Give an input to the running command. With no command running, `Enter` repeats the last
@@ -1242,7 +1287,7 @@ impl Session {
             {
                 let mut c = self.cursor;
                 if self.settings.orthomode {
-                    c = snap::ortho(base, c);
+                    c = snap::iso::constrain(&self.drafting_settings(), base, c);
                 }
                 let dir = (c - base).normalized();
                 let dir = if dir == Vec2::ZERO { Vec2::X } else { dir };
@@ -1412,7 +1457,7 @@ impl Session {
             "prompt": self.prompt_text(),
             "running": self.running.as_ref().map(|r| r.id.clone()),
             "selection": self.selection().iter().map(|h| h.hex()).collect::<Vec<_>>(),
-            "settings": self.settings,
+            "settings": self.drafting_settings(),
         })
     }
 }

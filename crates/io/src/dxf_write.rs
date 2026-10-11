@@ -190,9 +190,18 @@ fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
     if !dm.assoc.is_empty() {
         ours.extend(dxf_ext::assoc_xdata(&dm.assoc));
     }
+    ours.extend(dxf_ext::marks_xdata(&dm.marks));
     if !ours.is_empty() {
         w.s(1001, dxf_ext::APP);
         w.xdata(ours);
+    }
+}
+
+/// Group 52 of a linear or aligned dimension with oblique extension lines: their angle less the
+/// dimension line's (`base`), in degrees.
+fn oblique_52(w: &mut W, dm: &Dimension, base: f64) {
+    if let Some(a) = dm.marks.oblique.filter(|a| a.is_finite()) {
+        w.f(52, cadcraft_geom::norm_angle(a - base).to_degrees());
     }
 }
 
@@ -202,6 +211,8 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("INSBASE", -3),
     ("LIMMIN", -2),
     ("LIMMAX", -2),
+    ("SNAPUNIT", -2),
+    ("GRIDUNIT", -2),
     ("ORTHOMODE", 70),
     ("FILLMODE", 70),
     ("MIRRTEXT", 70),
@@ -245,6 +256,11 @@ fn header_vars(w: &mut W, d: &Drawing) {
         let Some(v) = d.header.get(name) else { continue };
         match (*code, v) {
             (-2 | -3, HVal::Point(p)) => {
+                let p = match *name {
+                    "SNAPUNIT" => d.header.snap_unit().to3(0.0),
+                    "GRIDUNIT" => d.header.grid_unit().to3(0.0),
+                    _ => *p,
+                };
                 w.s(9, format!("${name}"));
                 w.f(10, p.x);
                 w.f(20, p.y);
@@ -549,6 +565,36 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.p(11, f.to3(0.0));
             }
         }
+        EntityKind::Helix(h) => {
+            // A cubic spline through points on the helix, then the helix data (DXF Reference).
+            w.s(0, "HELIX");
+            common(w, e, owner, paper, "AcDbSpline");
+            let (s, z) = h.spline3();
+            w.i(70, 0);
+            w.i(71, s.degree as i64);
+            w.i(72, s.knots.len() as i64);
+            w.i(73, s.control.len() as i64);
+            w.i(74, 0);
+            w.f(42, 1e-10);
+            w.f(43, 1e-10);
+            for k in &s.knots {
+                w.f(40, *k);
+            }
+            for (c, z) in s.control.iter().zip(&z) {
+                w.p(10, c.to3(*z));
+            }
+            w.s(100, "AcDbHelix");
+            w.i(90, 29);
+            w.i(91, 63);
+            w.p(10, h.center);
+            w.p(11, h.start_point());
+            w.p(12, Vec3::Z);
+            w.f(40, h.base_radius);
+            w.f(41, h.turns);
+            w.f(42, h.turn_height());
+            w.i(290, i64::from(h.ccw));
+            w.i(280, h.constrain.to_dxf());
+        }
         EntityKind::Ray(r) | EntityKind::XLine(r) => {
             let ray = matches!(e.kind, EntityKind::Ray(_));
             w.s(0, if ray { "RAY" } else { "XLINE" });
@@ -561,6 +607,21 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             common(w, e, owner, paper, "AcDbText");
             thickness(w, e);
             text_tags(w, t, None, None);
+        }
+        // Closed polylines, one per loop (`dxf_region`): REGION's own data is ACIS.
+        EntityKind::Region(r) => {
+            for (i, tags) in crate::dxf_region::polylines(r).into_iter().enumerate() {
+                w.s(0, "LWPOLYLINE");
+                if i == 0 {
+                    common(w, e, owner, paper, "AcDbPolyline");
+                } else {
+                    // The other loops get handles of their own (only the handle and properties are written).
+                    let h = Handle::parse_hex(&w.h()).unwrap_or(e.handle);
+                    let part = Entity { handle: h, common: e.common.clone(), kind: EntityKind::Point(Point { p: Vec3::ZERO, angle: 0.0 }) };
+                    common(w, &part, owner, paper, "AcDbPolyline");
+                }
+                w.t.extend(tags);
+            }
         }
         EntityKind::AttDef(a) => {
             w.s(0, "ATTDEF");
@@ -576,7 +637,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(71, i64::from(t.attach));
             w.i(72, 1);
             // Long contents go in 250-char 3-chunks, the remainder in 1.
-            let chars: Vec<char> = t.contents.chars().collect();
+            let chars: Vec<char> = crate::dxf_read::mtext_dxf::encode_contents(&t.contents).chars().collect();
             let chunks: Vec<String> = chars.chunks(250).map(|c| c.iter().collect()).collect();
             let n = chunks.len();
             for (i, c) in chunks.iter().enumerate() {
@@ -592,6 +653,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             // Line spacing style: 1 = at least, 2 = exactly.
             w.i(73, if t.line_spacing_exact { 2 } else { 1 });
             w.f(44, t.line_spacing);
+            w.t.extend(crate::dxf_read::mtext_dxf::column_tags(t));
         }
         EntityKind::Insert(i) => {
             w.s(0, "INSERT");
@@ -665,12 +727,16 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                     w.p(13, dm.p13);
                     w.p(14, dm.p14);
                     w.f(50, rotation.to_degrees());
+                    oblique_52(w, dm, rotation);
                     w.s(100, "AcDbRotatedDimension");
                 }
                 DimKind::Aligned | DimKind::ArcLength => {
                     w.s(100, "AcDbAlignedDimension");
                     w.p(13, dm.p13);
                     w.p(14, dm.p14);
+                    if matches!(dm.kind, DimKind::Aligned) {
+                        oblique_52(w, dm, (dm.p14.xy() - dm.p13.xy()).angle());
+                    }
                 }
                 DimKind::Radius => {
                     w.s(100, "AcDbRadialDimension");
@@ -763,6 +829,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(1070, i64::from(t.header));
             w.f(1040, t.text_height);
             w.s(1000, &t.style);
+            for c in crate::dxf_table::table_xdata(t) {
+                w.s(1000, c);
+            }
         }
         EntityKind::MLeader(m) => {
             w.s(0, "MULTILEADER");
@@ -1102,6 +1171,7 @@ fn dim_block_entities(d: &Drawing, dm: &Dimension, layer: &str) -> Vec<Entity> {
                 contents: g.value.clone(),
                 line_spacing: 1.0,
                 line_spacing_exact: false,
+                columns: None,
             }),
         });
     }
@@ -1113,61 +1183,46 @@ fn table_size(t: &Table) -> (usize, usize) {
     (t.row_heights.len().min(10_000), t.col_widths.len().min(10_000))
 }
 
-/// The anonymous `*T` block of a table: cell borders and texts, for readers that only draw
-/// the block.
+/// The anonymous `*T` block of a table: cell fills, borders and texts as its cell styles draw
+/// them, for readers that only draw the block.
 fn table_block_entities(d: &Drawing, t: &Table, layer: &str) -> Vec<Entity> {
-    let (rows, cols) = table_size(t);
-    let mut xs = vec![0.0];
-    for w in t.col_widths.iter().take(cols) {
-        xs.push(xs.last().copied().unwrap_or(0.0) + w);
-    }
-    let mut ys = vec![0.0];
-    for h in t.row_heights.iter().take(rows) {
-        ys.push(ys.last().copied().unwrap_or(0.0) + h);
-    }
-    let x_at = |c: usize| xs.get(c).copied().unwrap_or(0.0);
-    let y_at = |r: usize| ys.get(r).copied().unwrap_or(0.0);
-    let p = |x: f64, y: f64| Vec3::new(x, -y, 0.0);
-    let cov = cadcraft_render::table_covered(t);
-    let margin = d.table_styles.iter().find(|s| s.name.eq_ignore_ascii_case(&t.style)).map(|s| s.margin).unwrap_or(0.06).max(0.0);
+    let g = cadcraft_render::table_geometry(d, t);
     let c = Common { layer: layer.into(), color: Color::ByBlock, ..Common::default() };
     let mut out = Vec::new();
-    let mut line = |a: Vec3, b: Vec3| out.push(Entity { handle: Handle(0), common: c.clone(), kind: EntityKind::Line(Line { a, b }) });
+    for f in &g.fills {
+        let [a, b, cc, dd] = f.corners.map(|p| p.to3(0.0));
+        // SOLID corners go 1, 2, 4, 3.
+        out.push(Entity {
+            handle: Handle(0),
+            common: Common { color: f.color, ..c.clone() },
+            kind: EntityKind::Solid(Solid { corners: [a, b, dd, cc] }),
+        });
+    }
+    for l in &g.lines {
+        out.push(Entity {
+            handle: Handle(0),
+            common: Common { color: l.color, lineweight: l.lineweight, ..c.clone() },
+            kind: EntityKind::Line(Line { a: l.a.to3(0.0), b: l.b.to3(0.0) }),
+        });
+    }
     let mut texts = Vec::new();
-    for r in 0..rows {
-        for col in 0..cols {
-            if cov.get(r).and_then(|v| v.get(col)).copied().unwrap_or(false) {
-                continue;
-            }
-            let cell = t.cells.get(r).and_then(|row| row.get(col));
-            let (rs, cs) = cell.and_then(|x| x.merged).map(|(a, b)| (a.max(1) as usize, b.max(1) as usize)).unwrap_or((1, 1));
-            let (r2, c2) = ((r + rs).min(rows), (col + cs).min(cols));
-            let (x0, x1, y0, y1) = (x_at(col), x_at(c2), y_at(r), y_at(r2));
-            line(p(x0, y1), p(x1, y1));
-            line(p(x1, y1), p(x1, y0));
-            if r == 0 {
-                line(p(x0, y0), p(x1, y0));
-            }
-            if col == 0 {
-                line(p(x0, y0), p(x0, y1));
-            }
-            let Some(cell) = cell.filter(|x| !x.text.is_empty()) else { continue };
-            let title = t.title && r == 0;
-            let header = t.header && r == usize::from(t.title);
-            let (insert, attach) = if title || header { (p((x0 + x1) / 2.0, (y0 + y1) / 2.0), 5) } else { (p(x0 + margin, (y0 + y1) / 2.0), 4) };
+    for cell in &g.texts {
+        if !cell.text.is_empty() {
+            let style = if d.text_style(&cell.style).is_some() { cell.style.clone() } else { "Standard".into() };
             texts.push(Entity {
                 handle: Handle(0),
-                common: c.clone(),
+                common: Common { color: cell.color, ..c.clone() },
                 kind: EntityKind::MText(MText {
-                    insert,
-                    height: if title { t.text_height * 1.4 } else { t.text_height },
+                    insert: cell.at.to3(0.0),
+                    height: cell.height,
                     width: 0.0,
-                    attach,
+                    attach: cell.attach,
                     rotation: 0.0,
-                    style: "Standard".into(),
+                    style,
                     contents: cell.text.clone(),
                     line_spacing: 1.0,
                     line_spacing_exact: false,
+                    columns: None,
                 }),
             });
         }
@@ -1310,8 +1365,8 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
         w.p2(12, finite(t.center, Vec2::ZERO));
         // Snap grid origin and rotation (SNAPBASE, SNAPANG in degrees): R13+ files keep them here.
         w.p2(13, d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO));
-        w.p2(14, Vec2::new(0.5, 0.5));
-        w.p2(15, Vec2::new(0.5, 0.5));
+        w.p2(14, d.header.snap_unit());
+        w.p2(15, d.header.grid_unit());
         w.p(16, Vec3::Z);
         w.p(17, Vec3::ZERO);
         w.f(40, if t.height.is_finite() && t.height > 0.0 { t.height } else { 1.0 });
@@ -1357,6 +1412,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
     let ms_br = w.h();
+    // Xrefs are saved as references: without their objects and the symbols that came with them.
+    let saved_view = crate::dxf_xref::saved_view(d);
+    let d = saved_view.as_ref().unwrap_or(d);
     let ps_brs: Vec<(String, String, &Layout)> = paper_layouts
         .iter()
         .enumerate()
@@ -1564,6 +1622,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     ];
     if !cx.tables.is_empty() {
         classes.push(("ACAD_TABLE", "AcDbTable", 1025, true));
+    }
+    if every.iter().any(|e| matches!(e.kind, EntityKind::Helix(_))) {
+        classes.push(("HELIX", "AcDbHelix", 4095, true));
     }
     if !cx.assoc.is_empty() {
         classes.push(("DIMASSOC", "AcDbDimAssoc", 0, false));
@@ -2014,7 +2075,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         w.s(350, h);
     }
     for (s, (_, h)) in table_styles.iter().zip(&cx.table_styles) {
-        table_style_obj(&mut w, s, h, &table_style_dict);
+        table_style_obj(&mut w, d, s, h, &table_style_dict);
     }
     // Plot style names: a dictionary with a default (Normal) of placeholder objects.
     w.s(0, "ACDBDICTIONARYWDFLT");
@@ -2193,6 +2254,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     if let Some(t) = w.t.get_mut(seed_pos + 1) {
         *t = Tag::s(5, seed);
     }
+    crate::dxf_raw::finish(&mut w.t, d);
     mark_xrefs(&mut w.t, d);
     w.t
 }
@@ -2200,18 +2262,23 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
 /// Xref blocks (DXF Reference, BLOCK): bit 4 of group 70 and the external drawing's path in
 /// group 1, set on the written BLOCK records of blocks that have an `xref_path`.
 fn mark_xrefs(tags: &mut [Tag], d: &Drawing) {
-    let xrefs: HashMap<String, &str> = d.blocks.values().filter_map(|b| Some((b.name.to_ascii_uppercase(), b.xref_path.as_deref()?))).collect();
+    // Overlays add bit 8.
+    let xrefs: HashMap<String, (&str, i64)> = d
+        .blocks
+        .values()
+        .filter_map(|b| Some((b.name.to_ascii_uppercase(), (b.xref_path.as_deref()?, if b.xref_overlay { 12 } else { 4 }))))
+        .collect();
     if xrefs.is_empty() {
         return;
     }
     // Inside a BLOCK record: the path once its name (2) says it is an xref.
-    let mut block: Option<Option<&str>> = None;
+    let mut block: Option<Option<(&str, i64)>> = None;
     for t in tags.iter_mut() {
         match (t.code, block) {
             (0, _) => block = (t.str() == "BLOCK").then_some(None),
             (2, Some(None)) => block = Some(xrefs.get(&t.str().to_ascii_uppercase()).copied()),
-            (70, Some(Some(_))) => *t = Tag::i(70, t.i64() | 4),
-            (1, Some(Some(p))) => *t = Tag::s(1, p),
+            (70, Some(Some((_, flags)))) => *t = Tag::i(70, t.i64() | flags),
+            (1, Some(Some((p, _)))) => *t = Tag::s(1, p),
             _ => {}
         }
     }
@@ -2219,7 +2286,7 @@ fn mark_xrefs(tags: &mut [Tag], d: &Drawing) {
 
 /// A TABLESTYLE object (DXF Reference, OBJECTS: TABLESTYLE): margins, title/header
 /// suppression and per row type (data, column header, title) text and border settings.
-fn table_style_obj(w: &mut W, s: &TableStyle, h: &str, dict: &str) {
+fn table_style_obj(w: &mut W, d: &Drawing, s: &TableStyle, h: &str, dict: &str) {
     w.s(0, "TABLESTYLE");
     w.s(5, h);
     w.group("ACAD_REACTORS", 330, &[dict]);
@@ -2232,22 +2299,17 @@ fn table_style_obj(w: &mut W, s: &TableStyle, h: &str, dict: &str) {
     w.f(41, s.margin);
     w.i(280, i64::from(!s.title));
     w.i(281, i64::from(!s.header));
-    // Data (middle left), column header and title (middle centre).
-    for (height, align) in [(s.text_height, 4), (s.text_height, 5), (s.text_height * 1.4, 5)] {
-        w.s(7, "Standard");
-        w.f(140, height);
-        w.i(170, align);
-        w.i(62, 0);
-        w.i(63, 7);
-        w.i(283, 0);
-        for c in 274..=279 {
-            w.i(c, -2);
-        }
-        for c in 284..=289 {
-            w.i(c, 1);
-        }
-        for c in 64..=69 {
-            w.i(c, 0);
+    // Data, column header and title cell styles; CADCraft's complete cell styles in xdata.
+    for kind in crate::dxf_table::CELL_TYPES {
+        let cs = s.cell_style(kind);
+        let style = if d.text_style(&cs.text_style).is_some() { cs.text_style.clone() } else { "Standard".to_string() };
+        w.t.extend(crate::dxf_table::cell_type_tags(&cs, &style));
+    }
+    let x = crate::dxf_table::cell_styles_xdata(s);
+    if !x.is_empty() {
+        w.s(1001, dxf_ext::APP);
+        for c in x {
+            w.s(1000, c);
         }
     }
 }

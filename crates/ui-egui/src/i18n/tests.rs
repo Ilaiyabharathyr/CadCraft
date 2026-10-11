@@ -18,7 +18,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
             assert!(["", "@plural"].contains(&context), "unknown context: {context}");
             let forms: Vec<_> = if context == "@plural" { value.split('|').collect() } else { vec![value] };
             if context == "@plural" {
-                assert_eq!(forms.len(), 3, "{key}");
+                assert_eq!(forms.len(), language.plural_forms, "{}: {key}", language.code);
             }
             for form in forms {
                 assert_eq!(placeholders(key), placeholders(form), "{key}");
@@ -35,9 +35,29 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
     assert_eq!(tr("unknown", "Open"), "Open");
 }
 
+/// Ukrainian is the reference translation and must cover everything. Other languages fall back
+/// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
+/// command doesn't require a row in every language.
+const REQUIRED: &[&str] = &["uk"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es"];
+
+fn check(language: &str, what: &str, missing: Vec<String>) {
+    if REQUIRED.contains(&language) {
+        assert!(missing.is_empty(), "{language}: missing {what}: {missing:?}");
+    } else if !missing.is_empty() {
+        eprintln!("{language}: {} {what} fall back to English: {missing:?}", missing.len());
+    }
+}
+
 #[test]
-fn ukrainian_covers_commands_menus_tools_and_snap_labels() {
-    let catalog = catalog("uk").unwrap();
+fn translations_cover_commands_menus_tools_and_snap_labels() {
+    for language in REQUIRED.iter().chain(REPORTED) {
+        check(language, "translations", missing_commands_menus_tools_and_snap_labels(language));
+    }
+}
+
+fn missing_commands_menus_tools_and_snap_labels(language: &str) -> Vec<String> {
+    let catalog = catalog(language).unwrap();
     let mut sources = BTreeSet::new();
     sources.extend(crate::menus::MENUS.iter().copied());
     for c in cadcraft_engine::command_specs() {
@@ -55,20 +75,28 @@ fn ukrainian_covers_commands_menus_tools_and_snap_labels() {
         }
     }
     sources.extend(cadcraft_engine::snap::mode::ALL.iter().map(|(_, name)| *name));
-    let missing: Vec<_> = sources.into_iter().filter(|s| !s.is_empty() && !catalog.contains_key(&("", *s))).collect();
-    assert!(missing.is_empty(), "missing translations: {missing:?}");
+    sources.into_iter().filter(|s| !s.is_empty() && !catalog.contains_key(&("", *s))).map(str::to_string).collect()
 }
 
 #[test]
 fn every_marked_ui_literal_has_a_translation() {
-    let catalog = catalog("uk").unwrap();
+    for language in REQUIRED.iter().chain(REPORTED) {
+        check(language, "UI translations", missing_marked_ui_literals(language).into_iter().collect());
+    }
+}
+
+fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
+    let catalog = catalog(language).unwrap();
     let sources = [
+        include_str!("../xrefs.rs"),
         include_str!("../canvas.rs"),
         include_str!("../chrome.rs"),
         include_str!("../cmdline.rs"),
         include_str!("../credits.rs"),
+        include_str!("../palettes/quickcalc.rs"),
         include_str!("../dialogs.rs"),
         include_str!("../layers.rs"),
+        include_str!("../canvas/compare.rs"),
         include_str!("../palettes.rs"),
         include_str!("../parametric.rs"),
         include_str!("../quick.rs"),
@@ -106,7 +134,7 @@ fn every_marked_ui_literal_has_a_translation() {
             }
         }
     }
-    assert!(missing.is_empty(), "missing UI translations: {missing:?}");
+    missing
 }
 
 #[test]
@@ -114,12 +142,29 @@ fn locale_and_saved_preference_resolution() {
     for tag in ["uk", "uk-UA", "uk_UA.UTF-8", "UK-ua", " uk-UA ", "uk_UA@euro"] {
         assert_eq!(locale_language(tag), Some("uk"), "{tag}");
     }
+    for tag in ["de", "de-DE", "de_DE.UTF-8", "DE-at", "de-CH"] {
+        assert_eq!(locale_language(tag), Some("de"), "{tag}");
+    }
     for tag in ["ua", "ukulele", "ru-RU", "", "garbage", "💙"] {
         assert_eq!(locale_language(tag), None, "{tag}");
     }
+    for tag in ["pt", "pt-BR", "pt_BR.UTF-8", "PT-br", "pt-PT"] {
+        assert_eq!(locale_language(tag), Some("pt-BR"), "{tag}");
+    }
+    assert_eq!(locale_language("ptolemy"), None);
+    assert_eq!(Preference::Auto.resolve(&["fr-FR".into(), "pt-BR".into()]), "pt-BR");
+    for tag in ["es", "es-ES", "es_MX.UTF-8", "ES-ar"] {
+        assert_eq!(locale_language(tag), Some("es"), "{tag}");
+    }
+    assert_eq!(Preference::Auto.resolve(&["es-ES".into(), "pt-BR".into()]), "es");
+    assert_eq!(Preference::parse("es"), Some(Preference::Spanish));
+    assert_eq!(Preference::BrazilianPortuguese.resolve(&["uk-UA".into()]), "pt-BR");
+    assert_eq!(Preference::parse("pt-BR"), Some(Preference::BrazilianPortuguese));
     let locales = vec!["pl-PL".into(), "uk-UA".into(), "en-US".into()];
     assert_eq!(Preference::Auto.resolve(&locales), "uk");
     assert_eq!(Preference::English.resolve(&locales), "en");
+    assert_eq!(Preference::German.resolve(&locales), "de");
+    assert_eq!(Preference::Auto.resolve(&["de-DE".into(), "en-US".into()]), "de");
     assert_eq!(Preference::Auto.resolve(&["en-US".into(), "uk-UA".into()]), "en");
     assert_eq!(Preference::Auto.resolve(&[]), "en");
     assert_eq!(Preference::restore(None), Preference::Auto);
@@ -170,12 +215,50 @@ fn plural_forms_and_templates_preserve_inserted_user_data() {
         assert_eq!(format("{b}/{a}", &[("a", "А".into()), ("b", "Б".into())]), "Б/А");
     });
     assert_eq!(t("Layers"), "Layers");
+    with_language("de", || {
+        assert_eq!(t("Layers"), "Layer");
+        assert_eq!(count(1, "{n} contributor", "{n} contributors"), "1 Mitwirkender");
+        assert_eq!(count(2, "{n} contributor", "{n} contributors"), "2 Mitwirkende");
+        assert_eq!(count(11, "{n} contributor", "{n} contributors"), "11 Mitwirkende");
+    });
     with_language("uk", || {
         assert_eq!(t("Layers"), "Шари");
         with_language("en", || assert_eq!(t("Layers"), "Layers"));
         assert_eq!(t("Layers"), "Шари");
     });
     assert_eq!(count(2, "{n} contributor", "{n} contributors"), "2 contributors");
+}
+
+#[test]
+fn brazilian_portuguese_plurals_and_accents() {
+    for (n, form) in [(0, 0), (1, 0), (2, 1), (5, 1), (21, 1), (u64::MAX, 1)] {
+        assert_eq!(plural_pt(n), form, "{n}");
+    }
+    with_language("pt-BR", || {
+        assert_eq!(count(1, "{n} contributor", "{n} contributors"), "1 colaborador");
+        assert_eq!(count(3, "{n} contributor", "{n} contributors"), "3 colaboradores");
+        assert_eq!(t("Layers"), "Camadas");
+        assert_eq!(t("Dimension"), "Cota");
+        assert_eq!(format("Height: {height}", &[("height", "{n}".into())]), "Altura: {n}");
+    });
+    assert_eq!(count(2, "{n} contributor", "{n} contributors"), "2 contributors");
+}
+
+#[test]
+fn live_switch_to_brazilian_portuguese_translates_the_shell() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.in_window_menu = true;
+    let ctx = egui::Context::default();
+    app.logic(&ctx);
+    app.start("line");
+    app.run("ui.language", json!({"lang":"pt-BR"})).unwrap();
+    let text = render(&mut app, &ctx);
+    assert!(text.contains("Propriedades"), "{text}");
+    assert!(text.contains("Arquivo"), "{text}");
+    assert_eq!(app.language(), "pt-BR");
+    assert_eq!(t("Properties"), "Properties", "language must not leak out of the render scope");
+    app.run("ui.language", json!({"lang":"en"})).unwrap();
+    assert!(render(&mut app, &ctx).contains("Properties"));
 }
 
 fn painted_text(shapes: &[egui::epaint::ClippedShape]) -> String {
@@ -269,6 +352,22 @@ fn dialogs_render_in_ukrainian_and_keep_their_source_ids() {
         assert!(text.contains(heading), "{dialog}: {text}");
         assert_eq!(app.ui.dialog.as_deref(), Some(dialog));
     }
+}
+
+#[test]
+fn default_fonts_cover_every_german_special_letter_in_the_catalog() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let letters: BTreeSet<_> = include_str!("de.tsv").chars().filter(|c| ('\u{00c0}'..='\u{00ff}').contains(c)).collect();
+    ctx.fonts_mut(|view| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let mut font = view.fonts.font(&family);
+            for c in &letters {
+                assert!(font.characters().contains_key(c), "missing {c} in {family:?}");
+            }
+        }
+    });
 }
 
 #[test]

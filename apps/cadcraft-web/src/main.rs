@@ -2,10 +2,11 @@
 //!
 //! Runs the same [`cadcraft_ui_egui::CadApp`] as the desktop app through eframe's web runner
 //! (wgpu: WebGPU where available, WebGL2 otherwise). Build with `trunk build --release` from this
-//! directory (output in `dist/web`). URL flags: `?webgl` forces WebGL2, `?sample` opens the sample
-//! drawing. Saving downloads the drawing through the browser (`download.rs`). With `?host=parent`
-//! (inside an `<iframe>`), a same-origin parent page sends the drawing to open and stores what
-//! CADCraft saves instead (`host.rs`).
+//! directory (output in `dist/web`). URL flags: `?webgl` forces WebGL2, `?cpu` draws the drawing
+//! with egui shapes instead of the GPU canvas, `?sample` opens the sample drawing. Saving downloads
+//! the drawing through the browser (`download.rs`). With `?host=parent` (inside an `<iframe>`), a
+//! same-origin parent page sends the drawing to open and stores what CADCraft saves instead
+//! (`host.rs`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
@@ -41,6 +42,7 @@ mod web {
         }
         /// Preferences (interface theme and language) survive reloads; egui state is not kept.
         fn save(&mut self, storage: &mut dyn eframe::Storage) {
+            storage.set_string(cadcraft_ui_egui::options::PROFILE_KEY, self.0.profile_json());
             storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.0.prefs_json());
         }
         fn persist_egui_memory(&self) -> bool {
@@ -73,7 +75,7 @@ mod web {
         cadcraft_engine::cmd::file::set_io(cadcraft_engine::cmd::file::IoHooks {
             read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
             write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
-            plot: Some(|d, space, opts| cadcraft_io::plot(d, space, opts).map_err(|e| e.to_string())),
+            plot: Some(|d, space, opts| cadcraft_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
         });
         cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
             cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
@@ -112,10 +114,16 @@ mod web {
                         let mut app = CadApp::new(session, services());
                         app.system_languages =
                             web_sys::window().map(|w| w.navigator().languages().iter().filter_map(|v| v.as_string()).collect()).unwrap_or_default();
+                        if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::options::PROFILE_KEY)) {
+                            app.load_profile(&profile);
+                        }
                         if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::PREFS_KEY)) {
                             app.load_prefs(&prefs);
                         }
-                        if let Some(rs) = &cc.wgpu_render_state {
+                        // `?cpu`: no render state for the app, so the canvas draws with egui shapes.
+                        if !crate::wants_cpu(&query())
+                            && let Some(rs) = &cc.wgpu_render_state
+                        {
                             app.set_wgpu(rs);
                         }
                         if query().contains("sample") {
@@ -153,6 +161,12 @@ mod web {
     }
 }
 
+/// True when the URL query (`?cpu&sample`) has a `cpu` flag: the CPU canvas path is requested.
+#[cfg(any(target_arch = "wasm32", test))]
+fn wants_cpu(query: &str) -> bool {
+    query.trim_start_matches('?').split('&').any(|p| p == "cpu" || p.starts_with("cpu="))
+}
+
 #[cfg(target_arch = "wasm32")]
 mod upload;
 
@@ -164,4 +178,20 @@ fn main() {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     eprintln!("cadcraft-web only runs in the browser: build it with `trunk build --release` in apps/cadcraft-web");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wants_cpu;
+
+    #[test]
+    fn cpu_flag_is_detected() {
+        assert!(wants_cpu("?cpu"));
+        assert!(wants_cpu("?cpu&sample"));
+        assert!(wants_cpu("?sample&cpu"));
+        assert!(!wants_cpu(""));
+        assert!(!wants_cpu("?sample"));
+        assert!(!wants_cpu("?webgl&sample"));
+        assert!(!wants_cpu("?gpucpu"));
+    }
 }
