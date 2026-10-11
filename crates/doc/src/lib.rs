@@ -6,22 +6,26 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod array;
 mod constraint;
 mod entity;
 mod extents;
+mod gdt;
 mod header;
 pub mod library;
 mod plotstyle;
 mod store;
 mod tables;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+pub use array::*;
 pub use cadcraft_color as color;
 pub use cadcraft_geom as geom;
 pub use constraint::*;
 pub use entity::*;
 pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
+pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;
 pub use store::EntityStore;
@@ -63,6 +67,8 @@ pub struct Drawing {
     pub model: EntityStore,
     pub layouts: Vec<Layout>,
     pub views: Vec<NamedView>,
+    /// Model space viewport configurations (VPORTS): the tiles shown and named ones.
+    pub vports: Vec<VportConfig>,
     pub ucss: Vec<Ucs>,
     pub layer_states: Vec<LayerState>,
     pub groups: Vec<Group>,
@@ -73,8 +79,13 @@ pub struct Drawing {
     pub constraints: Vec<Constraint>,
     /// User parameters and parametric settings.
     pub parametric: Parametric,
+    /// The annotation scale list (SCALELISTEDIT).
+    pub scales: Vec<AnnoScale>,
     /// Next free handle.
     pub handseed: u64,
+    /// Objects hidden for this session by ISOLATEOBJECTS / HIDEOBJECTS. Never written to a file:
+    /// a drawing opens with everything shown again.
+    pub hidden_objects: BTreeSet<Handle>,
 }
 
 impl Default for Drawing {
@@ -94,6 +105,7 @@ impl Drawing {
     pub fn new_metric() -> Self {
         let mut d = Drawing::bare();
         d.header = Header::metric();
+        d.scales = metric_scales();
         d.dim_styles.push(DimStyle::iso25());
         d.header.set_str("DIMSTYLE", "ISO-25");
         d
@@ -115,13 +127,16 @@ impl Drawing {
             model: EntityStore::new(),
             layouts: vec![Layout::new("Layout1", 1), Layout::new("Layout2", 2)],
             views: Vec::new(),
+            vports: Vec::new(),
             ucss: Vec::new(),
             layer_states: Vec::new(),
             groups: Vec::new(),
             plot_style_tables: Vec::new(),
             constraints: Vec::new(),
             parametric: Parametric::default(),
+            scales: imperial_scales(),
             handseed: 0x100,
+            hidden_objects: BTreeSet::new(),
         }
     }
 
@@ -267,9 +282,15 @@ impl Drawing {
         Ok(h)
     }
 
-    /// Effective visibility of an entity (its own flag, its layer on/thawed).
+    /// Effective visibility of an entity (its own flag, its layer on/thawed, not hidden by object
+    /// isolation).
     pub fn is_visible(&self, e: &Entity) -> bool {
-        e.common.visible && self.layer(&e.common.layer).is_none_or(Layer::visible)
+        e.common.visible && self.layer(&e.common.layer).is_none_or(Layer::visible) && !self.is_hidden_object(e.handle)
+    }
+
+    /// Whether ISOLATEOBJECTS / HIDEOBJECTS hid `h` for this session.
+    pub fn is_hidden_object(&self, h: Handle) -> bool {
+        !self.hidden_objects.is_empty() && self.hidden_objects.contains(&h)
     }
 
     /// Bounds of all visible entities in a space.
@@ -302,6 +323,9 @@ impl Drawing {
         }
     }
 }
+
+mod anno;
+pub use anno::*;
 
 #[cfg(test)]
 mod tests;

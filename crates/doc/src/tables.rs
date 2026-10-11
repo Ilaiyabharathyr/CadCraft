@@ -459,11 +459,21 @@ pub struct MLeaderStyle {
     pub landing_gap: f64,
     pub dogleg: f64,
     pub text_style: String,
+    /// New multileaders of this style are annotative.
+    pub annotative: bool,
 }
 
 impl Default for MLeaderStyle {
     fn default() -> Self {
-        MLeaderStyle { name: "Standard".into(), arrow_size: 0.18, text_height: 0.18, landing_gap: 0.09, dogleg: 0.36, text_style: "Standard".into() }
+        MLeaderStyle {
+            name: "Standard".into(),
+            arrow_size: 0.18,
+            text_height: 0.18,
+            landing_gap: 0.09,
+            dogleg: 0.36,
+            text_style: "Standard".into(),
+            annotative: false,
+        }
     }
 }
 
@@ -488,6 +498,9 @@ impl Default for TableStyle {
 #[serde(rename_all = "camelCase")]
 pub struct Block {
     pub name: String,
+    /// References to this block are annotative.
+    #[serde(default)]
+    pub annotative: bool,
     pub base: Vec3,
     #[serde(skip)]
     pub entities: EntityStore,
@@ -502,12 +515,16 @@ pub struct Block {
     pub explodable: bool,
     #[serde(default)]
     pub units: u8,
+    /// The parameters of an associative array when this is an array block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub array: Option<crate::ArrayParams>,
 }
 
 impl Block {
     pub fn new(name: &str) -> Self {
         Block {
             name: name.into(),
+            annotative: false,
             base: Vec3::ZERO,
             entities: EntityStore::new(),
             description: String::new(),
@@ -515,6 +532,7 @@ impl Block {
             xref_path: None,
             explodable: true,
             units: 0,
+            array: None,
         }
     }
 }
@@ -582,15 +600,54 @@ impl Layout {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A named view (VIEW table): the centre and size of the area shown, in model space or a layout.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NamedView {
     pub name: String,
     pub center: Vec2,
     pub height: f64,
     pub width: f64,
+    /// The layer state restored with the view (its layer snapshot).
     #[serde(default)]
     pub layer_state: Option<String>,
+    /// View twist (radians, counterclockwise); kept for files, not applied to the 2D display.
+    #[serde(default)]
+    pub twist: f64,
+    /// The layout a paper space view belongs to (`None`: a model space view; an empty name: a
+    /// paper space view whose layout is not known).
+    #[serde(default)]
+    pub layout: Option<String>,
+}
+
+/// One tiled model space viewport of a [`VportConfig`] (a VPORT table record): its corners as
+/// fractions of the drawing area (0,0 lower left to 1,1 upper right) and its view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VportTile {
+    pub min: Vec2,
+    pub max: Vec2,
+    pub center: Vec2,
+    pub height: f64,
+    /// Width / height of the tile on screen when it was saved (0: unknown).
+    #[serde(default)]
+    pub aspect: f64,
+}
+
+/// A model space viewport configuration (VPORTS): `*Active` is the one shown, other names are
+/// saved configurations. The first tile is the current one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VportConfig {
+    pub name: String,
+    pub tiles: Vec<VportTile>,
+}
+
+impl VportConfig {
+    /// The name of the configuration shown.
+    pub const ACTIVE: &'static str = "*Active";
+    pub fn is_active(&self) -> bool {
+        self.name.eq_ignore_ascii_case(Self::ACTIVE)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
