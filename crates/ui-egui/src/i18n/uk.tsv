@@ -156,6 +156,7 @@
 	Defined width	Задана ширина
 	Degree	Градус
 	Degrees of Freedom	Ступені вільності
+	Degrees of freedom: {n}	Ступені вільності: {n}
 	Delete	Видалити
 	Delete Column	Видалити стовпець
 	Delete Constraints	Видалити обмеження
@@ -337,6 +338,7 @@
 	Increment angle	Крок кута
 	Index Color	Індексований колір
 	Index color: {index}	Індексований колір: {index}
+	Infer Constraints	Виведення обмежень
 	Inquiry	Вимірювання
 	Insert	Вставлення
 	Insert Block	Вставити блок
@@ -499,6 +501,7 @@
 	Ortho Mode (F8)	Режим Орто (F8)
 	Osnap Settings...	Параметри об'єктної прив'язки...
 	Out	Віддалити
+	Over-constrained	Надмірно обмежено
 	Override	Перевизначити
 	PAPER	АРКУШ
 	Percent	Відсоток
