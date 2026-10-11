@@ -38,13 +38,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrayrect", "Rectangular Array", run_arrayrect)
             .menu(&["Modify", "Array", "Rectangular Array"])
             .params(
-                "{handles?, rows, cols, rowSpacing, colSpacing, levels? (1), levelSpacing?, rowElevation?, axisAngle? (degrees), base? ([x, y], default the objects' centre), associative?: bool (default true)} → {handle (the array, when associative), created (copies)}",
+                "{handles?, rows, cols, rowSpacing, colSpacing, levels? (1), levelSpacing?, rowElevation?, axisAngle? (degrees), base? ([x, y], default the objects' centre), associative?: bool (default ARRAYASSOCIATIVITY, on)} → {handle (the array, when associative), created (copies)}",
             )
             .interactive(|_| Ok(Box::new(RectM::default()))),
         CommandSpec::new("arraypolar", "Polar Array", run_arraypolar)
             .menu(&["Modify", "Array", "Polar Array"])
             .params(
-                "{handles?, center, count, angle? (degrees, default 360), rotate?: bool, rows? (1), rowSpacing?, rowElevation?, levels? (1), levelSpacing?, base? ([x, y], default the first object's centre), associative?: bool (default true)} → {handle (the array, when associative), created (copies)}",
+                "{handles?, center, count, angle? (degrees, default 360), rotate?: bool, rows? (1), rowSpacing?, rowElevation?, levels? (1), levelSpacing?, base? ([x, y], default the first object's centre), associative?: bool (default ARRAYASSOCIATIVITY, on)} → {handle (the array, when associative), created (copies)}",
             )
             .interactive(|_| Ok(Box::new(PolarM::default()))),
     ]
@@ -352,7 +352,8 @@ fn run_arrayrect(s: &mut Session, p: &Value) -> Result<Value> {
         None => Some(bounds(s.doc()?, &hs).center()).filter(|c| c.is_finite()).unwrap_or_default(),
     };
     let p2 = params(kind, levels, f64_or(p, "levelSpacing", rs));
-    create(s, &hs, base, p2, bool_or(p, "associative", true))
+    let associative = bool_or(p, "associative", assoc_default(s));
+    create(s, &hs, base, p2, associative)
 }
 
 fn run_arraypolar(s: &mut Session, p: &Value) -> Result<Value> {
@@ -374,7 +375,8 @@ fn run_arraypolar(s: &mut Session, p: &Value) -> Result<Value> {
         row_elevation: f64_or(p, "rowElevation", 0.0),
     });
     let p2 = params(kind, levels, f64_or(p, "levelSpacing", row_spacing));
-    create(s, &hs, base, p2, bool_or(p, "associative", true))
+    let associative = bool_or(p, "associative", assoc_default(s));
+    create(s, &hs, base, p2, associative)
 }
 
 // ---------------- ARRAY ----------------

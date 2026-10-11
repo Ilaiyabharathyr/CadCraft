@@ -274,8 +274,7 @@ pub fn recompute(dm: &Dimension, prev: Option<&Dimension>, before: &Drawing, aft
         // An ordinate's `defpt` is its fixed datum (the drawing origin); it must not follow the feature.
         let ordinate = matches!(nd.kind, DimKind::Ordinate { .. });
         for name in POINTS {
-            if !moved.iter().any(|m| m == name)
-                && !(ordinate && name == "defpt")
+            if !(moved.iter().any(|m| m == name) || ordinate && name == "defpt")
                 && !(linear && (name == "p13" || name == "p14"))
                 && let Some(slot) = def_point_mut(&mut nd, name)
             {
@@ -337,10 +336,13 @@ pub fn update(after: &mut Arc<Drawing>, before: &Drawing) -> usize {
 /// finishes. `uid` (when known) is the document the command started in.
 pub fn after_command(s: &mut crate::Session, before: Option<&Arc<Drawing>>, uid: Option<u64>) {
     let Some(before) = before else { return };
+    let mut notes = Vec::new();
     if let Ok(st) = s.state_mut()
         && uid.is_none_or(|u| u == st.uid)
         && !Arc::ptr_eq(before, &st.doc)
     {
         update(&mut st.doc, before);
+        notes = crate::cmd::hatch::refill_associative(&mut st.doc, before);
     }
+    notes.into_iter().for_each(|n| s.echo(n));
 }
