@@ -188,6 +188,8 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("INSBASE", -3),
     ("LIMMIN", -2),
     ("LIMMAX", -2),
+    ("SNAPUNIT", -2),
+    ("GRIDUNIT", -2),
     ("ORTHOMODE", 70),
     ("FILLMODE", 70),
     ("MIRRTEXT", 70),
@@ -228,6 +230,11 @@ fn header_vars(w: &mut W, d: &Drawing) {
         let Some(v) = d.header.get(name) else { continue };
         match (*code, v) {
             (-2 | -3, HVal::Point(p)) => {
+                let p = match *name {
+                    "SNAPUNIT" => d.header.snap_unit().to3(0.0),
+                    "GRIDUNIT" => d.header.grid_unit().to3(0.0),
+                    _ => *p,
+                };
                 w.s(9, format!("${name}"));
                 w.f(10, p.x);
                 w.f(20, p.y);
@@ -1446,8 +1453,8 @@ pub fn write(d: &Drawing) -> String {
     w.p2(12, if ext.is_empty() { Vec2::new(6.0, 4.5) } else { ext.center() });
     // Snap grid origin and rotation (SNAPBASE, SNAPANG in degrees): R13+ files keep them here.
     w.p2(13, d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO));
-    w.p2(14, Vec2::new(0.5, 0.5));
-    w.p2(15, Vec2::new(0.5, 0.5));
+    w.p2(14, d.header.snap_unit());
+    w.p2(15, d.header.grid_unit());
     w.p(16, Vec3::Z);
     w.p(17, Vec3::ZERO);
     w.f(40, if ext.is_empty() { 9.0 } else { (ext.height() * 1.1).max(1e-6) });

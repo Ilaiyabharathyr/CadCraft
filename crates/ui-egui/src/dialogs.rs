@@ -33,20 +33,22 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
 }
 
 fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
+    let settings = app.session.drafting_settings();
+    let (mut snapunit, mut gridunit) = (settings.snapunit, settings.gridunit);
     egui::Window::new(crate::tl!("Drafting Settings")).id(egui::Id::new("Drafting Settings")).open(open).resizable(false).show(ctx, |ui| {
         let s = &mut app.session.settings;
         ui.heading(crate::tl!("Snap and Grid"));
         ui.checkbox(&mut s.snapmode, crate::tl!("Snap On (F9)"));
         ui.horizontal(|ui| {
             ui.label(crate::tl!("Snap X spacing"));
-            ui.add(egui::DragValue::new(&mut s.snapunit.x).speed(0.05).range(0.0001..=1e6));
+            ui.add(egui::DragValue::new(&mut snapunit.x).speed(0.05).range(0.0001..=1e6).clamp_existing_to_range(false));
             ui.label(crate::tl!("Y"));
-            ui.add(egui::DragValue::new(&mut s.snapunit.y).speed(0.05).range(0.0001..=1e6));
+            ui.add(egui::DragValue::new(&mut snapunit.y).speed(0.05).range(0.0001..=1e6).clamp_existing_to_range(false));
         });
         ui.checkbox(&mut s.gridmode, crate::tl!("Grid On (F7)"));
         ui.horizontal(|ui| {
             ui.label(crate::tl!("Grid spacing"));
-            ui.add(egui::DragValue::new(&mut s.gridunit.x).speed(0.05).range(0.0001..=1e6));
+            ui.add(egui::DragValue::new(&mut gridunit.x).speed(0.05).range(0.0..=1e6).clamp_existing_to_range(false));
             ui.label(crate::tl!("Major line every"));
             ui.add(egui::DragValue::new(&mut s.gridmajor).range(1..=100));
         });
@@ -106,6 +108,12 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         });
         ui.checkbox(&mut s.orthomode, crate::tl!("Ortho (F8)"));
     });
+    // Drawing edits go through the same command as the CLI, including dirty state and undo.
+    for (name, before, after) in [("SNAPUNIT", settings.snapunit, snapunit), ("GRIDUNIT", settings.gridunit, gridunit)] {
+        if before != after {
+            let _ = app.run("setvar", json!({ "name": name, "value": [after.x, after.y] }));
+        }
+    }
 }
 
 /// LUNITS values in the order the Type list shows them.

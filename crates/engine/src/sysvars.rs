@@ -48,8 +48,11 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "POLARANG" => json!(st.polarang.to_degrees()),
         "GRIDMODE" => json!(i32::from(st.gridmode)),
         "SNAPMODE" => json!(i32::from(st.snapmode)),
-        "SNAPUNIT" => json!([st.snapunit.x, st.snapunit.y]),
-        "GRIDUNIT" => json!([st.gridunit.x, st.gridunit.y]),
+        "SNAPUNIT" | "GRIDUNIT" => {
+            let settings = s.drafting_settings();
+            let unit = if n == "SNAPUNIT" { settings.snapunit } else { settings.gridunit };
+            json!([unit.x, unit.y])
+        }
         "GRIDMAJOR" => json!(st.gridmajor),
         "DYNMODE" => json!(i32::from(st.dynmode)),
         "DYNPIFORMAT" => json!(i32::from(st.dynpi_cartesian)),
@@ -155,8 +158,12 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "POLARANG" => st.polarang = as_f64(v).filter(|a| *a > 0.0).ok_or_else(bad)?.to_radians(),
         "GRIDMODE" => st.gridmode = as_bool(v).ok_or_else(bad)?,
         "SNAPMODE" => st.snapmode = as_bool(v).ok_or_else(bad)?,
-        "SNAPUNIT" => st.snapunit = as_pt(v).filter(|p| p.x > 0.0 && p.y > 0.0).ok_or_else(bad)?,
-        "GRIDUNIT" => st.gridunit = as_pt(v).filter(|p| p.x > 0.0 && p.y > 0.0).ok_or_else(bad)?,
+        "SNAPUNIT" | "GRIDUNIT" => {
+            let unit = as_pt(v)
+                .filter(|p| p.is_finite() && if n == "GRIDUNIT" { p.x >= 0.0 && p.y >= 0.0 } else { p.x > 0.0 && p.y > 0.0 })
+                .ok_or_else(bad)?;
+            s.doc_mut()?.header.set(&n, cadcraft_doc::HVal::Point(unit.to3(0.0)));
+        }
         "GRIDMAJOR" => st.gridmajor = as_f64(v).ok_or_else(bad)?.clamp(1.0, 100.0) as u32,
         "DYNMODE" => st.dynmode = as_bool(v).ok_or_else(bad)?,
         "DYNPIFORMAT" => st.dynpi_cartesian = as_bool(v).ok_or_else(bad)?,
@@ -234,7 +241,7 @@ pub fn list(s: &Session) -> Value {
     }
     if let Ok(d) = s.doc() {
         for (k, v) in &d.header.vars {
-            if k == "ANGBASE" {
+            if matches!(k.as_str(), "ANGBASE" | "SNAPUNIT" | "GRIDUNIT") {
                 m.insert(k.clone(), get(s, k).unwrap_or(Value::Null));
             } else if !k.starts_with("CADCRAFT_") {
                 m.insert(k.clone(), serde_json::to_value(v).unwrap_or(Value::Null));

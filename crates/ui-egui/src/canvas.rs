@@ -214,11 +214,12 @@ fn adaptive(unit: f64, scale: f64, min_px: f64) -> f64 {
 
 fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     let t = Tokens::get();
-    let s = &app.session.settings;
+    let s = app.session.drafting_settings();
     let wb = xf.world_bounds();
     if s.gridmode {
         let major_n = f64::from(s.gridmajor.max(1));
-        let minor = adaptive(s.gridunit.x, xf.scale, 8.0);
+        let unit = if s.gridunit.x == 0.0 { s.snapunit.x } else { s.gridunit.x };
+        let minor = adaptive(unit, xf.scale, 8.0);
         let major = minor * major_n;
         let mut lines = Vec::new();
         let x0 = (wb.min.x / minor).floor() as i64;
