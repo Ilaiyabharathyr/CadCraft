@@ -25,8 +25,9 @@ use egui_wgpu::wgpu::util::DeviceExt;
 
 /// Line/triangle vertex: position (2 × f32, relative to the origin) + sRGB colour (4 × u8).
 const VERTEX_SIZE: usize = 12;
-/// Wide-line / point instance: a, b (2 × f32 each) + colour (4 × u8) + width in points (f32).
-const INSTANCE_SIZE: usize = 24;
+/// Wide-line / point instance: a, b (2 × f32 each) + colour (4 × u8) + width in points (f32) +
+/// length along its polyline before `a`, in world units (f32; dashing).
+const INSTANCE_SIZE: usize = 28;
 /// Vertices (or instances) per GPU buffer; divisible by 2 and 3 so no primitive straddles two.
 const CHUNK: usize = 4_194_300;
 /// Point markers are 1.5 × 1.5 points (as on the CPU path).
@@ -127,12 +128,13 @@ fn push_vertex(out: &mut Vec<u8>, p: [f32; 2], c: [u8; 4]) {
     out.extend_from_slice(&c);
 }
 
-fn push_instance(out: &mut Vec<u8>, a: [f32; 2], b: [f32; 2], c: [u8; 4], width: f32) {
+fn push_instance(out: &mut Vec<u8>, a: [f32; 2], b: [f32; 2], c: [u8; 4], width: f32, start: f32) {
     for v in [a[0], a[1], b[0], b[1]] {
         out.extend_from_slice(&v.to_le_bytes());
     }
     out.extend_from_slice(&c);
     out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&start.to_le_bytes());
 }
 
 /// Lineweight in screen points for a primitive (as on the CPU path), or `None` for a hairline.
@@ -161,7 +163,7 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
                 Some(w) => {
                     for s in pts.windows(2) {
                         if let [a, b] = s {
-                            push_instance(&mut m.quads, rel(*a, origin), rel(*b, origin), col, w);
+                            push_instance(&mut m.quads, rel(*a, origin), rel(*b, origin), col, w, 0.0);
                         }
                     }
                 }
@@ -192,10 +194,52 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
             Kind::Point => {
                 if let Some(q) = pts.first() {
                     let p = rel(*q, origin);
-                    push_instance(&mut m.quads, p, p, col, POINT_SIZE);
+                    push_instance(&mut m.quads, p, p, col, POINT_SIZE, 0.0);
                 }
             }
             // Drawn on the CPU each frame (clipped to the view).
+            Kind::Infinite { .. } => {}
+        }
+    }
+    m
+}
+
+/// Vertex data drawing primitives `prims` of `list` as `width`-point lines in `color` (the
+/// selection highlight; dashed by the callback's `dash`). Fills are outlined by their bounding
+/// box, as on the CPU path; infinite lines are left to the CPU (they are clipped per frame).
+pub fn build_highlight_mesh(list: &DisplayList, prims: &[usize], origin: Vec2, color: [u8; 4], width: f32) -> MeshData {
+    let mut m = MeshData::default();
+    for prim in prims.iter().filter_map(|&i| list.prims.get(i)) {
+        let pts = list.points(prim);
+        match prim.kind {
+            Kind::Polyline => {
+                let mut run = 0.0;
+                for s in pts.windows(2) {
+                    if let [a, b] = s {
+                        push_instance(&mut m.quads, rel(*a, origin), rel(*b, origin), color, width, run as f32);
+                        run += a.dist(*b);
+                    }
+                }
+            }
+            Kind::Point => {
+                if let Some(q) = pts.first() {
+                    let p = rel(*q, origin);
+                    push_instance(&mut m.quads, p, p, color, 3.0, 0.0);
+                }
+            }
+            Kind::Tris | Kind::Mask => {
+                let bb = Bounds2::from_points(pts.iter().copied());
+                if !bb.is_empty() {
+                    let c = [bb.min, Vec2::new(bb.max.x, bb.min.y), bb.max, Vec2::new(bb.min.x, bb.max.y), bb.min];
+                    let mut run = 0.0;
+                    for s in c.windows(2) {
+                        if let [a, b] = s {
+                            push_instance(&mut m.quads, rel(*a, origin), rel(*b, origin), color, 1.0, run as f32);
+                            run += a.dist(*b);
+                        }
+                    }
+                }
+            }
             Kind::Infinite { .. } => {}
         }
     }
@@ -237,12 +281,16 @@ pub struct CanvasCallback {
     /// Affine transform applied to the origin-relative positions before `offset`: the linear
     /// part (a, b, c, d as in `Mat3`) and the translation. [`IDENTITY_XFORM`] for the drawing.
     pub xform: [f32; 6],
+    /// Dash period in points for wide lines (0 = solid): the selection highlight.
+    pub dash: f32,
 }
 
 /// The drawing's display list.
 pub const LAYER_DRAWING: usize = 0;
 /// The objects a MOVE/COPY/ROTATE/SCALE preview drags, uploaded once per drag.
 pub const LAYER_DRAG: usize = 1;
+/// The selection highlight, rebuilt only when the selection or the drawing changes.
+pub const LAYER_HIGHLIGHT: usize = 2;
 pub const IDENTITY_XFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
 struct Batch {
@@ -275,7 +323,7 @@ const SHADER: &str = r#"
 struct View {
     a: vec4<f32>, // offset x, offset y (world), scale (device px per unit), 1 = linear output
     b: vec4<f32>, // canvas centre x, y (device px), screen w, h (device px)
-    c: vec4<f32>, // pixels per point
+    c: vec4<f32>, // pixels per point, dash period in points (0 = solid)
     d: vec4<f32>, // transform linear part: a, b, c, d (x' = a x + c y, y' = b x + d y)
     e: vec4<f32>, // transform translation x, y (world, origin-relative)
 };
@@ -284,6 +332,8 @@ struct View {
 struct VOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) color: vec4<f32>,
+    // Device pixels along a wide line from its start (dashing).
+    @location(1) along: f32,
 };
 
 fn to_px(p: vec2<f32>) -> vec2<f32> {
@@ -310,6 +360,7 @@ fn vs_line(@location(0) pos: vec2<f32>, @location(1) color: vec4<f32>) -> VOut {
     var o: VOut;
     o.pos = px_to_clip(to_px(pos));
     o.color = out_color(color);
+    o.along = 0.0;
     return o;
 }
 
@@ -320,6 +371,7 @@ fn vs_quad(
     @location(1) b: vec2<f32>,
     @location(2) color: vec4<f32>,
     @location(3) width: f32,
+    @location(4) start: f32,
 ) -> VOut {
     let pa = to_px(a);
     let pb = to_px(b);
@@ -338,11 +390,18 @@ fn vs_quad(
     var o: VOut;
     o.pos = px_to_clip(along + n * hw * s);
     o.color = out_color(color);
+    o.along = start * view.a.z + mix(-hw, len + hw, t);
     return o;
 }
 
 @fragment
 fn fs_main(v: VOut) -> @location(0) vec4<f32> {
+    if (view.c.y > 0.0) {
+        // 6 on, 4 off (as the CPU selection highlight's dashes).
+        if (fract(v.along / (view.c.y * view.c.x)) > 0.6) {
+            discard;
+        }
+    }
     return v.color;
 }
 "#;
@@ -353,7 +412,7 @@ fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 }
 
 fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
-    const ATTRS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4, 3 => Float32];
+    const ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4, 3 => Float32, 4 => Float32];
     wgpu::VertexBufferLayout { array_stride: INSTANCE_SIZE as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &ATTRS }
 }
 
@@ -419,7 +478,7 @@ impl Resources {
             tri_pipeline: pipeline("cad_fills", "vs_line", wgpu::PrimitiveTopology::TriangleList, vertex_layout()),
             quad_pipeline: pipeline("cad_quads", "vs_quad", wgpu::PrimitiveTopology::TriangleList, instance_layout()),
             linear_out: target.format.is_srgb(),
-            layers: vec![layer(), layer()],
+            layers: vec![layer(), layer(), layer()],
         }
     }
 }
@@ -472,7 +531,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         let [w, h] = screen.size_in_pixels;
         let a = [self.offset[0], self.offset[1], self.scale * ppp, if linear_out { 1.0 } else { 0.0 }];
         let b = [self.center[0] * ppp, self.center[1] * ppp, w.max(1) as f32, h.max(1) as f32];
-        let c = [ppp, 0.0, 0.0, 0.0];
+        let c = [ppp, self.dash, 0.0, 0.0];
         let [ma, mb, mc, md, tx, ty] = self.xform;
         let d = [ma, mb, mc, md];
         let e = [tx, ty, 0.0, 0.0];
@@ -584,6 +643,20 @@ mod tests {
             l.bounds.add(v);
         }
         l
+    }
+
+    #[test]
+    fn highlight_dashes_run_on_along_each_polyline() {
+        let l = list();
+        // The 3-point polyline (two unit segments) and the point marker.
+        let m = build_highlight_mesh(&l, &[0, 2], Vec2::new(1e6, 1e6), [1, 2, 3, 255], 1.5);
+        assert_eq!(m.quad_instances(), 3);
+        let start = |i: usize| {
+            let o = i * INSTANCE_SIZE + 24;
+            f32::from_le_bytes([m.quads[o], m.quads[o + 1], m.quads[o + 2], m.quads[o + 3]])
+        };
+        assert_eq!([start(0), start(1), start(2)], [0.0, 1.0, 0.0]);
+        assert!(m.lines.is_empty() && m.tris.is_empty());
     }
 
     #[test]
