@@ -1038,7 +1038,9 @@ pub(crate) fn fillet_lines(
         if chamfer.is_none() {
             return super::modify2::fillet_curves(s, h1, p1, h2, p2, radius);
         }
-        return Err(EngineError::Other("Chamfer currently works on lines.".into()));
+        return Err(EngineError::Other(
+            "CHAMFER works on lines (and polylines with the Polyline option); it cannot chamfer arcs, circles, ellipses or splines.".into(),
+        ));
     };
     let (x, _, _) = line_line_infinite(l1.a, l1.b, l2.a, l2.b).ok_or_else(|| EngineError::Other("Lines are parallel.".into()))?;
     // Keep the far end on the picked side of the corner.
@@ -2510,7 +2512,14 @@ fn fillet_corner(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, r:
     let chamfer = match cut {
         None => None,
         Some(c) => {
-            let l = |h| d.entity(h).and_then(|e| as_line(e)).ok_or_else(|| EngineError::Other("Chamfer currently works on lines.".into()));
+            let l = |h| {
+                d.entity(h).and_then(|e| as_line(e)).ok_or_else(|| {
+                    EngineError::Other(
+                        "CHAMFER works on lines (and polylines with the Polyline option); it cannot chamfer arcs, circles, ellipses or splines."
+                            .into(),
+                    )
+                })
+            };
             let (l1, l2) = (l(h1)?, l(h2)?);
             let (x, _, _) = line_line_infinite(l1.a, l1.b, l2.a, l2.b).ok_or_else(|| EngineError::Other("Lines are parallel.".into()))?;
             // The direction along each line towards its picked side.
