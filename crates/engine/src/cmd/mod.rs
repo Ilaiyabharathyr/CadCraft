@@ -13,7 +13,7 @@ mod edit;
 pub mod file;
 mod gripcmds;
 pub(crate) mod groups;
-mod hatch;
+pub(crate) mod hatch;
 mod inquiry;
 mod layer;
 mod layout;
