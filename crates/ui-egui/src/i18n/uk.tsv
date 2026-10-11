@@ -48,6 +48,7 @@
 	Arc	Дуга
 	Arc Length	Довжина дуги
 	Area	Площа
+	Arrange Panel	Розташувати панель
 	Array	Масив
 	Attach	Приєднати
 	Attribute	Атрибут
@@ -150,6 +151,7 @@
 	Dark	Темна
 	Default	Типово
 	Default Save Format	Типовий формат збереження
+	Default Save Version	Типова версія збереження
 	Define Attributes	Визначити атрибути
 	Define Attributes...	Визначити атрибути...
 	Defined width	Задана ширина
@@ -312,6 +314,8 @@
 	Grip Stretch	Розтягування ручками
 	Group	Згрупувати
 	Group Edit	Редагувати групу
+	Group Options	Параметри групи
+	Group Selection	Вибір груп
 	Hatch	Штрихування
 	Hatch Edit	Редагувати штрихування
 	Hatch...	Штрихування...
@@ -377,6 +381,7 @@
 	Layer contains objects (double-click to make current)	Шар містить об'єкти (двічі клацніть, щоб зробити поточним)
 	Layer is empty (double-click to make current)	Шар порожній (двічі клацніть, щоб зробити поточним)
 	Layers	Шари
+	Layers Palette	Палітра шарів
 	Layers displayed: {shown} of {total}.   Current layer: {layer}	Показано шарів: {shown} із {total}.   Поточний шар: {layer}
 	Layout	Аркуш
 	Layout list	Список аркушів
@@ -534,6 +539,7 @@
 	New CTB	Нова CTB
 	New STB	Нова STB
 	New style	Новий стиль
+	Reset Panel Layout	Скинути розташування панелей
 	Use for this layout	Використати для цього аркуша
 	Display plot styles	Показувати стилі друку
 	No plot style tables.	Немає таблиць стилів друку.
@@ -947,6 +953,12 @@
 	Value	Значення
 	Value:	Значення:
 	Version	Версія
+	Version 2000	Версія 2000
+	Version 2004	Версія 2004
+	Version 2007	Версія 2007
+	Version 2010	Версія 2010
+	Version 2013	Версія 2013
+	Version 2018	Версія 2018
 	Version {version}	Версія {version}
 	Vertical	Вертикальність
 	VerticalDistance	Вертикальна відстань
@@ -994,3 +1006,8 @@
 	Hide Others	Приховати інші
 	Accessibility	Спеціальні можливості
 	Show System Cursor	Показувати системний курсор
+	Import...	Імпорт...
+	Export...	Експорт...
+	Batch Publish...	Пакетна публікація...
+	Drawing Recovery Manager...	Диспетчер відновлення креслень...
+	Tolerance...	Допуск...

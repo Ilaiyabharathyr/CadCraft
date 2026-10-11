@@ -10,6 +10,7 @@ pub mod constraints;
 mod draw;
 mod draw2;
 mod edit;
+mod exchange;
 pub mod file;
 mod gripcmds;
 pub(crate) mod groups;
@@ -28,6 +29,7 @@ mod selecttools;
 mod settings;
 mod spline_opts;
 mod table;
+mod tolerance;
 mod trimextend;
 mod utility;
 mod view;
@@ -175,11 +177,13 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(gripcmds::specs());
         v.extend(layer::specs());
         v.extend(layout::specs());
+        v.extend(exchange::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());
         v.extend(settings::specs());
         v.extend(utility::specs());
         v.extend(table::specs());
+        v.extend(tolerance::specs());
         v.extend(constraints::specs());
         v
     })
