@@ -74,6 +74,9 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     if let Some(r) = crate::plotstyles::route(app, id, params) {
         return Some(r);
     }
+    if let Some(r) = crate::options::route(app, id, params) {
+        return Some(r);
+    }
     let toggle = |b: &mut bool, p: &Value| {
         *b = p.get("on").and_then(Value::as_bool).unwrap_or(!*b);
     };

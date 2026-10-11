@@ -33,6 +33,7 @@ mod web {
         }
         /// Preferences (interface theme and language) survive reloads; egui state is not kept.
         fn save(&mut self, storage: &mut dyn eframe::Storage) {
+            storage.set_string(cadcraft_ui_egui::options::PROFILE_KEY, self.0.profile_json());
             storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.0.prefs_json());
         }
         fn persist_egui_memory(&self) -> bool {
@@ -82,6 +83,9 @@ mod web {
                         let mut app = CadApp::new(Session::new(), services());
                         app.system_languages =
                             web_sys::window().map(|w| w.navigator().languages().iter().filter_map(|v| v.as_string()).collect()).unwrap_or_default();
+                        if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::options::PROFILE_KEY)) {
+                            app.load_profile(&profile);
+                        }
                         if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::PREFS_KEY)) {
                             app.load_prefs(&prefs);
                         }

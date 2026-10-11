@@ -34,6 +34,7 @@ mod view;
 pub mod curves;
 pub mod helpers;
 pub mod machines;
+pub mod options;
 
 use cadcraft_doc::Handle;
 use cadcraft_geom::Vec2;
@@ -176,6 +177,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(props::specs());
         v.extend(inquiry::specs());
         v.extend(settings::specs());
+        v.extend(options::specs());
         v.extend(utility::specs());
         v.extend(table::specs());
         v.extend(constraints::specs());
