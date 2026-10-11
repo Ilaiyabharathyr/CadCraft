@@ -422,6 +422,9 @@ fn upload(device: &wgpu::Device, label: &str, bytes: &[u8], stride: usize, usage
 /// Create the canvas pipelines in the renderer's callback resources. Call once with the app's
 /// render state (eframe `CreationContext::wgpu_render_state`).
 pub fn install(rs: &egui_wgpu::RenderState) -> GpuTarget {
+    rs.device.on_uncaptured_error(Box::new(|err| {
+        log::error!("wgpu error: {err}");
+    }));
     let target = GpuTarget { format: rs.target_format };
     let res = Resources::new(&rs.device, target);
     rs.renderer.write().callback_resources.insert(res);

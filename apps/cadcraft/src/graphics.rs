@@ -2,16 +2,28 @@
 
 use eframe::{NativeOptions, egui_wgpu::WgpuSetup, wgpu::Backends};
 
-/// Restrict the wgpu instance to DirectX 12 unless `backend_override` (normally
-/// `Backends::from_env()`, i.e. `WGPU_BACKEND`) names other backends.
+/// Restrict the wgpu instance to DirectX 12 or Vulkan on Windows.
+///
+/// eframe's default includes GL on Windows. Creating that backend can crash inside AMD's
+/// atio6axx.dll before adapter selection or any Rust error handling runs, and on Intel graphics
+/// it times out during Surface::configure (GpuWaitTimeout).
+///
+/// When `backend_override` (normally from `WGPU_BACKEND`) is unset, we default to DX12 only.
+/// If `backend_override` specifies only GL, we warn and fall back to DX12; if multiple backends
+/// are specified, GL is stripped out so unstable OpenGL is never initialized on Windows.
 pub fn configure(options: &mut NativeOptions, backend_override: Option<Backends>) {
     if let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
-        // eframe's default includes GL. Creating that backend can crash inside AMD's
-        // atio6axx.dll before adapter selection or any Rust error handling runs, so the
-        // window never appears. Choosing an adapter afterwards is too late: only leaving GL
-        // out of the instance avoids it. This matches the verified WGPU_BACKEND=dx12
-        // workaround without mutating process environment variables.
-        create.instance_descriptor.backends = backend_override.unwrap_or(Backends::DX12);
+        let mut backends = backend_override.unwrap_or(Backends::DX12);
+        if backends.contains(Backends::GL) {
+            let non_gl = backends - Backends::GL;
+            if non_gl.is_empty() {
+                log::warn!("OpenGL backend on Windows is unstable in wgpu; falling back to DirectX 12");
+                backends = Backends::DX12;
+            } else {
+                backends = non_gl;
+            }
+        }
+        create.instance_descriptor.backends = backends;
     }
 }
 
@@ -40,8 +52,14 @@ mod tests {
 
     #[test]
     fn explicit_backend_override_is_preserved() {
-        for backends in [Backends::VULKAN, Backends::GL, Backends::DX12, Backends::VULKAN | Backends::DX12, Backends::empty()] {
+        for backends in [Backends::VULKAN, Backends::DX12, Backends::VULKAN | Backends::DX12, Backends::empty()] {
             assert_eq!(configured_backends(Some(backends)), backends);
         }
+    }
+
+    #[test]
+    fn windows_gl_override_falls_back_to_dx12() {
+        assert_eq!(configured_backends(Some(Backends::GL)), Backends::DX12);
+        assert_eq!(configured_backends(Some(Backends::GL | Backends::DX12)), Backends::DX12);
     }
 }
