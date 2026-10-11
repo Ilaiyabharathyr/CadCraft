@@ -11,7 +11,7 @@ scriptable CLI, a web build, Linux and FreeBSD builds, and a free licence.
 **Why pre-alpha:** four of AutoCAD's five core workflows fail the [alpha gate](docs/roadmap.md#alpha-gate).
 Precise drafting lacks object snap tracking and has stubbed TRIM/EXTEND/OFFSET options; blocks
 can't be edited (no block editor, REFEDIT or xrefs); plots ignore plot styles; and a DWG saved by
-CADCraft drops everything it doesn't model, is always R2000 and has never been checked in
+CADCraft drops everything it doesn't model and has never been checked in
 AutoCAD. Dimensioning passes. Ready for real work (≈ 38%) is also under the ~40% alpha bar. Beta
 is ≈ 600–930 h away.
 
@@ -137,3 +137,7 @@ Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md)
 | 2026-10-10 | minor | Stage alpha → pre-alpha under the core-workflow gate; banner, why, headline row |
 | 2026-10-10 | major | Restructured to the progress-docs standard (stage, two numbers, dimensions, features, languages, upcoming, log); full re-measure; milestone detail moved to docs/roadmap.md, parity assessment to docs/target-app-parity.md |
 | 2026-10-07 | major | Alpha checklist, milestone table, ≈ 29% weighted parity estimate |
+
+## Shared UI workspace integration
+
+Tool Sets, Layers and Properties use shared docking with persisted layouts, keyboard focus and compact toolbar overflow. No milestone percentage change.
