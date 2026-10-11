@@ -138,7 +138,7 @@ impl CmdLine {
 /// Keep the options menu only while its prompt is on screen with Dynamic Input and DYNPROMPT on.
 fn options_still_fit(app: &mut CadApp) {
     let st = &app.session.settings;
-    let on = st.dynmode && st.dynprompt && app.canvas.hot_grip.is_none();
+    let on = st.dynmode && st.dynprompt && app.canvas.hot_grips.is_empty();
     let kws = app.session.current_prompt().map(|p| p.keywords).unwrap_or_default();
     if app.cmd.options.as_ref().is_some_and(|m| !on || !m.fits(&kws)) {
         app.cmd.options = None;
@@ -154,7 +154,7 @@ fn options_key(app: &mut CadApp, step: isize) -> bool {
         return true;
     }
     let st = &app.session.settings;
-    if step < 0 || !st.dynmode || !st.dynprompt || app.cmd.history_pos.is_some() || app.canvas.hot_grip.is_some() {
+    if step < 0 || !st.dynmode || !st.dynprompt || app.cmd.history_pos.is_some() || !app.canvas.hot_grips.is_empty() {
         return false;
     }
     let kws = app.session.current_prompt().map(|p| p.keywords).unwrap_or_default();
