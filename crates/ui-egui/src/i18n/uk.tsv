@@ -31,10 +31,12 @@
 	About CADCraft	Про CADCraft
 	Absolute	Абсолютні
 	Add Leader	Додати виноску
+	Additional angles	Додаткові кути
 	Align	Вирівняти
 	Align Text	Вирівняти текст
 	Aligned	Паралельний
 	All	Усі
+	All Annotation Objects	Усі об'єкти анотацій
 	All Used Layers	Усі використані шари
 	All files	Усі файли
 	Angle	Кут
@@ -48,6 +50,7 @@
 	Arc	Дуга
 	Arc Length	Довжина дуги
 	Area	Площа
+	Arrange Panel	Розташувати панель
 	Array	Масив
 	Attach	Приєднати
 	Attribute	Атрибут
@@ -78,6 +81,8 @@
 	Box	Паралелепіпед
 	Break	Розірвати
 	Break At Point	Розірвати в точці
+	Bring Above Objects	Над об'єктами
+	Bring Annotations to Front	Анотації на передній план
 	Bring to Front	На передній план
 	ByBlock	За блоком
 	ByColor	За кольором
@@ -148,8 +153,10 @@
 	DWG	DWG
 	DXF	DXF
 	Dark	Темна
+	Data Extraction...	Вилучення даних...
 	Default	Типово
 	Default Save Format	Типовий формат збереження
+	Default Save Version	Типова версія збереження
 	Define Attributes	Визначити атрибути
 	Define Attributes...	Визначити атрибути...
 	Defined width	Задана ширина
@@ -171,6 +178,7 @@
 	Diameter	Діаметр
 	Dim style	Розмірний стиль
 	Dimension	Розміри
+	Dimension Objects Only	Лише розміри
 	Dimension Space	Відстань між розмірами
 	Dimension Style Override	Перевизначення розмірного стилю
 	Dimension Style...	Розмірний стиль...
@@ -207,6 +215,7 @@
 	Ellipse	Еліпс
 	Elliptical Arc	Еліптична дуга
 	Enable Dynamic Input (F12)	Увімкнути динамічне введення (F12)
+	End Object Isolation	Завершити ізоляцію об'єктів
 	End Width	Кінцева ширина
 	End X	Кінець X
 	End Y	Кінець Y
@@ -304,13 +313,18 @@
 	Grid (F7)	Сітка (F7)
 	Grid Display	Відображення сітки
 	Grid On (F7)	Увімкнути сітку (F7)
+	Grid snap	Прив'язка до сітки
 	Grid spacing	Крок сітки
+	Grip Edit	Редагування ручками
 	Grip Mirror	Дзеркальне відображення ручками
+	Grip Option	Опція ручки
 	Grip Rotate	Поворот ручками
 	Grip Scale	Масштабування ручками
 	Grip Stretch	Розтягування ручками
 	Group	Згрупувати
 	Group Edit	Редагувати групу
+	Group Options	Параметри групи
+	Group Selection	Вибір груп
 	Hatch	Штрихування
 	Hatch Edit	Редагувати штрихування
 	Hatch...	Штрихування...
@@ -322,6 +336,7 @@
 	Hide All Constraint Bars	Приховати всі панелі обмежень
 	Hide All Dynamic Dimensions	Приховати всі динамічні розміри
 	Hide Layer List	Приховати список шарів
+	Hide Objects	Приховати об'єкти
 	Hide Palettes	Приховати палітри
 	Home	Початковий вид
 	Horizontal	Горизонтальність
@@ -353,6 +368,7 @@
 	Intersection	Перетин
 	Isolate	Ізолювати
 	Isolate Layer	Ізолювати шар
+	Isolate Objects	Ізолювати об'єкти
 	Isometric Drafting	Ізометричне креслення
 	Join	Об'єднати
 	Join the ArtCraft Discord…	Приєднатися до Discord ArtCraft…
@@ -374,10 +390,12 @@
 	Layer contains objects (double-click to make current)	Шар містить об'єкти (двічі клацніть, щоб зробити поточним)
 	Layer is empty (double-click to make current)	Шар порожній (двічі клацніть, щоб зробити поточним)
 	Layers	Шари
+	Layers Palette	Палітра шарів
 	Layers displayed: {shown} of {total}.   Current layer: {layer}	Показано шарів: {shown} із {total}.   Поточний шар: {layer}
 	Layout	Аркуш
 	Layout list	Список аркушів
 	Leader	Виноска
+	Leaders Only	Лише виноски
 	Left	Ліворуч
 	Length	Довжина
 	Length X	Довжина X
@@ -478,6 +496,7 @@
 	Object Snap On (F3)	Увімкнути об'єктну прив'язку (F3)
 	Object Snap Tracking	Відстеження об'єктної прив'язки
 	Object Snap Tracking (F11)	Відстеження об'єктної прив'язки (F11)
+	Object Snap Tracking Settings	Параметри відстеження об'єктної прив'язки
 	Object type:	Тип об'єкта:
 	Off	Вимкнено
 	Offset	Зміщення
@@ -531,6 +550,10 @@
 	New CTB	Нова CTB
 	New STB	Нова STB
 	New style	Новий стиль
+	Reset Panel Layout	Скинути розташування панелей
+	Send Hatches to Back	Штрихування на задній план
+	Send Under Objects	Під об'єкти
+	Text Objects Only	Лише текстові об'єкти
 	Use for this layout	Використати для цього аркуша
 	Display plot styles	Показувати стилі друку
 	No plot style tables.	Немає таблиць стилів друку.
@@ -555,7 +578,10 @@
 	Polar Tracking	Полярне відстеження
 	Polar Tracking (F10)	Полярне відстеження (F10)
 	Polar Tracking On (F10)	Увімкнути полярне відстеження (F10)
+	Polar angle measurement	Вимірювання полярного кута
+	Polar distance	Полярна відстань
 	Polar: {distance} < {angle}°	Полярне: {distance} < {angle}°
+	PolarSnap	Полярна прив'язка
 	Polygon	Правильний багатокутник
 	Polygonal	Багатокутний
 	Polyline	Полілінія
@@ -604,6 +630,7 @@
 	Region	Область
 	Region/Mass Properties	Властивості області/маси
 	Relative	Відносні
+	Relative to last segment	Відносно останнього сегмента
 	Remove Leader	Видалити виноску
 	Remove the viewport override	Видалити перевизначення видового екрана
 	Rename Dimension Style	Перейменувати розмірний стиль
@@ -639,6 +666,7 @@
 	Select 2D polyline	Виберіть 2D-полілінію
 	Select All	Вибрати все
 	Select Objects	Вибрати об'єкти
+	Select Similar	Вибрати подібні
 	Select a 2D polyline.	Виберіть 2D-полілінію.
 	Select a block reference.	Виберіть посилання на блок.
 	Select a circle or arc.	Виберіть коло або дугу.
@@ -731,6 +759,7 @@
 	Snap On (F9)	Увімкнути крокову прив'язку (F9)
 	Snap X spacing	Крок прив'язки X
 	Snap and Grid	Крокова прив'язка та сітка
+	Snap type	Тип крокової прив'язки
 	Solid	Тіло
 	Sort	Сортування
 	Specify a point	Укажіть точку
@@ -896,6 +925,7 @@
 	Tan, Tan, Radius	Дотична, дотична, радіус
 	Tan, Tan, Tan	Дотична, дотична, дотична
 	Tangent	Дотичність
+	Temporary track point	Тимчасова точка відстеження
 	Text	Текст
 	Text Editor	Текстовий редактор
 	Text Height	Висота тексту
@@ -913,6 +943,8 @@
 	Tools	Інструменти
 	Torus	Тор
 	Trace	Смуга
+	Track orthogonally only	Відстежувати лише ортогонально
+	Track using all polar angle settings	Відстежувати за всіма полярними кутами
 	Transparency	Прозорість
 	Trim	Обрізати
 	True Color	Колір RGB
@@ -943,6 +975,12 @@
 	Value	Значення
 	Value:	Значення:
 	Version	Версія
+	Version 2000	Версія 2000
+	Version 2004	Версія 2004
+	Version 2007	Версія 2007
+	Version 2010	Версія 2010
+	Version 2013	Версія 2013
+	Version 2018	Версія 2018
 	Version {version}	Версія {version}
 	Vertical	Вертикальність
 	VerticalDistance	Вертикальна відстань
@@ -990,3 +1028,13 @@
 	Hide Others	Приховати інші
 	Accessibility	Спеціальні можливості
 	Show System Cursor	Показувати системний курсор
+	Import...	Імпорт...
+	Export...	Експорт...
+	Batch Publish...	Пакетна публікація...
+	Drawing Recovery Manager...	Диспетчер відновлення креслень...
+	Tolerance...	Допуск...
+	Add Vertex	Додати вершину
+	Remove Vertex	Видалити вершину
+	Convert to Arc	Перетворити на дугу
+	Convert to Line	Перетворити на відрізок
+	Stretch Vertex	Розтягнути вершину

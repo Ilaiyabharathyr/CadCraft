@@ -442,6 +442,16 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         }
         // The file path comes from the IMAGEDEF object (`dxf_image::resolve`).
         "IMAGE" => EntityKind::Image(crate::dxf_image::read_entity(tags)),
+        "TOLERANCE" => {
+            let dir = t.p(11);
+            let dir = if dir.xy().is_finite() && dir.xy().len() > 1e-12 { dir } else { Vec3::new(1.0, 0.0, 0.0) };
+            EntityKind::Tolerance(Tolerance {
+                insert: t.p(10),
+                dir,
+                style: t.s(3).unwrap_or_else(|| "Standard".into()),
+                text: t.s(1).unwrap_or_default().chars().take(MAX_FRAME_CHARS).collect(),
+            })
+        }
         other => EntityKind::Unknown(Unknown {
             dxf_type: other.to_string(),
             tags: tags.iter().map(|tg| RawTag { code: tg.code, value: tg.str() }).collect(),
@@ -838,6 +848,8 @@ struct Rx {
     xref_paths: HashMap<String, String>,
     /// Plot style name placeholder handle (upper case) → plot style name (`ACAD_PLOTSTYLENAME`).
     pstyles: HashMap<String, String>,
+    /// Upper-case block name → associative array parameters from its BLOCK_RECORD.
+    block_arrays: HashMap<String, cadcraft_doc::ArrayParams>,
 }
 
 /// The plot style names of a file: the entries of the `ACAD_PLOTSTYLENAME` dictionary of the
@@ -1187,6 +1199,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             "BLOCK_RECORD" => {
                 let units = t.i(70).and_then(|u| u8::try_from(u).ok()).unwrap_or(0);
                 rx.block_props.insert(n.to_ascii_uppercase(), (units, t.i(280).unwrap_or(1) != 0));
+                if let Some(a) = crate::dxf_ext::read_array(tg) {
+                    rx.block_arrays.insert(n.to_ascii_uppercase(), a);
+                }
                 rx.brs.insert(h.trim().to_ascii_uppercase(), n);
             }
             _ => {}
@@ -1496,6 +1511,9 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         for (_, _, e) in ents {
             b.entities.push(e);
         }
+        // Array parameters, with the block names the items use (other programs may rename
+        // anonymous blocks); dropped when the items no longer match them.
+        b.array = rx.block_arrays.get(&up).cloned().and_then(|mut a| a.sync_names(b.entities.iter().map(|e| e.as_ref())).then_some(a));
         if let Some(path) = rx.xref_paths.remove(&up) {
             b.xref_path = Some(path);
         }
@@ -1515,6 +1533,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
             d.model.push(e);
         }
     }
+    apply_sortents(&mut d, &objs.sortents, &rx.brs, &paper_block_for, &first_layout);
     objs.apply(&mut d, &rx);
     crate::dxf_image::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.
@@ -1526,6 +1545,57 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         d.layers.insert(0, Layer::default());
     }
     Ok(d)
+}
+
+/// A SORTENTSTABLE (DXF Reference, OBJECTS section): after its AcDbSortentsTable marker, the
+/// owning block record (330), then pairs of an entity handle (331) and the sort handle (5) it is
+/// drawn by.
+fn sortents_table(tags: &[Tag]) -> Option<(String, HashMap<Handle, u64>)> {
+    let start = tags.iter().position(|t| t.code == 100 && t.str() == "AcDbSortentsTable")?;
+    let tail = tags.get(start + 1..)?;
+    let owner = tail.iter().find(|t| t.code == 330)?.str().trim().to_ascii_uppercase();
+    let mut map = HashMap::new();
+    let mut ent: Option<Handle> = None;
+    for t in tail {
+        match t.code {
+            331 => ent = Handle::parse_hex(&t.str()),
+            5 => {
+                if let (Some(e), Some(k)) = (ent.take(), Handle::parse_hex(&t.str()))
+                    && map.len() < MAX_OBJECTS
+                {
+                    map.insert(e, k.0);
+                }
+            }
+            _ => {}
+        }
+    }
+    (!map.is_empty()).then_some((owner, map))
+}
+
+/// Draw each space with a SORTENTSTABLE in sort-handle order: an entity listed in the table by
+/// its sort handle, any other by its own handle.
+fn apply_sortents(
+    d: &mut Drawing,
+    tables: &[(String, HashMap<Handle, u64>)],
+    brs: &HashMap<String, String>,
+    paper_for: &HashMap<String, String>,
+    first_layout: &str,
+) {
+    for (owner, map) in tables {
+        let Some(name) = brs.get(owner) else { continue };
+        let up = name.to_ascii_uppercase();
+        let key = |e: &Entity| map.get(&e.handle).copied().unwrap_or(e.handle.0);
+        if up == "*MODEL_SPACE" {
+            d.model.sort_by_key(key);
+        } else if up.starts_with("*PAPER_SPACE") {
+            let lname = paper_for.get(&up).map(String::as_str).unwrap_or(first_layout);
+            if let Some(l) = d.layouts.iter_mut().find(|l| l.name == lname) {
+                l.entities.sort_by_key(key);
+            }
+        } else if let Some(b) = d.blocks.get_mut(name.as_str()) {
+            std::sync::Arc::make_mut(b).entities.sort_by_key(key);
+        }
+    }
 }
 
 /// Non-graphical objects applied once every entity is placed.
@@ -1545,6 +1615,8 @@ struct Objects {
     groups: Vec<(String, Vec<Tag>)>,
     /// Saved paper-space views of layouts: (layout name, view).
     layout_views: Vec<(String, (Vec2, f64))>,
+    /// SORTENTSTABLE objects: (owning block record handle, entity handle → sort handle).
+    sortents: Vec<(String, HashMap<Handle, u64>)>,
 }
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -1576,6 +1648,11 @@ impl Objects {
             "DIMASSOC" if self.dimassocs.len() < MAX_OBJECTS => self.dimassocs.push(tags.to_vec()),
             "MLEADERSTYLE" if self.mleader_styles.len() < MAX_OBJECTS => self.mleader_styles.push((h, tags.to_vec())),
             "GROUP" if self.groups.len() < MAX_OBJECTS => self.groups.push((h, tags.to_vec())),
+            "SORTENTSTABLE" if self.sortents.len() < MAX_OBJECTS => {
+                if let Some(t) = sortents_table(tags) {
+                    self.sortents.push(t);
+                }
+            }
             "LAYOUT" if self.layout_views.len() < MAX_OBJECTS => {
                 let start = tags.iter().position(|x| x.code == 100 && x.str() == "AcDbLayout").unwrap_or(0);
                 if let (Some(name), Some(view)) = (T(tags.get(start..).unwrap_or(&[])).s(1), layout_view(tags)) {
