@@ -18,7 +18,7 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
             assert!(["", "@plural"].contains(&context), "unknown context: {context}");
             let forms: Vec<_> = if context == "@plural" { value.split('|').collect() } else { vec![value] };
             if context == "@plural" {
-                assert_eq!(forms.len(), 3, "{key}");
+                assert_eq!(forms.len(), language.plural_forms, "{}: {key}", language.code);
             }
             for form in forms {
                 assert_eq!(placeholders(key), placeholders(form), "{key}");
@@ -36,8 +36,14 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
 }
 
 #[test]
-fn ukrainian_covers_commands_menus_tools_and_snap_labels() {
-    let catalog = catalog("uk").unwrap();
+fn translations_cover_commands_menus_tools_and_snap_labels() {
+    for language in ["uk", "pt-BR"] {
+        assert_covers_commands_menus_tools_and_snap_labels(language);
+    }
+}
+
+fn assert_covers_commands_menus_tools_and_snap_labels(language: &str) {
+    let catalog = catalog(language).unwrap();
     let mut sources = BTreeSet::new();
     sources.extend(crate::menus::MENUS.iter().copied());
     for c in cadcraft_engine::command_specs() {
@@ -56,12 +62,18 @@ fn ukrainian_covers_commands_menus_tools_and_snap_labels() {
     }
     sources.extend(cadcraft_engine::snap::mode::ALL.iter().map(|(_, name)| *name));
     let missing: Vec<_> = sources.into_iter().filter(|s| !s.is_empty() && !catalog.contains_key(&("", *s))).collect();
-    assert!(missing.is_empty(), "missing translations: {missing:?}");
+    assert!(missing.is_empty(), "{language}: missing translations: {missing:?}");
 }
 
 #[test]
 fn every_marked_ui_literal_has_a_translation() {
-    let catalog = catalog("uk").unwrap();
+    for language in ["uk", "pt-BR"] {
+        assert_every_marked_ui_literal_has_a_translation(language);
+    }
+}
+
+fn assert_every_marked_ui_literal_has_a_translation(language: &str) {
+    let catalog = catalog(language).unwrap();
     let sources = [
         include_str!("../canvas.rs"),
         include_str!("../chrome.rs"),
@@ -105,7 +117,7 @@ fn every_marked_ui_literal_has_a_translation() {
             }
         }
     }
-    assert!(missing.is_empty(), "missing UI translations: {missing:?}");
+    assert!(missing.is_empty(), "{language}: missing UI translations: {missing:?}");
 }
 
 #[test]
@@ -116,6 +128,13 @@ fn locale_and_saved_preference_resolution() {
     for tag in ["ua", "ukulele", "ru-RU", "", "garbage", "💙"] {
         assert_eq!(locale_language(tag), None, "{tag}");
     }
+    for tag in ["pt", "pt-BR", "pt_BR.UTF-8", "PT-br", "pt-PT"] {
+        assert_eq!(locale_language(tag), Some("pt-BR"), "{tag}");
+    }
+    assert_eq!(locale_language("ptolemy"), None);
+    assert_eq!(Preference::Auto.resolve(&["es-ES".into(), "pt-BR".into()]), "pt-BR");
+    assert_eq!(Preference::BrazilianPortuguese.resolve(&["uk-UA".into()]), "pt-BR");
+    assert_eq!(Preference::parse("pt-BR"), Some(Preference::BrazilianPortuguese));
     let locales = vec!["pl-PL".into(), "uk-UA".into(), "en-US".into()];
     assert_eq!(Preference::Auto.resolve(&locales), "uk");
     assert_eq!(Preference::English.resolve(&locales), "en");
@@ -175,6 +194,38 @@ fn plural_forms_and_templates_preserve_inserted_user_data() {
         assert_eq!(t("Layers"), "Шари");
     });
     assert_eq!(count(2, "{n} contributor", "{n} contributors"), "2 contributors");
+}
+
+#[test]
+fn brazilian_portuguese_plurals_and_accents() {
+    for (n, form) in [(0, 0), (1, 0), (2, 1), (5, 1), (21, 1), (u64::MAX, 1)] {
+        assert_eq!(plural_pt(n), form, "{n}");
+    }
+    with_language("pt-BR", || {
+        assert_eq!(count(1, "{n} contributor", "{n} contributors"), "1 colaborador");
+        assert_eq!(count(3, "{n} contributor", "{n} contributors"), "3 colaboradores");
+        assert_eq!(t("Layers"), "Camadas");
+        assert_eq!(t("Dimension"), "Cota");
+        assert_eq!(format("Height: {height}", &[("height", "{n}".into())]), "Altura: {n}");
+    });
+    assert_eq!(count(2, "{n} contributor", "{n} contributors"), "2 contributors");
+}
+
+#[test]
+fn live_switch_to_brazilian_portuguese_translates_the_shell() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    app.ui.in_window_menu = true;
+    let ctx = egui::Context::default();
+    app.logic(&ctx);
+    app.start("line");
+    app.run("ui.language", json!({"lang":"pt-BR"})).unwrap();
+    let text = render(&mut app, &ctx);
+    assert!(text.contains("Propriedades"), "{text}");
+    assert!(text.contains("Arquivo"), "{text}");
+    assert_eq!(app.language(), "pt-BR");
+    assert_eq!(t("Properties"), "Properties", "language must not leak out of the render scope");
+    app.run("ui.language", json!({"lang":"en"})).unwrap();
+    assert!(render(&mut app, &ctx).contains("Properties"));
 }
 
 fn painted_text(shapes: &[egui::epaint::ClippedShape]) -> String {

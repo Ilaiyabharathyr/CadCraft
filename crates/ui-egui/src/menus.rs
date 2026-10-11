@@ -85,7 +85,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     let r = match id {
         "ui.language" => {
             let Some(preference) = params.get("lang").and_then(Value::as_str).and_then(crate::i18n::Preference::parse) else {
-                return Some(Err("language must be auto, en or uk".into()));
+                return Some(Err("language must be auto, en, uk or pt-BR".into()));
             };
             app.ui.interface_language = preference;
             Ok(json!({"interfaceLanguage": preference.code()}))
