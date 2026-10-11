@@ -14,6 +14,7 @@ import android.view.View;
 import android.view.KeyEvent;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.MimeTypeMap;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -105,7 +106,10 @@ public final class MainActivity extends NativeActivity {
                         exporting = ready;
                         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                         intent.addCategory(Intent.CATEGORY_OPENABLE);
-                        intent.setType("application/octet-stream");
+                        String extension = name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
+                        String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+                        // Let providers preserve the extension when adding a duplicate-name suffix.
+                        intent.setType(mime == null ? "application/octet-stream" : mime);
                         intent.putExtra(Intent.EXTRA_TITLE, name);
                         try { startActivityForResult(intent, EXPORT); }
                         catch (RuntimeException error) { picking = false; clearExport(); notice("Export", error); }
