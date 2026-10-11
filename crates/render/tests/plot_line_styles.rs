@@ -165,6 +165,8 @@ fn viewport_contents_get_their_pens() {
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: Vec::new(),
+        clip: None,
+        on: true,
     };
     let space = Space::Paper("Layout1".into());
     d.add(&space, Common::default(), EntityKind::Viewport(vp)).unwrap();
