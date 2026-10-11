@@ -20,7 +20,7 @@ do them first.
 | 5 | **[alpha blocker]** **Stubbed prompt options** left in PEDIT Edit vertex, SPLINEDIT and MTEXT columns | Scripts and muscle memory hit "not available yet" (the most-used commands are done) | 3–6 | [features](#features) |
 | 6 | **Ellipse and spline geometry is tessellated** (intersections, offsets, closest points; polyline offset ignores bulges) | Coordinates are subtly wrong; offsets of ellipses come out as polylines | 30–50 | [geometry](geometry-parity.md) |
 | 7 | **[alpha blocker]** **No xrefs, block editor, dynamic blocks or groups** | Most production drawings use them | 80–120 | [features](#features) |
-| 8 | **No autosave, crash recovery, AUDIT or RECOVER** | Work is lost if anything goes wrong; damaged files can't be repaired | 10–15 | [features](#features) |
+| 8 | **No autosave in the web build** (the desktop app has SAVETIME autosave, Drawing Recovery, AUDIT and RECOVER since #406) | Browser users lose unsaved work when the tab or the browser goes down | 3–5 | [features](#features) |
 | 9 | **Dynamic input lacks grip input; no TK; grip options ignored** (FROM, M2P/MTP, point filters, `*` and `<a` landed, #392) | Precision entry at the cursor is how AutoCAD is taught today | 12–20 | [ui](ui-parity.md) |
 | 10 | **No CI runs the Rust tests on pull requests** (`cargo fmt` on main is fixed) | open PRs land without a gate; regressions go unseen | 2–3 | [stability](#stability) |
 
@@ -31,7 +31,7 @@ do them first.
 | F1 | **[alpha blocker]** Prompt options print "not available yet": PEDIT Edit vertex Break/Regen/Tangent, some SPLINEDIT options; MTEXT Dynamic/Static columns (no column model). SPLINE, MTEXT and MLEADER options done (#408): closed splines keep but ignore a fit tolerance, SPLINE Object fits the polyline's vertices (no spline frame is kept) (TRIM/EXTEND, PLINE arc mode and Length, XLINE done (#397); OFFSET, ROTATE and FILLET options done earlier) | `modify2.rs:594,783,806`, `cmd/mtext_opts.rs` | Medium: the most-used commands are done | 3–6 |
 | F2 | **[alpha blocker]** No xrefs (XATTACH, XREF palette, REFEDIT, BIND, XCLIP, overlay, paths); DXF xref blocks read with an empty path | `dxf_read.rs:923` | High: multi-file projects | 30–45 |
 | F3 | **[alpha blocker]** (block editor and REFEDIT; dynamic-block authoring is beta) No block editor (BEDIT) or dynamic blocks (parameters, actions, visibility, lookup); dynamic blocks from other files lose their behaviour | issue #185 offers help | High: standard libraries are dynamic | 50–75 |
-| F4 | No autosave (SAVETIME), crash recovery files or drawing recovery manager (AUDIT and RECOVER landed with #406; AUDITCTL `.adt` logs and a RECOVER mode in the file readers are not there) | no SAVETIME anywhere | High: lost work | 6–10 |
+| F4 | Autosave leftovers: no autosave in the web build (browser storage); autosave files are DXF, not DWG; no AUDITCTL `.adt` log and no separate RECOVER mode in the file readers (SAVETIME, Drawing Recovery, AUDIT and RECOVER landed with #406) | `engine/src/autosave.rs`, `engine/src/audit.rs` | Low-medium (web users) | 3–5 |
 | F5 | Arrays are not associative: no ARRAYEDIT; ARRAY/ARRAYRECT/ARRAYPOLAR edit the array in an option loop, then create plain copies (ASsociative, Levels, polar ROWs and grip editing print "not available yet") | `cmd/array.rs` | Medium-high | 8–12 |
 | F6 | FILLET/CHAMFER/JOIN/LENGTHEN/EXTEND don't handle ellipses and splines; FILLET Trim/Multiple and polyline segment pairs; CHAMFER Angle/Method | [geometry-parity](geometry-parity.md#trim-extend-fillet-chamfer-break-join-lengthen--45) | Medium | 10–15 |
 | F7 | Dimensions: no DIMSTYLE manager dialog; 43 of ~80 DIMSTYLE variables (DIMTOFL, DIMATFIT, DIMTMOVE, DIMLTYPE, DIMLWD, DIMFXL, DIMTOLJ, DIMALTU …); no smart DIM; no DIMJOGGED, DIMJOGLINE, DIMBREAK, oblique DIMEDIT, inspection; QDIM continuous only (SETVAR DIM* now become style overrides, #129) | `doc/src/tables.rs:223-266`, `annotate.rs:64,364` | High for detailers | 25–35 |
@@ -43,7 +43,7 @@ do them first.
 | F13 | Hatch: 23 patterns (AutoCAD ~85; ours must stay original); gradients render as a flat colour; associativity not updated when the boundary moves; origin always 0,0; island style always normal; no gap tolerance, separate hatches, hatch dialog, MPolygon | `doc/src/library.rs`, `render/lib.rs:430-437`, `cmd/hatch.rs:198,201` | Medium | 15–25 |
 | F14 | **[alpha blocker]** No plot preview, plotter devices, PUBLISH/batch plot; Print opens no plot dialog (#160, PR #200). Plot styles (CTB and STB, [plot-styles.md](plot-styles.md)) apply since #410; their end/join/fill styles aren't applied and binary `.ctb`/`.stb` files can't be read | `palettes.rs:666` | High for sheet output | 15–25 |
 | F15 | Viewports: no polygonal, object or clipped viewports; no viewport scale control in the UI | menu items uncovered | Medium | 6–10 |
-| F16 | Groups (GROUP, GROUPEDIT, PICKSTYLE) missing; ACAD_GROUP written empty | `dxf_write.rs` | Medium | 4–6 |
+| F16 | Groups: no group bounding box or single grip when a group is selected (GROUPDISPLAYMODE), copying a whole group does not make a new group, no Object Grouping dialog (GROUP, GROUPEDIT, UNGROUP, -GROUP, PICKSTYLE group selection and the DXF/DWG round trip landed, #417); PICKSTYLE's associative-hatch bit is stored but unused | `cmd/groups.rs` | Low | 2–4 |
 | F17 | Attributes: BATTMAN lists only; no ATTSYNC, EATTEXT, global ATTEDIT | `blocks.rs:300` | Medium | 6–10 |
 | F18 | Layer bugs: edits change geometry on locked layers (#87, PR #196); delete/purge removes layers used by blocks (#72, PR #189); rename misses paper space and blocks (#75, PR #191); linetype rename breaks assignments (#74, PR #195); rejected freeze changes colour (#71, PR #188) | issues | High (correctness) | 3–5 (PRs open) |
 | F19 | MATCHPROP has no interactive picker or settings dialog; DRAWORDER front/back only; OVERKILL exact duplicates only | `props.rs:333`, `modify.rs:1258` | Medium | 5–8 |
@@ -114,7 +114,7 @@ Detail: [localization-parity.md](localization-parity.md).
 |---|---|---|
 | L1 | Catalog covers the UI (936 rows, #36) but not engine diagnostics, CLI/MCP replies or command history | 4–6 |
 | L2 | AutoCAD for Mac's 7 other languages (zh-Hans, es, fr, ja, de, ko, it) plus pt, hi, ar, id, vi from the standard's list | 40–60 + native review |
-| L3 | Complex-script shaping (Arabic, Devanagari) and bidi/RTL in drawing text and UI | 30–45 |
+| L3 | Complex-script shaping for Devanagari and other Indic scripts in drawing text; RTL (mirrored) UI. Arabic-script shaping and bidi in drawing text landed (#287) | 20–30 |
 | L4 | IME fixes on every platform (PRs #110–#119); vertical text styles | 6–10 |
 
 ## Stability
