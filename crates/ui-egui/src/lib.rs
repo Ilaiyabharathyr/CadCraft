@@ -8,6 +8,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod autosave;
 pub mod canvas;
 pub mod chrome;
 pub mod clipboard;
@@ -33,6 +34,9 @@ pub mod quick;
 pub mod shortcut_menus;
 pub mod theme;
 pub mod viewcube;
+pub mod vpscale;
+
+pub mod exchange;
 
 use std::sync::mpsc::Receiver;
 
@@ -79,7 +83,13 @@ pub struct UiState {
     pub theme: theme::ThemePref,
     /// The format Save As suggests for a drawing that has no file yet: "dxf" or "dwg".
     pub save_format: SaveFormat,
+    /// The version Save As writes for a drawing that has no file yet ("2000" … "2018"); a
+    /// drawing opened from a file keeps that file's version.
+    pub save_version: String,
 }
+
+/// A DXF/DWG file version (2000 … 2018).
+pub use cadcraft_engine::cmd::file::Version as SaveVersion;
 
 /// The default save format for new drawings, like AutoCAD's Options > Open and Save > "Save as".
 /// A drawing opened from a file keeps that file's format.
@@ -143,6 +153,7 @@ impl Default for UiState {
             history_lines: 3,
             theme: theme::ThemePref::default(),
             save_format: SaveFormat::default(),
+            save_version: SaveVersion::default().year().to_string(),
         }
     }
 }
@@ -183,6 +194,10 @@ pub struct CadApp {
     pub quit_confirmed: bool,
     /// A close request waiting for "Save changes?" answers ([`closing`]).
     pub closing: Option<closing::Closing>,
+    /// Autosave (desktop; `None` until [`Self::enable_autosave`]).
+    pub autosave: Option<cadcraft_engine::autosave::Autosaver>,
+    /// Drawing Recovery: autosave files a crashed app left behind.
+    pub recovery: autosave::Recovery,
 }
 
 impl CadApp {
@@ -210,6 +225,8 @@ impl CadApp {
             quit_requested: false,
             quit_confirmed: false,
             closing: None,
+            autosave: None,
+            recovery: autosave::Recovery::default(),
         }
     }
 
@@ -284,6 +301,7 @@ impl CadApp {
             "theme": self.ui.theme.as_str(),
             "interfaceLanguage": self.ui.interface_language.code(),
             "saveFormat": self.ui.save_format.as_str(),
+            "saveVersion": self.ui.save_version,
         })
         .to_string()
     }
@@ -299,6 +317,9 @@ impl CadApp {
         }
         if let Some(f) = v.get("saveFormat").and_then(Value::as_str).and_then(SaveFormat::parse) {
             self.ui.save_format = f;
+        }
+        if let Some(v) = v.get("saveVersion").and_then(Value::as_str).and_then(SaveVersion::parse) {
+            self.ui.save_version = v.year().to_string();
         }
     }
 
@@ -382,6 +403,7 @@ impl CadApp {
         }
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
         for f in ctx.input(|i| i.raw.dropped_files.clone()) {
@@ -407,6 +429,12 @@ impl CadApp {
         };
         if let Some(egui::Event::PointerMoved(p) | egui::Event::PointerButton { pos: p, .. }) = self.synthetic.first() {
             raw.events.push(egui::Event::PointerMoved(*p));
+        }
+        // A synthetic click holds its Shift/Ctrl (Shift+click a grip); the next move lets go.
+        match self.synthetic.first() {
+            Some(egui::Event::PointerButton { modifiers, .. }) => raw.events.push(egui::Event::ModifiersChanged(*modifiers)),
+            Some(egui::Event::PointerMoved(_)) => raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::default())),
+            _ => {}
         }
         let n = n.min(self.synthetic.len());
         raw.events.extend(self.synthetic.drain(..n));
@@ -441,6 +469,7 @@ impl CadApp {
         });
         dialogs::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
+        autosave::show(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 
@@ -587,7 +616,7 @@ mod tests {
         frame(&mut a, &ctx, None);
         assert_eq!(Tokens::get(), Tokens::of(theme::SYSTEM_FALLBACK), "no OS appearance: the documented fallback");
         assert_eq!(a.ui.theme, ThemePref::System);
-        assert_eq!(a.prefs_json(), r#"{"interfaceLanguage":"auto","saveFormat":"dxf","theme":"system"}"#);
+        assert_eq!(a.prefs_json(), r#"{"interfaceLanguage":"auto","saveFormat":"dxf","saveVersion":"2018","theme":"system"}"#);
     }
 
     #[test]

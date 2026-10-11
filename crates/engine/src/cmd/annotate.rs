@@ -466,7 +466,8 @@ fn mleader_kind(s: &Session, pts: &[Vec2], text: &str, landing: bool) -> Option<
     let d = s.doc().ok()?;
     let cur = d.header.str("CMLEADERSTYLE", "Standard");
     let st = d.mleader_styles.iter().find(|m| m.name.eq_ignore_ascii_case(&cur)).or(d.mleader_styles.first()).cloned().unwrap_or_default();
-    let k = d.header.f64("DIMSCALE", 1.0);
+    // An annotative style's sizes are paper sizes: the annotation scale applies when drawn.
+    let k = if st.annotative { 1.0 } else { d.header.f64("DIMSCALE", 1.0) };
     let th = st.text_height * k;
     let dir = if arrow_pts.first().is_some_and(|a| a.x > landing_pt.x) { -1.0 } else { 1.0 };
     let attach = if dir > 0.0 { 4 } else { 6 };
@@ -669,13 +670,20 @@ fn run_dimtedit(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("dimtedit", "`angle` (degrees) is required"));
     }
     let d = s.doc_mut()?;
+    let dimscale = d.header.f64("DIMSCALE", 1.0);
     for h in &hs {
+        let st = match d.entity(*h).map(|e| &e.kind) {
+            Some(EntityKind::Dimension(dm)) => d.dim_style(&dm.style).cloned().unwrap_or_default().with_overrides(&dm.overrides),
+            _ => continue,
+        };
         d.modify_entity(*h, |e| {
             let EntityKind::Dimension(dm) = &mut e.kind else { return };
             dm.block = None;
             if let Some(q) = at {
                 dm.text_mid = v3(q);
                 dm.user_text_pos = true;
+                // DIMTMOVE 0: the dimension line moves with the text.
+                st.follow_text(dm, dimscale);
             }
             match mode.as_str() {
                 "home" => {
