@@ -17,7 +17,7 @@ pub enum Preference {
     English,
     #[serde(rename = "uk")]
     Ukrainian,
-#[serde(rename = "pl")]
+    #[serde(rename = "pl")]
     Polish,
 }
 
@@ -38,7 +38,7 @@ impl Preference {
             Self::Auto => t("Auto (system language)"),
             Self::English => "English",
             Self::Ukrainian => "Українська",
-	    Self::Polish => "Polski",
+            Self::Polish => "Polski",
         }
     }
 

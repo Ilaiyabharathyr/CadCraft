@@ -288,5 +288,3 @@ fn default_fonts_cover_every_ukrainian_letter_in_the_catalog() {
         }
     });
 }
-
-

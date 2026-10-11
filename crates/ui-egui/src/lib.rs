@@ -45,7 +45,6 @@ pub const PREFS_KEY: &str = "cadcraft.prefs";
 pub struct UiState {
     pub interface_language: i18n::Preference,
     pub show_toolsets: bool,
-    /// UI language: en or pl.
     pub show_palettes: bool,
     pub show_toolbar: bool,
     pub show_file_tabs: bool,
