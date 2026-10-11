@@ -69,6 +69,7 @@ fn every_marked_ui_literal_has_a_translation() {
         include_str!("../credits.rs"),
         include_str!("../dialogs.rs"),
         include_str!("../layers.rs"),
+        include_str!("../canvas/compare.rs"),
         include_str!("../palettes.rs"),
         include_str!("../parametric.rs"),
         include_str!("../quick.rs"),
