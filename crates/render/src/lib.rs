@@ -17,6 +17,7 @@ pub mod paper;
 mod plotstyle;
 mod point;
 pub mod raster;
+mod tolerance;
 pub mod units;
 mod wide;
 
@@ -27,6 +28,7 @@ use cadcraft_geom::{Bounds2, Mat3, Polyline, Vec2};
 pub use dim::{ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value};
 pub use fill::triangulate_evenodd;
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
+pub use tolerance::{gdt_points, tolerance_in};
 
 /// Handle carried by model-space geometry drawn inside a paper-space viewport (it belongs to no
 /// single paper-space entity, so selection highlighting never matches it).
@@ -356,7 +358,7 @@ const MAX_VIEWPORTS: usize = 256;
 /// A paper-space viewport: its border (as an ordinary entity) and model space seen through it.
 /// Viewport id 1 is the paper-space view itself and is not drawn.
 fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewport) {
-    if vp.id == 1 || !e.common.visible {
+    if vp.id == 1 || !e.common.visible || d.is_hidden_object(e.handle) {
         return;
     }
     // The viewport's layer frozen hides its contents too (layer off hides only the border).
@@ -518,6 +520,10 @@ fn default_lineweight(d: &Drawing) -> f32 {
 }
 
 fn entity(b: &mut Builder, ctx: &Ctx, e: &Entity) {
+    // Hidden by ISOLATEOBJECTS / HIDEOBJECTS (and so in viewports and plots too).
+    if ctx.d.is_hidden_object(e.handle) {
+        return;
+    }
     // The entity's named plot style, for everything it draws (block contents set their own).
     let saved = b.named;
     b.named = b.styles.and_then(|s| s.named_index(ctx, &e.common));
@@ -669,6 +675,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
             b.polyline(ctx, rgb, lw, &[o + u, o + v]);
         }
         EntityKind::Table(t) => table(b, ctx, t, rgb, lw),
+        EntityKind::Tolerance(t) => tolerance::draw(b, ctx, e, t, lw, tol),
         EntityKind::Leader(l) => {
             let pts: Vec<Vec2> = l.vertices.iter().map(|v| v.xy()).collect();
             stroke(b, &pts);

@@ -11,8 +11,10 @@ mod draw;
 mod draw2;
 mod draworder;
 mod edit;
+mod exchange;
 pub mod file;
 mod gripcmds;
+mod griphot;
 pub(crate) mod groups;
 mod hatch;
 mod inquiry;
@@ -25,9 +27,11 @@ mod mtext_opts;
 mod pline_opts;
 mod props;
 mod qselect;
+mod selecttools;
 mod settings;
 mod spline_opts;
 mod table;
+mod tolerance;
 mod trimextend;
 mod utility;
 mod view;
@@ -161,6 +165,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(audit::specs());
         v.extend(edit::specs());
         v.extend(qselect::specs());
+        v.extend(selecttools::specs());
         v.extend(view::specs());
         v.extend(draw::specs());
         v.extend(draw2::specs());
@@ -175,11 +180,13 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(gripcmds::specs());
         v.extend(layer::specs());
         v.extend(layout::specs());
+        v.extend(exchange::specs());
         v.extend(props::specs());
         v.extend(inquiry::specs());
         v.extend(settings::specs());
         v.extend(utility::specs());
         v.extend(table::specs());
+        v.extend(tolerance::specs());
         v.extend(constraints::specs());
         v
     })

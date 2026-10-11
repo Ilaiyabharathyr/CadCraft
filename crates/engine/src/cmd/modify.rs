@@ -1248,6 +1248,7 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
             }
             Some(v)
         }
+        EntityKind::Tolerance(t) => Some(super::tolerance::explode(d, e, t)),
         _ => None,
     }
 }

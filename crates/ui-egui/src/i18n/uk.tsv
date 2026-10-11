@@ -154,6 +154,7 @@
 	Dark	Темна
 	Default	Типово
 	Default Save Format	Типовий формат збереження
+	Default Save Version	Типова версія збереження
 	Define Attributes	Визначити атрибути
 	Define Attributes...	Визначити атрибути...
 	Defined width	Задана ширина
@@ -212,6 +213,7 @@
 	Ellipse	Еліпс
 	Elliptical Arc	Еліптична дуга
 	Enable Dynamic Input (F12)	Увімкнути динамічне введення (F12)
+	End Object Isolation	Завершити ізоляцію об'єктів
 	End Width	Кінцева ширина
 	End X	Кінець X
 	End Y	Кінець Y
@@ -310,12 +312,16 @@
 	Grid Display	Відображення сітки
 	Grid On (F7)	Увімкнути сітку (F7)
 	Grid spacing	Крок сітки
+	Grip Edit	Редагування ручками
 	Grip Mirror	Дзеркальне відображення ручками
+	Grip Option	Опція ручки
 	Grip Rotate	Поворот ручками
 	Grip Scale	Масштабування ручками
 	Grip Stretch	Розтягування ручками
 	Group	Згрупувати
 	Group Edit	Редагувати групу
+	Group Options	Параметри групи
+	Group Selection	Вибір груп
 	Hatch	Штрихування
 	Hatch Edit	Редагувати штрихування
 	Hatch...	Штрихування...
@@ -327,6 +333,7 @@
 	Hide All Constraint Bars	Приховати всі панелі обмежень
 	Hide All Dynamic Dimensions	Приховати всі динамічні розміри
 	Hide Layer List	Приховати список шарів
+	Hide Objects	Приховати об'єкти
 	Hide Palettes	Приховати палітри
 	Home	Початковий вид
 	Horizontal	Горизонтальність
@@ -358,6 +365,7 @@
 	Intersection	Перетин
 	Isolate	Ізолювати
 	Isolate Layer	Ізолювати шар
+	Isolate Objects	Ізолювати об'єкти
 	Isometric Drafting	Ізометричне креслення
 	Join	Об'єднати
 	Join the ArtCraft Discord…	Приєднатися до Discord ArtCraft…
@@ -650,6 +658,7 @@
 	Select 2D polyline	Виберіть 2D-полілінію
 	Select All	Вибрати все
 	Select Objects	Вибрати об'єкти
+	Select Similar	Вибрати подібні
 	Select a 2D polyline.	Виберіть 2D-полілінію.
 	Select a block reference.	Виберіть посилання на блок.
 	Select a circle or arc.	Виберіть коло або дугу.
@@ -907,6 +916,7 @@
 	Tan, Tan, Radius	Дотична, дотична, радіус
 	Tan, Tan, Tan	Дотична, дотична, дотична
 	Tangent	Дотичність
+	Temporary track point	Тимчасова точка відстеження
 	Text	Текст
 	Text Editor	Текстовий редактор
 	Text Height	Висота тексту
@@ -954,6 +964,12 @@
 	Value	Значення
 	Value:	Значення:
 	Version	Версія
+	Version 2000	Версія 2000
+	Version 2004	Версія 2004
+	Version 2007	Версія 2007
+	Version 2010	Версія 2010
+	Version 2013	Версія 2013
+	Version 2018	Версія 2018
 	Version {version}	Версія {version}
 	Vertical	Вертикальність
 	VerticalDistance	Вертикальна відстань
@@ -1001,3 +1017,13 @@
 	Hide Others	Приховати інші
 	Accessibility	Спеціальні можливості
 	Show System Cursor	Показувати системний курсор
+	Import...	Імпорт...
+	Export...	Експорт...
+	Batch Publish...	Пакетна публікація...
+	Drawing Recovery Manager...	Диспетчер відновлення креслень...
+	Tolerance...	Допуск...
+	Add Vertex	Додати вершину
+	Remove Vertex	Видалити вершину
+	Convert to Arc	Перетворити на дугу
+	Convert to Line	Перетворити на відрізок
+	Stretch Vertex	Розтягнути вершину
