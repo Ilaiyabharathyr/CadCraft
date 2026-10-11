@@ -15,6 +15,8 @@ use crate::{EPS, Ellipse, Spline, TAU, Vec2};
 pub const MAX_EDIT_DEGREE: usize = 25;
 /// Most control points a single knot insertion grows a spline to.
 const MAX_EDIT_CONTROL: usize = 50_000;
+/// Most knot insertions one split makes (the degree of any spline drawn in practice).
+const MAX_SPLIT_INSERTS: usize = 64;
 /// Most control points a Bézier decomposition (and so a degree elevation or join) produces.
 const MAX_DECOMPOSED: usize = 10_000;
 
@@ -194,7 +196,7 @@ impl Spline {
         let mut s = self.clone();
         s.fit.clear();
         let mut guard = 0;
-        while s.knots.iter().filter(|k| same(k)).count() < s.degree && guard <= MAX_EDIT_DEGREE {
+        while s.knots.iter().filter(|k| same(k)).count() < s.degree && guard < MAX_SPLIT_INSERTS {
             s = s.insert_knot(t)?;
             guard += 1;
         }
