@@ -31,10 +31,12 @@
 	About CADCraft	Про CADCraft
 	Absolute	Абсолютні
 	Add Leader	Додати виноску
+	Additional angles	Додаткові кути
 	Align	Вирівняти
 	Align Text	Вирівняти текст
 	Aligned	Паралельний
 	All	Усі
+	All Annotation Objects	Усі об'єкти анотацій
 	All Used Layers	Усі використані шари
 	All files	Усі файли
 	Angle	Кут
@@ -79,6 +81,8 @@
 	Box	Паралелепіпед
 	Break	Розірвати
 	Break At Point	Розірвати в точці
+	Bring Above Objects	Над об'єктами
+	Bring Annotations to Front	Анотації на передній план
 	Bring to Front	На передній план
 	ByBlock	За блоком
 	ByColor	За кольором
@@ -103,6 +107,8 @@
 	Circle	Коло
 	Circumference	Довжина кола
 	Clear	Очистити
+	Clip	Обрізати
+	Clip Viewport	Обрізати видовий екран
 	Clipboard	Буфер обміну
 	Close	Закрити
 	Close All	Закрити всі
@@ -149,8 +155,10 @@
 	DWG	DWG
 	DXF	DXF
 	Dark	Темна
+	Data Extraction...	Вилучення даних...
 	Default	Типово
 	Default Save Format	Типовий формат збереження
+	Default Save Version	Типова версія збереження
 	Define Attributes	Визначити атрибути
 	Define Attributes...	Визначити атрибути...
 	Defined width	Задана ширина
@@ -172,6 +180,7 @@
 	Diameter	Діаметр
 	Dim style	Розмірний стиль
 	Dimension	Розміри
+	Dimension Objects Only	Лише розміри
 	Dimension Space	Відстань між розмірами
 	Dimension Style Override	Перевизначення розмірного стилю
 	Dimension Style...	Розмірний стиль...
@@ -198,21 +207,25 @@
 	Drawing Limits	Межі креслення
 	Drawing Utilities	Утиліти креслення
 	Drawings (DWG, DXF)	Креслення (DWG, DXF)
+	Dynamic	Динамічно
 	Dynamic Dimensions	Динамічні розміри
 	Dynamic Input	Динамічне введення
 	Dynamic Input (F12)	Динамічне введення (F12)
 	E	Сх
 	Edit	Редагування
+	Edit Attributes...	Редагувати атрибути...
 	Edit Text...	Редагувати текст...
 	Elevation	Відмітка
 	Ellipse	Еліпс
 	Elliptical Arc	Еліптична дуга
 	Enable Dynamic Input (F12)	Увімкнути динамічне введення (F12)
+	End Object Isolation	Завершити ізоляцію об'єктів
 	End Width	Кінцева ширина
 	End X	Кінець X
 	End Y	Кінець Y
 	End angle	Кінцевий кут
 	Endpoint	Кінцева точка
+	Enter	Ввід
 	Enter Top, Zero or Bottom.	Введіть Top, Zero або Bottom.
 	Enter a fit data option	Введіть параметр апроксимації
 	Enter a pattern name	Введіть назву візерунка
@@ -305,13 +318,18 @@
 	Grid (F7)	Сітка (F7)
 	Grid Display	Відображення сітки
 	Grid On (F7)	Увімкнути сітку (F7)
+	Grid snap	Прив'язка до сітки
 	Grid spacing	Крок сітки
+	Grip Edit	Редагування ручками
 	Grip Mirror	Дзеркальне відображення ручками
+	Grip Option	Опція ручки
 	Grip Rotate	Поворот ручками
 	Grip Scale	Масштабування ручками
 	Grip Stretch	Розтягування ручками
 	Group	Згрупувати
 	Group Edit	Редагувати групу
+	Group Options	Параметри групи
+	Group Selection	Вибір груп
 	Hatch	Штрихування
 	Hatch Edit	Редагувати штрихування
 	Hatch...	Штрихування...
@@ -323,6 +341,7 @@
 	Hide All Constraint Bars	Приховати всі панелі обмежень
 	Hide All Dynamic Dimensions	Приховати всі динамічні розміри
 	Hide Layer List	Приховати список шарів
+	Hide Objects	Приховати об'єкти
 	Hide Palettes	Приховати палітри
 	Home	Початковий вид
 	Horizontal	Горизонтальність
@@ -354,6 +373,7 @@
 	Intersection	Перетин
 	Isolate	Ізолювати
 	Isolate Layer	Ізолювати шар
+	Isolate Objects	Ізолювати об'єкти
 	Isometric Drafting	Ізометричне креслення
 	Join	Об'єднати
 	Join the ArtCraft Discord…	Приєднатися до Discord ArtCraft…
@@ -380,6 +400,7 @@
 	Layout	Аркуш
 	Layout list	Список аркушів
 	Leader	Виноска
+	Leaders Only	Лише виноски
 	Left	Ліворуч
 	Length	Довжина
 	Length X	Довжина X
@@ -412,6 +433,7 @@
 	Loaded linetypes	Завантажені типи ліній
 	Lock	Заблокувати
 	Lock Layer	Заблокувати шар
+	Lock viewport	Заблокувати видовий екран
 	Lock/Unlock	Заблокувати/розблокувати
 	Loft	Тіло за перерізами
 	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0. Не пов'язано з Autodesk, Inc.
@@ -451,6 +473,7 @@
 	N	Пн
 	Name	Назва
 	Name (A–Z)	Назва (А–Я)
+	Named Views...	Іменовані види...
 	Nearest	Найближча точка
 	New	Створити
 	New (metric)	Створити (метричне)
@@ -480,6 +503,7 @@
 	Object Snap On (F3)	Увімкнути об'єктну прив'язку (F3)
 	Object Snap Tracking	Відстеження об'єктної прив'язки
 	Object Snap Tracking (F11)	Відстеження об'єктної прив'язки (F11)
+	Object Snap Tracking Settings	Параметри відстеження об'єктної прив'язки
 	Object type:	Тип об'єкта:
 	Off	Вимкнено
 	Offset	Зміщення
@@ -534,6 +558,9 @@
 	New STB	Нова STB
 	New style	Новий стиль
 	Reset Panel Layout	Скинути розташування панелей
+	Send Hatches to Back	Штрихування на задній план
+	Send Under Objects	Під об'єкти
+	Text Objects Only	Лише текстові об'єкти
 	Use for this layout	Використати для цього аркуша
 	Display plot styles	Показувати стилі друку
 	No plot style tables.	Немає таблиць стилів друку.
@@ -558,10 +585,15 @@
 	Polar Tracking	Полярне відстеження
 	Polar Tracking (F10)	Полярне відстеження (F10)
 	Polar Tracking On (F10)	Увімкнути полярне відстеження (F10)
+	Polar angle measurement	Вимірювання полярного кута
+	Polar distance	Полярна відстань
 	Polar: {distance} < {angle}°	Полярне: {distance} < {angle}°
+	PolarSnap	Полярна прив'язка
 	Polygon	Правильний багатокутник
 	Polygonal	Багатокутний
+	Polygonal Viewport	Багатокутний видовий екран
 	Polyline	Полілінія
+	Polyline Edit	Редагувати полілінію
 	Position X	Позиція X
 	Position Y	Позиція Y
 	Position Z	Позиція Z
@@ -594,6 +626,8 @@
 	Realtime	У реальному часі
 	Reassociate Dimensions	Відновити асоціативність розмірів
 	Recent	Нещодавні
+	Recent Commands	Нещодавні команди
+	Recent Input	Нещодавнє введення
 	Recover...	Відновити...
 	Rectangle	Прямокутник
 	Rectangular	Прямокутний
@@ -607,6 +641,7 @@
 	Region	Область
 	Region/Mass Properties	Властивості області/маси
 	Relative	Відносні
+	Relative to last segment	Відносно останнього сегмента
 	Remove Leader	Видалити виноску
 	Remove the viewport override	Видалити перевизначення видового екрана
 	Rename Dimension Style	Перейменувати розмірний стиль
@@ -642,6 +677,7 @@
 	Select 2D polyline	Виберіть 2D-полілінію
 	Select All	Вибрати все
 	Select Objects	Вибрати об'єкти
+	Select Similar	Вибрати подібні
 	Select a 2D polyline.	Виберіть 2D-полілінію.
 	Select a block reference.	Виберіть посилання на блок.
 	Select a circle or arc.	Виберіть коло або дугу.
@@ -711,6 +747,7 @@
 	Set Current	Зробити поточним
 	Set Current Dimension Style	Зробити розмірний стиль поточним
 	Set Current Text Style	Зробити текстовий стиль поточним
+	Set Current Viewport	Зробити видовий екран поточним
 	Set Layer Properties	Задати властивості шару
 	Set Properties	Задати властивості
 	Set Table Cell	Задати комірку таблиці
@@ -732,8 +769,10 @@
 	Snap Mode	Режим крокової прив'язки
 	Snap Mode (F9)	Режим крокової прив'язки (F9)
 	Snap On (F9)	Увімкнути крокову прив'язку (F9)
+	Snap Overrides	Перевизначення прив'язок
 	Snap X spacing	Крок прив'язки X
 	Snap and Grid	Крокова прив'язка та сітка
+	Snap type	Тип крокової прив'язки
 	Solid	Тіло
 	Sort	Сортування
 	Specify a point	Укажіть точку
@@ -865,6 +904,7 @@
 	Specify width for rectangles	Укажіть ширину прямокутників
 	Sphere	Сфера
 	Spline	Сплайн
+	Spline Edit	Редагувати сплайн
 	Stack (type 1/2 then select)	Дріб (введіть 1/2, потім виділіть)
 	Standard	Стандартний
 	Start	Початок
@@ -899,6 +939,7 @@
 	Tan, Tan, Radius	Дотична, дотична, радіус
 	Tan, Tan, Tan	Дотична, дотична, дотична
 	Tangent	Дотичність
+	Temporary track point	Тимчасова точка відстеження
 	Text	Текст
 	Text Editor	Текстовий редактор
 	Text Height	Висота тексту
@@ -916,6 +957,8 @@
 	Tools	Інструменти
 	Torus	Тор
 	Trace	Смуга
+	Track orthogonally only	Відстежувати лише ортогонально
+	Track using all polar angle settings	Відстежувати за всіма полярними кутами
 	Transparency	Прозорість
 	Trim	Обрізати
 	True Color	Колір RGB
@@ -933,6 +976,7 @@
 	Unisolate Layer	Скасувати ізоляцію шарів
 	Units...	Одиниці...
 	Unlock Layer	Розблокувати шар
+	Unlock viewport	Розблокувати видовий екран
 	Unmerge Cells	Розділити комірки
 	Unsaved Layer State	Незбережений стан шарів
 	Up	Угору
@@ -946,6 +990,12 @@
 	Value	Значення
 	Value:	Значення:
 	Version	Версія
+	Version 2000	Версія 2000
+	Version 2004	Версія 2004
+	Version 2007	Версія 2007
+	Version 2010	Версія 2010
+	Version 2013	Версія 2013
+	Version 2018	Версія 2018
 	Version {version}	Версія {version}
 	Vertical	Вертикальність
 	VerticalDistance	Вертикальна відстань
@@ -954,6 +1004,8 @@
 	Viewport	Видовий екран
 	Viewport Layer Freeze	Заморозити шар у видовому екрані
 	Viewport Properties	Властивості видового екрана
+	Viewport is locked	Видовий екран заблоковано
+	Viewport scale	Масштаб видового екрана
 	Viewport {id}	Видовий екран {id}
 	Viewports	Видові екрани
 	W	Зх
@@ -969,11 +1021,13 @@
 	Yes	Так
 	Zoom	Масштабування виду
 	Zoom All	Показати все
+	Zoom Dynamic	Динамічне масштабування
 	Zoom Extents	Показати межі об'єктів
 	Zoom In	Наблизити
 	Zoom Object	Показати об'єкт
 	Zoom Out	Віддалити
 	Zoom Previous	Попередній масштаб
+	Zoom Realtime	Масштабування в реальному часі
 	Zoom Window	Масштабувати рамкою
 	error	помилка
 	{contributors} · {commits}	{contributors} · {commits}
@@ -993,3 +1047,25 @@
 	Hide Others	Приховати інші
 	Accessibility	Спеціальні можливості
 	Show System Cursor	Показувати системний курсор
+	Import...	Імпорт...
+	Export...	Експорт...
+	Batch Publish...	Пакетна публікація...
+	Scale List...	Список масштабів...
+	Annotative Object Scale	Масштаб анотативних об'єктів
+	Add Current Scale	Додати поточний масштаб
+	Delete Current Scale	Видалити поточний масштаб
+	Add/Delete Scales...	Додати/видалити масштаби...
+	Synchronize Multiple-scale Positions	Синхронізувати положення для кількох масштабів
+	Annotative Update	Оновити анотативні об'єкти
+	Show Annotative Objects	Показувати анотативні об'єкти
+	Current Scale Only	Лише поточний масштаб
+	All Scales	Усі масштаби
+	Drawing Recovery Manager...	Диспетчер відновлення креслень...
+	Tolerance...	Допуск...
+	Add Vertex	Додати вершину
+	Remove Vertex	Видалити вершину
+	Convert to Arc	Перетворити на дугу
+	Convert to Line	Перетворити на відрізок
+	Stretch Vertex	Розтягнути вершину
+	Edit Array	Редагувати масив
+	Close Array Editing	Завершити редагування масиву

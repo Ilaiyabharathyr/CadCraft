@@ -100,6 +100,9 @@ pub struct Common {
     /// Named plot style: `ByLayer`, `ByBlock` or a style of the layout's named (`.stb`) plot
     /// style table.
     pub plot_style: String,
+    /// The annotation scales an annotative object supports (empty: not annotative).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub anno_scales: Vec<crate::AnnoScale>,
 }
 
 impl Default for Common {
@@ -115,6 +118,7 @@ impl Default for Common {
             thickness: 0.0,
             extrusion: Vec3::Z,
             plot_style: "ByLayer".into(),
+            anno_scales: Vec::new(),
         }
     }
 }
@@ -494,6 +498,10 @@ pub struct HatchLoop {
     pub vertices: Vec<PolyVertex>,
     #[serde(default)]
     pub outer: bool,
+    /// The objects the loop was made from (DXF group 97 count, 330 handles): an associative
+    /// hatch re-fills the loop from them when they change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<Handle>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -568,6 +576,30 @@ pub struct Viewport {
     /// Per-viewport layer colour overrides (VP Color in the Layer Properties Manager).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_colors: Vec<(String, Color)>,
+    /// The paper-space entity whose outline clips the viewport (a closed polyline, circle,
+    /// ellipse or spline; DXF group 340). `None`: the rectangle `center`/`width`/`height`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<Handle>,
+    /// Display on (MVIEW ON/OFF). An off viewport shows its border but no model space.
+    #[serde(default = "yes")]
+    pub on: bool,
+}
+impl Default for Viewport {
+    fn default() -> Self {
+        Viewport {
+            center: Vec3::ZERO,
+            width: 1.0,
+            height: 1.0,
+            view_center: Vec2::ZERO,
+            view_height: 1.0,
+            id: 0,
+            locked: false,
+            frozen_layers: Vec::new(),
+            layer_colors: Vec::new(),
+            clip: None,
+            on: true,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -709,6 +741,7 @@ pub enum EntityKind {
     Image(Image),
     Wipeout(Wipeout),
     Table(Table),
+    Tolerance(crate::Tolerance),
     Unknown(Unknown),
 }
 
@@ -760,6 +793,7 @@ impl EntityKind {
             EntityKind::Image(_) => "Raster Image",
             EntityKind::Wipeout(_) => "Wipeout",
             EntityKind::Table(_) => "Table",
+            EntityKind::Tolerance(_) => "Tolerance",
             EntityKind::Unknown(_) => "Proxy",
         }
     }
@@ -792,6 +826,7 @@ impl EntityKind {
             EntityKind::Image(_) => "IMAGE",
             EntityKind::Wipeout(_) => "WIPEOUT",
             EntityKind::Table(_) => "ACAD_TABLE",
+            EntityKind::Tolerance(_) => "TOLERANCE",
             EntityKind::Unknown(u) => u.dxf_type.as_str(),
         }
     }
@@ -866,6 +901,7 @@ impl EntityKind {
                 .collect(),
             EntityKind::Image(i) => vec![Prim::Point(i.insert.xy())],
             EntityKind::Table(t) => vec![Prim::Point(t.insert.xy())],
+            EntityKind::Tolerance(t) => vec![Prim::Point(t.insert.xy())],
             EntityKind::Unknown(_) => Vec::new(),
         }
     }
@@ -1031,6 +1067,12 @@ impl EntityKind {
                 t.row_heights.iter_mut().for_each(|h| *h *= s);
                 t.text_height *= s;
             }
+            EntityKind::Tolerance(t) => {
+                t3(&mut t.insert);
+                // Like text with MIRRTEXT = 0: a mirrored frame keeps reading left to right.
+                let a = if mirror { t.rotation() } else { t.rotation() + rot };
+                t.dir = Vec2::from_angle(cadcraft_geom::norm_angle(a)).to3(0.0);
+            }
             EntityKind::Unknown(_) => {}
         }
     }
@@ -1096,6 +1138,7 @@ impl EntityKind {
             EntityKind::Image(i) => vec![i.insert.xy()],
             EntityKind::Wipeout(w) => w.boundary.clone(),
             EntityKind::Table(t) => vec![t.insert.xy()],
+            EntityKind::Tolerance(t) => vec![t.insert.xy()],
             EntityKind::Unknown(_) => Vec::new(),
         }
     }

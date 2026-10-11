@@ -16,11 +16,11 @@ do them first.
 | 1 | **[alpha blocker]** **Saving drops whatever we don't model** (Unknown entities, IMAGE, layer states, block descriptions, true colours, MULTILEADER written as LEADER+MTEXT, groups, named views/UCS, foreign xdata) | Opening a colleague's DWG and saving it silently deletes content: the one thing a CAD user can't forgive | 15–25 | [file formats](file-format-parity.md) |
 | 2 | **[alpha blocker]** **No real-file test corpus and no check in AutoCAD** | All 36 file tests are synthetic; nobody has verified a CADCraft DWG/DXF opens cleanly in AutoCAD | 10–15 + human | [file formats](file-format-parity.md#tests) |
 | 3 | **Tracking leftovers** (object snap tracking, Extension, Parallel and Apparent Intersection landed, #379): polar angles relative to the last segment, PolarSnap, temporary tracking point | Small now; ranks lower at the next review | 3–5 | [ui](ui-parity.md#tracking-polar-ortho-grid-and-snap--70) |
-| 4 | **[alpha blocker]** **DWG always saves as R2000; DXF only R2000 ASCII; no code pages** | Can't exchange at 2018 format; pre-2007 CJK/Cyrillic files are garbled | 10–15 | [file formats](file-format-parity.md) |
+| 4 | **No code pages when reading pre-2007 files** (saving DWG/DXF at 2000–2018 and binary DXF landed, #421) | Pre-2007 CJK/Cyrillic files are garbled | 3–5 | [file formats](file-format-parity.md) |
 | 5 | **[alpha blocker]** **Stubbed prompt options** left in PEDIT Edit vertex, SPLINEDIT and MTEXT columns | Scripts and muscle memory hit "not available yet" (the most-used commands are done) | 3–6 | [features](#features) |
 | 6 | **Ellipse and spline geometry is tessellated** (intersections, offsets, closest points; polyline offset ignores bulges) | Coordinates are subtly wrong; offsets of ellipses come out as polylines | 30–50 | [geometry](geometry-parity.md) |
 | 7 | **[alpha blocker]** **No xrefs, block editor, dynamic blocks or groups** | Most production drawings use them | 80–120 | [features](#features) |
-| 8 | **No autosave, crash recovery, AUDIT or RECOVER** | Work is lost if anything goes wrong; damaged files can't be repaired | 10–15 | [features](#features) |
+| 8 | **No autosave in the web build** (the desktop app has SAVETIME autosave, Drawing Recovery, AUDIT and RECOVER since #406) | Browser users lose unsaved work when the tab or the browser goes down | 3–5 | [features](#features) |
 | 9 | **Dynamic input lacks grip input; no TK; grip options ignored** (FROM, M2P/MTP, point filters, `*` and `<a` landed, #392) | Precision entry at the cursor is how AutoCAD is taught today | 12–20 | [ui](ui-parity.md) |
 | 10 | **No CI runs the Rust tests on pull requests** (`cargo fmt` on main is fixed) | open PRs land without a gate; regressions go unseen | 2–3 | [stability](#stability) |
 
@@ -31,22 +31,21 @@ do them first.
 | F1 | **[alpha blocker]** Prompt options print "not available yet": PEDIT Edit vertex Break/Regen/Tangent, some SPLINEDIT options; MTEXT Dynamic/Static columns (no column model). SPLINE, MTEXT and MLEADER options done (#408): closed splines keep but ignore a fit tolerance, SPLINE Object fits the polyline's vertices (no spline frame is kept) (TRIM/EXTEND, PLINE arc mode and Length, XLINE done (#397); OFFSET, ROTATE and FILLET options done earlier) | `modify2.rs:594,783,806`, `cmd/mtext_opts.rs` | Medium: the most-used commands are done | 3–6 |
 | F2 | **[alpha blocker]** No xrefs (XATTACH, XREF palette, REFEDIT, BIND, XCLIP, overlay, paths); DXF xref blocks read with an empty path | `dxf_read.rs:923` | High: multi-file projects | 30–45 |
 | F3 | **[alpha blocker]** (block editor and REFEDIT; dynamic-block authoring is beta) No block editor (BEDIT) or dynamic blocks (parameters, actions, visibility, lookup); dynamic blocks from other files lose their behaviour | issue #185 offers help | High: standard libraries are dynamic | 50–75 |
-| F4 | No autosave (SAVETIME), crash recovery files or drawing recovery manager (AUDIT and RECOVER landed with #406; AUDITCTL `.adt` logs and a RECOVER mode in the file readers are not there) | no SAVETIME anywhere | High: lost work | 6–10 |
+| F4 | Autosave leftovers: no autosave in the web build (browser storage); autosave files are DXF, not DWG; no AUDITCTL `.adt` log and no separate RECOVER mode in the file readers (SAVETIME, Drawing Recovery, AUDIT and RECOVER landed with #406) | `engine/src/autosave.rs`, `engine/src/audit.rs` | Low-medium (web users) | 3–5 |
 | F5 | Arrays are not associative: no ARRAYEDIT; ARRAY/ARRAYRECT/ARRAYPOLAR edit the array in an option loop, then create plain copies (ASsociative, Levels, polar ROWs and grip editing print "not available yet") | `cmd/array.rs` | Medium-high | 8–12 |
-| F6 | FILLET/CHAMFER/JOIN/LENGTHEN/EXTEND don't handle ellipses and splines; FILLET Trim/Multiple and polyline segment pairs; CHAMFER Angle/Method | [geometry-parity](geometry-parity.md#trim-extend-fillet-chamfer-break-join-lengthen--45) | Medium | 10–15 |
 | F7 | Dimensions: no DIMSTYLE manager dialog; 43 of ~80 DIMSTYLE variables (DIMTOFL, DIMATFIT, DIMTMOVE, DIMLTYPE, DIMLWD, DIMFXL, DIMTOLJ, DIMALTU …); no smart DIM; no DIMJOGGED, DIMJOGLINE, DIMBREAK, oblique DIMEDIT, inspection; QDIM continuous only (SETVAR DIM* now become style overrides, #129) | `doc/src/tables.rs:223-266`, `annotate.rs:64,364` | High for detailers | 25–35 |
-| F8 | No TOLERANCE (GD&T feature control frames) | menu "Dimension > Tolerance..." uncovered | Medium (mechanical) | 4–6 |
+| F8 | TOLERANCE leftovers (feature control frames landed, #420: model, our own symbol drawing, DXF, command-line prompts, explode, grips): no Geometric Tolerance dialog, no LEADER/QLEADER tolerance annotation, no in-place editing of a frame's contents | `cmd/tolerance.rs` | Low-medium (mechanical) | 2–4 |
 | F9 | MTEXT editor is a dialog box, not in place; no columns, bullets, numbering, tabs, indents; no fields (FIELD, UPDATEFIELD); no spell check (SPELL) | `ui-egui/dialogs.rs:188-240` | Medium-high | 30–45 |
 | F10 | MLEADER: no MLEADEREDIT/ALIGN/COLLECT; MLEADERSTYLE has 5 fields (block content and spline/no-leader types are per command, not in the style; block content has no attributes) | `annotate.rs`, `cmd/mleader_content.rs`, `tables.rs:417` | Medium | 8–12 |
 | F11 | Tables: no cell styles, formulas, data links, table breaking | `cmd/table.rs` | Medium | 10–15 |
 | F12 | Annotative scaling: the flag is stored, nothing scales; no scale list, no "Annotative Object Scale" commands | 4 uncovered menu items | Medium-high in layouts | 10–15 |
-| F13 | Hatch: 23 patterns (AutoCAD ~85; ours must stay original); gradients render as a flat colour; associativity not updated when the boundary moves; origin always 0,0; island style always normal; no gap tolerance, separate hatches, hatch dialog, MPolygon | `doc/src/library.rs`, `render/lib.rs:430-437`, `cmd/hatch.rs:198,201` | Medium | 15–25 |
+| F13 | Hatch: 23 patterns (AutoCAD ~85; ours must stay original); no hatch dialog (HATCH and HATCHEDIT options work at the command line and in JSON), no MPolygon; HATCHEDIT can't add or remove boundaries; a hatch copied with its boundary isn't linked to the copy; HPGAPTOL closes gaps between curve ends only | `doc/src/library.rs`, `cmd/hatch.rs`, `cmd/hatch/edit.rs` | Medium | 8–12 |
 | F14 | **[alpha blocker]** No plot preview, plotter devices, PUBLISH/batch plot; Print opens no plot dialog (#160, PR #200). Plot styles (CTB and STB, [plot-styles.md](plot-styles.md)) apply since #410; their end/join/fill styles aren't applied and binary `.ctb`/`.stb` files can't be read | `palettes.rs:666` | High for sheet output | 15–25 |
 | F15 | Viewports: no polygonal, object or clipped viewports; no viewport scale control in the UI | menu items uncovered | Medium | 6–10 |
-| F16 | Groups (GROUP, GROUPEDIT, PICKSTYLE) missing; ACAD_GROUP written empty | `dxf_write.rs` | Medium | 4–6 |
+| F16 | Groups: no group bounding box or single grip when a group is selected (GROUPDISPLAYMODE), copying a whole group does not make a new group, no Object Grouping dialog (GROUP, GROUPEDIT, UNGROUP, -GROUP, PICKSTYLE group selection and the DXF/DWG round trip landed, #417); PICKSTYLE's associative-hatch bit is stored but unused | `cmd/groups.rs` | Low | 2–4 |
 | F17 | Attributes: BATTMAN lists only; no ATTSYNC, EATTEXT, global ATTEDIT | `blocks.rs:300` | Medium | 6–10 |
 | F18 | Layer bugs: edits change geometry on locked layers (#87, PR #196); delete/purge removes layers used by blocks (#72, PR #189); rename misses paper space and blocks (#75, PR #191); linetype rename breaks assignments (#74, PR #195); rejected freeze changes colour (#71, PR #188) | issues | High (correctness) | 3–5 (PRs open) |
-| F19 | MATCHPROP has no interactive picker or settings dialog; DRAWORDER front/back only; OVERKILL exact duplicates only | `props.rs:333`, `modify.rs:1258` | Medium | 5–8 |
+| F19 | MATCHPROP Settings is a keyword prompt (no dialog) and has no material, shadow or centre-object settings; TEXTTOFRONT and HATCHTOBACK act on the current space only; OVERKILL doesn't compare polyline segments with other objects (picker and Settings, DRAWORDER Above/Under, TEXTTOFRONT, HATCHTOBACK, OVERKILL tolerance/ignore/overlap/end-to-end options landed, #439) | `props/matchprop.rs`, `draworder.rs`, `overkill.rs` | Low | 2–4 |
 | F20 | OPTIONS/Preferences dialog missing (#23) (UNITS has a dialog since #38) | — | Medium | 6–10 |
 | F21 | MLINE is two polylines (no MLINE entity, MLSTYLE); REGION makes polylines (no region entity); HELIX is a polyline | `draw2.rs:116,123`, `hatch.rs:267` | Medium-low | 8–12 |
 | F22 | Inquiry: MASSPROP approximate; COUNT counts model-space inserts only; no QuickCalc palette (CAL is an evaluator); no DWG Compare | `utility.rs:203,310-352`, `inquiry.rs:305` | Low-medium | 15–25 |
@@ -60,17 +59,15 @@ Detail and evidence: [ui-parity.md](ui-parity.md).
 
 | # | Gap | User impact | Est. |
 |---|---|---|---|
-| U1 | Tracking leftovers: polar angles relative to the last segment (POLARMODE 1), PolarSnap, temporary tracking point (TT), Extension from ellipse and spline ends, the tracking options in Drafting Settings (object snap tracking, Extension, Parallel and Apparent Intersection landed in #379) | Medium | 3–5 |
 | U2 | Dynamic input: grip dimensional input, lock icons, DYNPROMPT options menu (pointer boxes with Tab and relative entry landed in #60) | Medium | 3–5 |
-| U3 | **[alpha blocker]** TK (temporary tracking, comes with object snap tracking, U1). FROM, M2P/MTP, `.x/.y/.xy` point filters, the `*` WCS prefix and the angle override `<a` landed at every point prompt (#392) | High | 1–2 |
-| U4 | Tab snap cycling offers the closest snap of each mode, not every candidate; the snap menu has no Temporary track point (comes with U1). Typed snap overrides (`END`, `MID` … `NON`), the Shift/Ctrl+right-click snap menu and Tab cycling landed (#393) | Low | 1–2 |
+| U4 | Tab snap cycling offers the closest snap of each mode, not every candidate. Typed snap overrides (`END`, `MID` … `NON`), the Shift/Ctrl+right-click snap menu and Tab cycling landed (#393), the menu's Temporary track point in #441 | Low | 1 |
 | U5 | Hot-grip options (Base point, Copy, Undo, Reference) are shown but ignored; multiple hot grips; multifunctional grip menus (Add/Remove Vertex, Convert to Arc) | Medium-high | 6–10 |
-| U6 | Selection keywords W, C, WP, CP, F, BOX, AU, SI, M, G; lasso (press-drag windows landed in #63); selection cycling; SELECTSIMILAR; ISOLATEOBJECTS/HIDEOBJECTS | Medium-high | 6–10 |
+| U6 | Selection: lasso; selection cycling (a list of overlapping objects, SELECTIONCYCLING); the CLass keyword; isolation saved with the drawing (OBJECTISOLATIONMODE 1) and the status-bar isolate button. Press-drag windows (#63), the W, C, F, WP and CP keywords (#226), BOX, AUto, SIngle, Multiple, Group, Add, Remove and Undo, SELECTSIMILAR, and ISOLATEOBJECTS/HIDEOBJECTS/UNISOLATEOBJECTS (#428) landed | Medium | 3–5 |
 | U7 | Right-click context menus (canvas, selection, command, command line, palettes, tabs) | Medium-high | 6–10 |
 | U8 | Snaps missing on some objects: MID on circles/ellipses/splines; NOD on dimension points; INS on ATTDEF/MLEADER; TAN on ellipses/splines; GCEN on splines | Medium | 4–6 |
-| U9 | Polar: additional angles, relative to last segment, PolarSnap; isometric snap/grid and ISODRAFT (dead toggle) | Medium | 4–6 |
+| U9 | Isometric snap/grid and ISODRAFT (dead toggle). Polar additional angles, angles relative to the last segment and PolarSnap landed (#441) | Medium | 2–4 |
 | U10 | UNDO Mark/Back/BEgin/End/Auto; SETVAR coverage (~60 of ~1,000 variables) | Medium | 6–10 |
-| U11 | Zoom Realtime and Dynamic, ZOOMFACTOR; named views (VIEW); tiled model viewports | Medium | 6–8 |
+| U11 | MVIEW Restore (a saved viewport configuration into a layout); VIEW Orthographic, UCS and background settings; view twist is kept but not shown (Zoom Realtime and Dynamic, ZOOMFACTOR, named views (VIEW) and tiled model viewports with saved configurations (VPORTS) landed in #463) | Low | 1–2 |
 | U12 | Workspaces, navigation bar, CUI customisation, alias editor, ViewCube drag (#7) | Low-medium | 15–25 |
 | U13 | Window controls misaligned on macOS (#161); `.dxf` from Finder fails to open (#158) | Medium | 2–4 |
 
@@ -82,11 +79,11 @@ Detail: [file-format-parity.md](file-format-parity.md).
 |---|---|---|---|
 | FF1 | **[alpha blocker]** Round-trip what we don't model: keep Unknown entities and objects, foreign xdata, extension dictionaries; write IMAGE (with IMAGEDEF), VIEW/UCS/VPORT tables, groups, layer states, block descriptions, true colours (#201, #204, #208, #209, #213, #223); WIPEOUT and gradients done (#147, #162) | High | 12–20 |
 | FF2 | **[alpha blocker]** Native MULTILEADER objects (read and write) | High | 6–10 |
-| FF3 | **[alpha blocker]** Write DXF 2004–2018 and binary DXF; save DWG at a chosen version (2018 default) instead of always R2000; SAVEAS version choice (PR #198 adds DWG to the dialog) | High | 8–12 |
+| FF3 | Save-version leftovers (DXF/DWG 2000–2018, binary DXF, SAVEAS `version`/`binary` and the default save version landed, #421): no R14 DWG or R12 DXF output; the Save dialog can't pick the version per file (the file picker doesn't report the chosen type; File > Default Save Format sets it); no command-line SAVEAS format prompt | Low | 2–4 |
 | FF4 | Code pages (`$DWGCODEPAGE`, ANSI_932/936/949/950/125x) when reading pre-2007 files | Medium-high (Asia, Eastern Europe) | 3–5 |
 | FF5 | **[alpha blocker]** Real-file corpus (`storytold/cadcraft-corpus`), open → save → reopen tests, black-box check in AutoCAD | High | 10–15 + human |
 | FF6 | **[alpha blocker]** DWG throughput: a 10 MB DWG took ~2 min to fail (#57) | High for real projects | 6–10 |
-| FF7 | `*D` dimension blocks duplicate on re-save; handles regenerate every save | Medium | 3–5 |
+| FF7 | Table record and object handles from other programs' files are renumbered on the first save (entity handles are kept; `*D` blocks no longer duplicate and once reopened, CADCraft's own files keep every handle across saves, #495) | Low | 4–6 |
 | FF8 | SHX fonts (shape and big fonts) not read | Medium-high (text metrics differ) | 8–12 |
 | FF9 | Templates (DWT), user `.lin`/`.pat` files, `.ctb`/`.stb`, `.pc3`, `.pgp` | Medium | 20–30 |
 | FF10 | PDF: text as real fonts, layers (OCG), multi-sheet; PDF import and underlays; raster image attach | Medium | 30–50 |
@@ -114,7 +111,7 @@ Detail: [localization-parity.md](localization-parity.md).
 |---|---|---|
 | L1 | Catalog covers the UI (936 rows, #36) but not engine diagnostics, CLI/MCP replies or command history | 4–6 |
 | L2 | AutoCAD for Mac's 7 other languages (zh-Hans, es, fr, ja, de, ko, it) plus pt, hi, ar, id, vi from the standard's list | 40–60 + native review |
-| L3 | Complex-script shaping (Arabic, Devanagari) and bidi/RTL in drawing text and UI | 30–45 |
+| L3 | Complex-script shaping for Devanagari and other Indic scripts in drawing text; RTL (mirrored) UI. Arabic-script shaping and bidi in drawing text landed (#287) | 20–30 |
 | L4 | IME fixes on every platform (PRs #110–#119); vertical text styles | 6–10 |
 
 ## Stability
