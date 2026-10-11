@@ -16,10 +16,21 @@ pub struct CmdLine {
     typed_since_selection: bool,
     pub history: Vec<String>,
     pub history_pos: Option<usize>,
+    /// What was typed at command prompts (not command names), oldest first: the in-command
+    /// shortcut menu's Recent Input.
+    pub recent_input: Vec<String>,
     /// The expanded history window is open (F2, the chevron, or a click on the history lines).
     pub expanded: bool,
     /// Dragging the history's top edge: (pointer y, line count) when the drag started.
     resize_from: Option<(f32, usize)>,
+    /// The Dynamic Input options menu at the cursor (Down Arrow at a prompt with keywords).
+    pub options: Option<crate::dyninput::OptionsMenu>,
+    /// The text whose second Dynamic Input value Tab locked; the lock holds while it is unchanged.
+    locked_second: Option<String>,
+    /// Where the options menu's rows were drawn last frame (screen), for clicks on them.
+    pub option_rows: Vec<(Rect, String)>,
+    /// Where the Dynamic Input tooltip stays while the options menu is open.
+    pub options_anchor: Option<Pos2>,
 }
 
 /// The most history lines the command line shows above its bar.
@@ -74,6 +85,11 @@ fn tab(app: &mut CadApp) {
         && let Some(sep) = crate::dyninput::tab_separator(&app.cmd.buffer, &f)
     {
         app.cmd.buffer.push(sep);
+    } else if let Some(f) = dyn_frame(app)
+        && crate::dyninput::can_lock_second(&app.cmd.buffer, &f)
+    {
+        // Both values typed: Tab locks the second one as well.
+        app.cmd.locked_second = Some(app.cmd.buffer.clone());
     } else if let Some((id, _)) = suggestions(&app.cmd.buffer).first() {
         app.cmd.buffer = id.clone();
     }
@@ -110,6 +126,53 @@ impl CmdLine {
             self.typed_since_selection = true;
         }
     }
+
+    /// Tab locked the second Dynamic Input value and nothing was typed since.
+    pub fn second_locked(&self) -> bool {
+        self.locked_second.as_deref() == Some(self.buffer.as_str())
+    }
+
+    /// The options menu row under `at` (screen), if the menu is open.
+    pub fn option_at(&self, at: Pos2) -> Option<String> {
+        self.options.as_ref()?;
+        self.option_rows.iter().find(|(r, _)| r.contains(at)).map(|(_, k)| k.clone())
+    }
+}
+
+/// Keep the options menu only while its prompt is on screen with Dynamic Input and DYNPROMPT on.
+fn options_still_fit(app: &mut CadApp) {
+    let st = &app.session.settings;
+    let on = st.dynmode && st.dynprompt && app.canvas.hot_grips.is_empty();
+    let kws = app.session.current_prompt().map(|p| p.keywords).unwrap_or_default();
+    if app.cmd.options.as_ref().is_some_and(|m| !on || !m.fits(&kws)) {
+        app.cmd.options = None;
+    }
+}
+
+/// Down Arrow at a prompt with keywords (Dynamic Input on, DYNPROMPT on, not browsing the
+/// history): open the options menu at the cursor, or move its highlight. `false` when the key is
+/// left for the history.
+fn options_key(app: &mut CadApp, step: isize) -> bool {
+    if let Some(m) = app.cmd.options.as_mut() {
+        m.step(step);
+        return true;
+    }
+    let st = &app.session.settings;
+    if step < 0 || !st.dynmode || !st.dynprompt || app.cmd.history_pos.is_some() || !app.canvas.hot_grips.is_empty() {
+        return false;
+    }
+    let kws = app.session.current_prompt().map(|p| p.keywords).unwrap_or_default();
+    app.cmd.options = crate::dyninput::OptionsMenu::open(&kws);
+    app.cmd.options.is_some()
+}
+
+/// Send a keyword picked from the options menu, as a click on it at the command line does.
+pub fn pick_option(app: &mut CadApp, keyword: String) {
+    app.cmd.options = None;
+    app.cmd.buffer.clear();
+    if let Err(e) = app.session.input(Input::Keyword(keyword)) {
+        app.session.echo(e.to_string());
+    }
 }
 
 /// Whether Backspace should erase the selection instead of editing the command line. The key
@@ -141,7 +204,39 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
     app.cmd.watch_selection(&selection);
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     let text_prompt = app.session.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number);
+    options_still_fit(app);
     for ev in events {
+        // The options menu takes the arrows, Enter and Escape; typing closes it.
+        if app.cmd.options.is_some() {
+            let space = matches!(&ev, egui::Event::Text(t) if t == " ") && !text_prompt;
+            match &ev {
+                _ if space => {
+                    if let Some(k) = app.cmd.options.as_ref().and_then(|m| m.current()).map(str::to_owned) {
+                        pick_option(app, k);
+                    }
+                    continue;
+                }
+                egui::Event::Key { key: Key::Enter, pressed: true, .. } => {
+                    if let Some(k) = app.cmd.options.as_ref().and_then(|m| m.current()).map(str::to_owned) {
+                        pick_option(app, k);
+                    }
+                    continue;
+                }
+                egui::Event::Key { key: Key::Escape, pressed: true, .. } => {
+                    app.cmd.options = None;
+                    continue;
+                }
+                egui::Event::Key { key: Key::ArrowUp, pressed: true, modifiers, .. } if !modifiers.any() => {
+                    options_key(app, -1);
+                    continue;
+                }
+                egui::Event::Key { key: Key::ArrowDown | Key::ArrowUp, pressed: true, .. } => {}
+                // Space arrives as a key and as text; the text picks.
+                egui::Event::Key { key: Key::Space, .. } => {}
+                egui::Event::Text(_) | egui::Event::Key { pressed: true, .. } => app.cmd.options = None,
+                _ => {}
+            }
+        }
         match ev {
             egui::Event::Text(t) => {
                 if t == "\t" {
@@ -183,7 +278,9 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                     }
                 }
                 Key::ArrowDown if !modifiers.any() => {
-                    if let Some(p) = app.cmd.history_pos {
+                    if !options_key(app, 1)
+                        && let Some(p) = app.cmd.history_pos
+                    {
                         let np = p + 1;
                         if np >= app.cmd.history.len() {
                             app.cmd.history_pos = None;
@@ -222,6 +319,7 @@ pub fn submit(app: &mut CadApp) {
         }
     }
     let text = std::mem::take(&mut app.cmd.buffer);
+    app.cmd.locked_second = None;
     app.cmd.history_pos = None;
     if !text.trim().is_empty() && app.session.running.is_none() {
         app.cmd.history.push(text.clone());
@@ -229,6 +327,7 @@ pub fn submit(app: &mut CadApp) {
             app.cmd.history.remove(0);
         }
     }
+    crate::context_menu::note_input(app, &text);
     if text.is_empty() {
         if let Err(e) = app.session.input(Input::Enter) {
             app.session.echo(e.to_string());
@@ -238,16 +337,21 @@ pub fn submit(app: &mut CadApp) {
     app.cmdline(&text);
 }
 
+fn visible_lines(app: &CadApp, canvas: Rect, bar: Rect) -> usize {
+    let available = ((bar.top() - canvas.top() - 8.0).max(0.0) / LINE_H) as usize;
+    app.ui.history_lines.min(MAX_LINES).min(available)
+}
+
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let t = Tokens::get();
     keyboard(app, ui.ctx());
-    let w = (canvas.width() * 0.48).clamp(360.0, 760.0);
+    let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
     let h = 24.0;
     let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - h - 10.0), vec2(w, h));
     let p = ui.painter_at(canvas);
     history(app, ui, canvas, bar);
     // History lines above the bar (the expanded window replaces them).
-    let n = if app.cmd.expanded { 0 } else { app.ui.history_lines.min(MAX_LINES) };
+    let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar) };
     let lines: Vec<String> = app.session.log.iter().rev().take(n).rev().cloned().collect();
     if !lines.is_empty() {
         let lh = 16.0;
@@ -355,7 +459,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
                     bar.left() + 24.0,
                     bar.top() - 6.0 - rh * sug.len() as f32 - (if lines.is_empty() { 0.0 } else { 16.0 * lines.len() as f32 + 6.0 }),
                 ),
-                vec2(300.0, rh * sug.len() as f32),
+                vec2((bar.width() - 24.0).max(0.0), rh * sug.len() as f32),
             );
             p.rect_filled(lr, 3.0, t.list_bg);
             p.rect_stroke(lr, 3.0, Stroke::new(1.0, t.cmd_border), egui::StrokeKind::Inside);
@@ -396,7 +500,7 @@ struct Zones {
 }
 
 fn zones(app: &CadApp, canvas: Rect, bar: Rect) -> Zones {
-    let n = if app.cmd.expanded { 0 } else { app.ui.history_lines.min(MAX_LINES).min(app.session.log.len()) };
+    let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar).min(app.session.log.len()) };
     let lines =
         (n > 0).then(|| Rect::from_min_size(pos2(bar.left(), bar.top() - LINE_H * n as f32 - 4.0), vec2(bar.width(), LINE_H * n as f32 + 2.0)));
     let window = app.cmd.expanded.then(|| {
@@ -437,7 +541,7 @@ fn history(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect, bar: Rect) {
         && let Some(o) = ui.input(|i| i.pointer.press_origin())
         && on_grip(o)
     {
-        app.cmd.resize_from = Some((o.y, app.ui.history_lines.min(MAX_LINES)));
+        app.cmd.resize_from = Some((o.y, visible_lines(app, canvas, bar)));
     }
     if let Some((y0, n0)) = app.cmd.resize_from {
         if let (true, Some(p)) = (resp.dragged(), resp.interact_pointer_pos()) {
@@ -452,6 +556,7 @@ fn history(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect, bar: Rect) {
     if resp.clicked() && resp.interact_pointer_pos().is_some_and(on_toggle) {
         let _ = app.run("ui.toggle.history", serde_json::json!({}));
     }
+    crate::shortcut_menus::attach(app, &resp, crate::shortcut_menus::command_line_entries);
     if let Some(r) = zones(app, canvas, bar).window {
         history_window(app, ui, r);
     }
@@ -486,6 +591,24 @@ mod tests {
     use cadcraft_engine::Session;
     use egui::{Event, PointerButton};
 
+    #[test]
+    fn compact_canvas_contains_history_controls_without_changing_line_preference() {
+        let mut app = CadApp::new(Session::empty(), crate::Services::default());
+        app.ui.history_lines = 12;
+        for i in 0..20 {
+            app.session.echo(format!("line {i}"));
+        }
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 180.0));
+        let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
+        let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - 34.0), vec2(w, 24.0));
+        let z = zones(&app, canvas, bar);
+        assert!(canvas.contains_rect(bar));
+        assert!(canvas.contains_rect(z.chevron));
+        assert!(z.lines.is_some_and(|r| canvas.contains_rect(r)));
+        assert!(canvas.contains_rect(z.grip));
+        assert_eq!(app.ui.history_lines, 12);
+    }
+
     fn frame(app: &mut CadApp, ctx: &egui::Context, events: Vec<Event>) {
         let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))), events, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| {
@@ -510,7 +633,7 @@ mod tests {
         frame(&mut app, &ctx, Vec::new());
         frame(&mut app, &ctx, Vec::new());
         let canvas = app.canvas.rect.unwrap_or(Rect::NOTHING);
-        let w = (canvas.width() * 0.48).clamp(360.0, 760.0);
+        let w = (canvas.width() * 0.48).clamp(360.0, 760.0).min((canvas.width() - 8.0).max(0.0));
         let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - 34.0), vec2(w, 24.0));
         let z = zones(&app, canvas, bar);
         let Some(lines) = z.lines else { panic!("three history lines show by default") };

@@ -93,7 +93,7 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
         EntityKind::Point(_) | EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Image(_) | EntityKind::Table(_) => {
             return Some(translated(kind, delta));
         }
-        EntityKind::Hatch(_) => return Some(translated(kind, delta)),
+        EntityKind::Hatch(_) | EntityKind::Tolerance(_) => return Some(translated(kind, delta)),
         EntityKind::Circle(c) => {
             if index == 0 {
                 return Some(translated(kind, delta));
@@ -184,6 +184,19 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
                 *sp = sp.refit(&fit, sp.closed);
             }
         }
+        // Centre, base radius (and start angle), top radius.
+        EntityKind::Helix(h) => match index {
+            0 => return Some(translated(kind, delta)),
+            1 => {
+                let r = h.center.xy().dist(to);
+                if r <= EPS {
+                    return None;
+                }
+                h.base_radius = r;
+                h.start_angle = h.center.xy().angle_to(to);
+            }
+            _ => h.top_radius = h.center.xy().dist(to),
+        },
         EntityKind::Ray(r) | EntityKind::XLine(r) => {
             if index == 0 {
                 return Some(translated(kind, delta));
@@ -224,6 +237,7 @@ pub fn stretch_grip(kind: &EntityKind, index: usize, to: Vec2) -> Option<EntityK
             d.block = None;
         }
         EntityKind::Leader(l) => set_xy(l.vertices.get_mut(index)?, to),
+        EntityKind::MLine(m) => set_xy(&mut m.vertices.get_mut(index)?.p, to),
         EntityKind::MLeader(m) => {
             let mut idx = 0usize;
             let mut done = false;
