@@ -25,6 +25,8 @@ fn drawing() -> (Drawing, Space) {
             locked: false,
             frozen_layers: Vec::new(),
             layer_colors: Vec::new(),
+            clip: None,
+            on: true,
         }),
     )
     .unwrap();
