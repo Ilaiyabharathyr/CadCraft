@@ -1,8 +1,8 @@
 //! Vector PDF plotting (PLOT / EXPORTPDF): a minimal PDF 1.4 writer of our own.
 //!
-//! One page per plot: model-space extents fitted to a sheet, or a layout at 1:1 on its paper
-//! (paper units are millimetres in metric drawings, inches otherwise). Lines are stroked paths
-//! (`m`/`l`/`S`), fills are `f` paths, colours are RGB with colour 7 printing black on white
+//! One page per plot: model-space extents fitted to a sheet, or a layout at 1:1 (or the given
+//! `scale`) on its paper (paper units are millimetres in metric drawings, inches otherwise).
+//! Lines are stroked paths (`m`/`l`/`S`), fills are `f` paths, colours are RGB with colour 7 printing black on white
 //! paper, and line widths come from lineweights when enabled. The page setup's plot style
 //! table (or the `plotStyleTable` option) sets the printed colours, linetypes and lineweights.
 
@@ -155,7 +155,7 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
         let from = if b.is_empty() { Vec2::ZERO } else { b.center() };
         Map { from, s, to: sheet.printable.center(), k }
     } else {
-        Map { from: Vec2::ZERO, s: 1.0, to: Vec2::ZERO, k }
+        Map { from: Vec2::ZERO, s, to: Vec2::ZERO, k }
     };
     let media = sheet.size * k;
     let clip_pt = if fit || matches!(space, Space::Model) {
