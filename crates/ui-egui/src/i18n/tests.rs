@@ -63,6 +63,7 @@ fn ukrainian_covers_commands_menus_tools_and_snap_labels() {
 fn every_marked_ui_literal_has_a_translation() {
     let catalog = catalog("uk").unwrap();
     let sources = [
+        include_str!("../xrefs.rs"),
         include_str!("../canvas.rs"),
         include_str!("../chrome.rs"),
         include_str!("../cmdline.rs"),
@@ -72,6 +73,7 @@ fn every_marked_ui_literal_has_a_translation() {
         include_str!("../palettes.rs"),
         include_str!("../parametric.rs"),
         include_str!("../quick.rs"),
+        include_str!("../vpscale.rs"),
     ];
     let mut missing = BTreeSet::new();
     for source in sources {
