@@ -1420,11 +1420,10 @@ impl Interactive for TextM {
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
         let d = s.doc()?;
-        let msg = format!(
-            "Current text style:  \"{}\"  Text height:  {:.4}  Annotative:  No  Justify:  Left",
-            d.header.str("TEXTSTYLE", "Standard"),
-            d.header.f64("TEXTSIZE", 0.2)
-        );
+        let style = d.header.str("TEXTSTYLE", "Standard");
+        let anno = if d.text_style(&style).is_some_and(|st| st.annotative) { "Yes" } else { "No" };
+        let msg =
+            format!("Current text style:  \"{style}\"  Text height:  {:.4}  Annotative:  {anno}  Justify:  Left", d.header.f64("TEXTSIZE", 0.2));
         s.echo(msg);
         Ok(Step::Continue)
     }
@@ -1493,7 +1492,13 @@ impl Interactive for MTextM {
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
         self.opts = super::mtext_opts::MTextOpts::new(s);
-        s.echo(format!("Current text style:  \"{}\"  Text height:  {:.4}  Annotative:  No", self.opts.style, self.opts.height));
+        let anno = s.doc()?.text_style(&self.opts.style).is_some_and(|st| st.annotative);
+        s.echo(format!(
+            "Current text style:  \"{}\"  Text height:  {:.4}  Annotative:  {}",
+            self.opts.style,
+            self.opts.height,
+            if anno { "Yes" } else { "No" }
+        ));
         Ok(Step::Continue)
     }
     fn prompt(&self, _s: &Session) -> Prompt {

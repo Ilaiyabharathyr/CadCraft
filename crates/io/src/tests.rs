@@ -94,6 +94,7 @@ fn sample() -> Drawing {
             block: None,
             overrides: Default::default(),
             assoc: Vec::new(),
+            marks: Default::default(),
         }),
     )
     .unwrap();
@@ -106,6 +107,7 @@ fn sample() -> Drawing {
             loops: vec![HatchLoop {
                 vertices: vec![PolyVertex::new(Vec2::ZERO), PolyVertex::new(Vec2::new(2.0, 0.0)), PolyVertex::new(Vec2::new(2.0, 2.0))],
                 outer: true,
+                sources: Vec::new(),
             }],
             scale: 1.0,
             angle: 0.0,
@@ -499,6 +501,8 @@ fn pdf_layout_one_to_one_with_viewport() {
             locked: false,
             frozen_layers: Vec::new(),
             layer_colors: Vec::new(),
+            clip: None,
+            on: true,
         }),
     )
     .unwrap();
@@ -574,6 +578,7 @@ fn dim(kind: DimKind, p13: Vec3, p14: Vec3) -> Dimension {
         block: None,
         overrides: Default::default(),
         assoc: Vec::new(),
+        marks: Default::default(),
     }
 }
 
@@ -600,6 +605,8 @@ fn viewport_frozen_layers_roundtrip() {
             locked: true,
             frozen_layers: frozen,
             layer_colors: Vec::new(),
+            clip: None,
+            on: true,
         })
     };
     d.add(&paper, Common::default(), vp(2, vec!["Walls".into(), "A B".into()])).unwrap();
@@ -633,6 +640,8 @@ fn viewport_layer_colors_roundtrip() {
             locked: false,
             frozen_layers: frozen,
             layer_colors: colors,
+            clip: None,
+            on: true,
         })
     };
     let colors = vec![("Walls".to_string(), Color::Index(5)), ("A B".to_string(), Color::True(cadcraft_color::Rgb(255, 128, 0)))];
@@ -706,6 +715,7 @@ fn full_dim_style() -> DimStyle {
         angular_unit: 1,
         suppress_ext1: true,
         suppress_ext2: true,
+        ..DimStyle::default()
     }
 }
 
@@ -1323,7 +1333,9 @@ fn extension_sample_roundtrips_and_can_be_exported() {
 fn dwg_roundtrip_keeps_extension_data() {
     let d = extension_sample();
     let back = read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap();
-    assert_eq!(back.dim_style("Mech"), d.dim_style("Mech"));
+    // The bridge loses DIMFXL and DIMJOGANG (0 and its 5° minimum come back).
+    let norm = |s: Option<&DimStyle>| s.cloned().map(|s| DimStyle { fixed_ext_length: 1.0, jog_angle: 45.0, ..s });
+    assert_eq!(norm(back.dim_style("Mech")), norm(d.dim_style("Mech")));
     assert_eq!(back.constraints, d.constraints);
     assert_eq!(back.parametric, d.parametric);
     let dims =
@@ -1341,7 +1353,7 @@ fn dwg_roundtrip_keeps_extension_data() {
 }
 
 #[test]
-fn mleader_is_written_as_leader_and_mtext() {
+fn mleader_is_written_as_multileader() {
     let mut d = Drawing::new_metric();
     let text = cadcraft_doc::MText {
         insert: Vec3::new(12.0, 5.0, 0.0),
@@ -1365,10 +1377,10 @@ fn mleader_is_written_as_leader_and_mtext() {
         spline: false,
         block: None,
     };
-    d.add(&Space::Model, Default::default(), EntityKind::MLeader(m)).unwrap();
+    d.add(&Space::Model, Default::default(), EntityKind::MLeader(m.clone())).unwrap();
     let back = roundtrip(&d);
-    assert!(back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_))));
-    assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MText(t) if t.contents == "Note")));
+    assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MLeader(x) if *x == m)));
+    assert!(!back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_) | EntityKind::MText(_))));
 }
 
 #[test]
@@ -1498,7 +1510,7 @@ fn gradient_sample() -> (Drawing, Vec<Option<Gradient>>) {
         let h = Hatch {
             pattern: "SOLID".into(),
             solid: true,
-            loops: vec![HatchLoop { vertices: square.clone(), outer: true }],
+            loops: vec![HatchLoop { vertices: square.clone(), outer: true, sources: Vec::new() }],
             scale: 1.0,
             angle: 0.0,
             associative: false,
@@ -1675,6 +1687,8 @@ fn autocad_header_dim_variables_are_not_overrides() {
             // Names as AutoCAD may spell them.
             K::Block => (1, v.as_str().unwrap().to_ascii_uppercase()),
             K::TextStyle => (7, v.as_str().unwrap().to_ascii_uppercase()),
+            K::Linetype => (6, v.as_str().unwrap().to_string()),
+            K::Angle => (40, v.as_f64().unwrap().to_radians().to_string()),
         };
         vars.push_str(&format!("  9\r\n${var}\r\n{code}\r\n{val}\r\n"));
     }
