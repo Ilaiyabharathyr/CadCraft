@@ -20,6 +20,7 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod spacemouse;
 mod workspace;
 
 use cadcraft_engine::Session;
@@ -27,6 +28,7 @@ use cadcraft_ui_egui::{CadApp, Services, i18n};
 
 struct App {
     cad: CadApp,
+    spacemouse: spacemouse::SpaceMouse,
     workspace: workspace::Workspace,
     workspace_error: Option<String>,
     #[cfg(target_os = "macos")]
@@ -60,6 +62,7 @@ impl eframe::App for App {
             }
         }
         self.cad.logic(ctx);
+        self.spacemouse.poll(&mut self.cad, ctx);
         self.persist_workspace(false);
         if std::mem::take(&mut self.cad.quit_requested) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -300,6 +303,7 @@ fn main() -> eframe::Result {
             }
             Ok(Box::new(App {
                 cad: app,
+                spacemouse: spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
                 workspace,
                 workspace_error,
                 #[cfg(target_os = "macos")]
