@@ -1287,7 +1287,7 @@ impl Session {
             {
                 let mut c = self.cursor;
                 if self.settings.orthomode {
-                    c = snap::iso::constrain(&self.settings, base, c);
+                    c = snap::iso::constrain(&self.drafting_settings(), base, c);
                 }
                 let dir = (c - base).normalized();
                 let dir = if dir == Vec2::ZERO { Vec2::X } else { dir };

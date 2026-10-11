@@ -45,7 +45,8 @@ fn spacing_controls_update_the_drawing_and_mark_it_dirty() {
     assert!(!h.state().session.state().unwrap().is_dirty());
     set_spacing(&mut h, 0, 0.25);
     set_spacing(&mut h, 1, 0.125);
-    set_spacing(&mut h, 2, 0.75);
+    // The fourth spin box: Polar distance (#450) sits between snap and grid spacing.
+    set_spacing(&mut h, 3, 0.75);
     let app = h.state_mut();
     assert_eq!(app.run("getvar", json!({"name": "SNAPUNIT"})).unwrap()["value"], json!([0.25, 0.125]));
     assert_eq!(app.run("getvar", json!({"name": "GRIDUNIT"})).unwrap()["value"], json!([0.75, 0.5]));

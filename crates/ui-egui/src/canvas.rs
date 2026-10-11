@@ -232,7 +232,7 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
 fn draw_iso_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     use cadcraft_engine::snap::iso;
     let t = Tokens::get();
-    let s = &app.session.settings;
+    let s = app.session.drafting_settings();
     let mut d = s.gridunit.y.max(1e-12);
     for _ in 0..40 {
         if d * 0.866 * xf.scale >= 8.0 {

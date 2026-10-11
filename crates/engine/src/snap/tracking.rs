@@ -749,7 +749,8 @@ impl crate::Session {
     /// acquires it for tracking), then grid snap, then tracking paths (polar, object snap
     /// tracking, Extension, Parallel, Apparent Intersection), then ortho.
     pub fn snap_cursor(&mut self, raw: Vec2, q: &CursorQuery) -> CursorSnap {
-        let s = self.settings.clone();
+        // Snap and grid spacing are the drawing's (SNAPUNIT/GRIDUNIT live in its header).
+        let s = self.drafting_settings();
         let angbase = self.angle_settings().angbase;
         let Ok(st) = self.state() else { return CursorSnap { point: raw, ..Default::default() } };
         let (doc, space) = (st.doc.clone(), st.edit_space());
