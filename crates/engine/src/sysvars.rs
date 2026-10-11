@@ -23,17 +23,22 @@ const SESSION_VARS: &[&str] = &[
     "DYNPIFORMAT",
     "DYNPICOORDS",
     "LWDISPLAY",
+    "SELECTSIMILARMODE",
+    "OBJECTISOLATIONMODE",
     "QPMODE",
     "PICKBOX",
     "APERTURE",
     "PICKFIRST",
     "PICKADD",
+    "PICKSTYLE",
     "GRIPSIZE",
     "CURSORSIZE",
     "MAXARRAY",
     "LASTPOINT",
     "FONTALT",
     "FONTFALLBACK",
+    "SAVETIME",
+    "SAVEFILEPATH",
 ];
 
 pub fn get(s: &Session, name: &str) -> Option<Value> {
@@ -59,11 +64,15 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "DYNPIFORMAT" => json!(i32::from(st.dynpi_cartesian)),
         "DYNPICOORDS" => json!(i32::from(st.dynpi_absolute)),
         "LWDISPLAY" => json!(i32::from(st.lwdisplay)),
+        "SELECTSIMILARMODE" => json!(st.selectsimilarmode),
+        // Isolation is temporary: hidden objects show again when the drawing is reopened.
+        "OBJECTISOLATIONMODE" => json!(0),
         "QPMODE" => json!(i32::from(st.qpmode)),
         "PICKBOX" => json!(st.pickbox),
         "APERTURE" => json!(st.aperture),
         "PICKFIRST" => json!(i32::from(st.pickfirst)),
         "PICKADD" => json!(i32::from(st.pickadd)),
+        "PICKSTYLE" => json!(st.pickstyle),
         "GRIPSIZE" => json!(st.gripsize),
         "CURSORSIZE" => json!(st.cursorsize),
         "MAXARRAY" => json!(st.maxarray),
@@ -73,6 +82,9 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         // Process-wide font substitution (profile settings, not saved in the drawing).
         "FONTALT" => json!(cadcraft_fonts::ttf::font_alt()),
         "FONTFALLBACK" => json!(cadcraft_fonts::ttf::fallback_fonts()),
+        // Autosave (profile settings too).
+        "SAVETIME" => json!(crate::autosave::savetime()),
+        "SAVEFILEPATH" => json!(crate::autosave::savefilepath()),
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         "DWGNAME" => json!(s.state().map(|d| d.title.clone()).unwrap_or_default()),
         "DBMOD" => json!(s.state().map(|d| i32::from(d.is_dirty())).unwrap_or(0)),
@@ -178,16 +190,27 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "DYNPIFORMAT" => st.dynpi_cartesian = as_bool(v).ok_or_else(bad)?,
         "DYNPICOORDS" => st.dynpi_absolute = as_bool(v).ok_or_else(bad)?,
         "LWDISPLAY" => st.lwdisplay = as_bool(v).ok_or_else(bad)?,
+        "SELECTSIMILARMODE" => st.selectsimilarmode = as_i(v).filter(|b| (0..=255).contains(b)).ok_or_else(bad)? as u32,
+        "OBJECTISOLATIONMODE" => match as_i(v) {
+            Some(0) => {}
+            Some(1) => return Err(EngineError::Other("OBJECTISOLATIONMODE 1 (isolation saved with the drawing) is not available yet".into())),
+            _ => return Err(bad()),
+        },
         "QPMODE" => st.qpmode = as_i(v).ok_or_else(bad)? > 0,
         "PICKBOX" => st.pickbox = as_f64(v).ok_or_else(bad)?.clamp(0.0, 50.0),
         "APERTURE" => st.aperture = as_f64(v).ok_or_else(bad)?.clamp(1.0, 50.0),
         "PICKFIRST" => st.pickfirst = as_bool(v).ok_or_else(bad)?,
         "PICKADD" => st.pickadd = as_bool(v).ok_or_else(bad)?,
+        "PICKSTYLE" => st.pickstyle = as_i(v).filter(|b| (0..=3).contains(b)).and_then(|b| u8::try_from(b).ok()).ok_or_else(bad)?,
         "GRIPSIZE" => st.gripsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 255.0),
         "CURSORSIZE" => st.cursorsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 100.0),
         "MAXARRAY" => st.maxarray = as_f64(v).ok_or_else(bad)?.clamp(100.0, 10_000_000.0) as u64,
         "FONTALT" => cadcraft_fonts::ttf::set_font_alt(v.as_str().ok_or_else(bad)?),
         "FONTFALLBACK" => cadcraft_fonts::ttf::set_fallback_fonts(v.as_str().ok_or_else(bad)?),
+        "SAVETIME" => crate::autosave::set_savetime(
+            as_f64(v).filter(|m| *m >= 0.0 && *m <= f64::from(crate::autosave::MAX_SAVETIME)).ok_or_else(bad)?.round() as u32,
+        ),
+        "SAVEFILEPATH" => crate::autosave::set_savefilepath(v.as_str().ok_or_else(bad)?),
         // A number is in degrees; text is an angle typed in AUNITS (SETVAR at the command line).
         "ANGBASE" => {
             let a = match v {

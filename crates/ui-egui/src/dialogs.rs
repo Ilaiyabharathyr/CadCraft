@@ -21,6 +21,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "dsettings" => dsettings(app, ctx, &mut open),
         "units" => units(app, ctx, &mut open),
         "about" => about(ctx, &mut open),
+        "preview" => crate::exchange::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),
         "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
@@ -375,7 +376,7 @@ fn blocks(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 /// the insertion point.
 fn insert_block(app: &mut CadApp, name: &str) {
     app.start("insert");
-    if !app.session.running.as_ref().is_some_and(|r| r.id == "insert") {
+    if app.session.running.as_ref().is_none_or(|r| r.id != "insert") {
         return;
     }
     if let Err(e) = app.session.input(cadcraft_engine::Input::Text(name.to_string())) {
