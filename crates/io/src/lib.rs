@@ -7,6 +7,7 @@ mod dxf_image;
 mod dxf_read;
 mod dxf_write;
 pub mod pdf;
+pub mod plotter;
 pub mod svg;
 
 use cadcraft_doc::{Drawing, Space};

@@ -22,6 +22,7 @@ mod modify;
 mod modify2;
 mod mtext_opts;
 mod pline_opts;
+pub mod plotters;
 mod props;
 mod qselect;
 mod settings;
