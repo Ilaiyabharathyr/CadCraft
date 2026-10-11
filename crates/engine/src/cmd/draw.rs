@@ -84,7 +84,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mtext", "Multiline Text", run_mtext)
             .menu(&["Draw", "Text", "Multiline Text..."])
             .alias(&["t", "mt"])
-            .params("{at, text, height?, width?, attach?: 1..9 | justify?: TL..BR, rotation?, style?, lineSpacing?, lineSpacingExact?}")
+            .params(
+                "{at, text, height?, width?, attach?: 1..9 | justify?: TL..BR, rotation?, style?, lineSpacing?, lineSpacingExact?, \
+                 list?: bullet|number|lower|upper, indent?, firstIndent?, rightIndent?, tabs?: [..], align?: left|center|right|justify|distributed, \
+                 columns?: {type: static|dynamic, count?, gutter?, height, heights?, reversed?}} (indents and tabs in text heights; width = one column)",
+            )
             .interactive(|_| Ok(Box::new(MTextM::default()))),
     ]
 }
@@ -366,16 +370,18 @@ fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
         Some(j) => super::mtext_opts::attach_code(j).ok_or_else(|| bad("mtext", "`justify` must be TL, TC, TR, ML, MC, MR, BL, BC or BR"))?,
         None => p.get("attach").and_then(Value::as_u64).unwrap_or(1).clamp(1, 9) as u8,
     };
+    let width = f64_or(p, "width", 0.0).max(0.0);
     let k = EntityKind::MText(MText {
         insert: v3(at),
         height,
-        width: f64_or(p, "width", 0.0).max(0.0),
+        width,
         attach,
         rotation: f64_or(p, "rotation", 0.0).to_radians(),
         style,
-        contents: text.replace('\n', "\\P"),
+        contents: super::mtext_opts::json_paragraphs(p, text.replace('\n', "\\P"))?,
         line_spacing: f64_or(p, "lineSpacing", 1.0),
         line_spacing_exact: bool_or(p, "lineSpacingExact", false),
+        columns: super::mtext_opts::json_columns(p, height, width)?,
     });
     added(s.add_entity(k)?)
 }
@@ -1433,11 +1439,10 @@ impl Interactive for TextM {
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
         let d = s.doc()?;
-        let msg = format!(
-            "Current text style:  \"{}\"  Text height:  {:.4}  Annotative:  No  Justify:  Left",
-            d.header.str("TEXTSTYLE", "Standard"),
-            d.header.f64("TEXTSIZE", 0.2)
-        );
+        let style = d.header.str("TEXTSTYLE", "Standard");
+        let anno = if d.text_style(&style).is_some_and(|st| st.annotative) { "Yes" } else { "No" };
+        let msg =
+            format!("Current text style:  \"{style}\"  Text height:  {:.4}  Annotative:  {anno}  Justify:  Left", d.header.f64("TEXTSIZE", 0.2));
         s.echo(msg);
         Ok(Step::Continue)
     }
@@ -1506,7 +1511,13 @@ impl Interactive for MTextM {
     }
     fn begin(&mut self, s: &mut Session) -> Result<Step> {
         self.opts = super::mtext_opts::MTextOpts::new(s);
-        s.echo(format!("Current text style:  \"{}\"  Text height:  {:.4}  Annotative:  No", self.opts.style, self.opts.height));
+        let anno = s.doc()?.text_style(&self.opts.style).is_some_and(|st| st.annotative);
+        s.echo(format!(
+            "Current text style:  \"{}\"  Text height:  {:.4}  Annotative:  {}",
+            self.opts.style,
+            self.opts.height,
+            if anno { "Yes" } else { "No" }
+        ));
         Ok(Step::Continue)
     }
     fn prompt(&self, _s: &Session) -> Prompt {
