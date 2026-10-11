@@ -2,6 +2,9 @@
 //! registered by the host (desktop/CLI) via [`crate::cmd::file::set_io`]. On the web, where there is
 //! no file system, saved files reach the user through the host's [`crate::cmd::file::set_deliver`].
 
+mod pgp;
+mod template;
+
 use std::sync::OnceLock;
 
 use cadcraft_doc::Drawing;
@@ -10,6 +13,9 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::{Result, Session};
+
+pub(crate) use pgp::{specs as alias_specs, user_alias};
+pub use template::{qnew_template, set_qnew_template};
 
 /// Plot a space to PDF bytes with JSON options (`{paper?, landscape?, fit?, lineweights?, …}`).
 pub type PlotHook = fn(&Drawing, &cadcraft_doc::Space, &Value) -> std::result::Result<Vec<u8>, String>;
@@ -30,6 +36,9 @@ pub fn set_io(h: IoHooks) {
 pub fn io() -> Option<&'static IoHooks> {
     IO.get()
 }
+
+/// COMPARE (drawing comparison).
+pub mod compare;
 
 /// Hand finished file bytes to the user where there is no file system (the browser: a download).
 /// Arguments: file name, MIME type, bytes. `Ok` only once the delivery was actually started.
@@ -123,7 +132,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["File", "New Drawing..."])
             .key("Cmd+N")
             .alias(&["qnew"])
-            .params("{metric?: bool}")
+            .params("{metric?: bool, template?: path to a .dwt/.dxf template (\".\" for none; default QNEWTEMPLATE)}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("open", "Open...", run_open)
@@ -148,6 +157,9 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(r) = template::run_new(s, p)? {
+        return Ok(r);
+    }
     let i = s.new_drawing(bool_or(p, "metric", false));
     Ok(json!({ "index": i, "title": s.docs.get(i).map(|d| d.title.clone()) }))
 }
@@ -175,6 +187,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
         {
             let bytes = std::fs::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
+            super::blocks::xref::after_open(s, i);
             return Ok(json!({ "index": i, "entities": s.docs.get(i).map(|d| d.doc.entity_count()) }));
         }
         #[cfg(target_arch = "wasm32")]
@@ -184,6 +197,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes = base64_decode(data).ok_or_else(|| bad("open", "invalid base64"))?;
     let name = str_param(p, "name").unwrap_or("Drawing.dxf");
     let i = open_bytes(s, &bytes, name, None)?;
+    super::blocks::xref::after_open(s, i);
     Ok(json!({ "index": i }))
 }
 
@@ -326,7 +340,7 @@ fn run_bytes(s: &mut Session, p: &Value) -> Result<Value> {
     let lost = not_saved(s.doc()?);
     let bytes = write_bytes(s, "document.bytes", &format!("drawing.{fmt}"), &opts)?;
     let mut r = json!({ "data": base64_encode(&bytes), "bytes": bytes.len() });
-    if is_drawing_file(&format!("drawing.{fmt}")) {
+    if drops_unknown(&format!("drawing.{fmt}")) {
         report_not_saved(s, &mut r, &lost);
     }
     Ok(r)
@@ -353,13 +367,20 @@ pub fn not_saved_message(lost: &std::collections::BTreeMap<String, usize>) -> Op
         return None;
     }
     let list: Vec<String> = lost.iter().map(|(t, n)| format!("{n} {t}")).collect();
-    Some(format!("Not saved (CADCraft can't write these object types yet): {}", list.join(", ")))
+    Some(format!("Not saved in the DWG file (its writer can't write these object types yet; DXF keeps them): {}", list.join(", ")))
+}
+
+/// Whether saving to `path` leaves out the entities [`not_saved`] counts: DWG does (the DWG
+/// bridge drops types it doesn't know); DXF writes them back as read.
+pub fn drops_unknown(path: &str) -> bool {
+    // Templates (.dwt) are written as DWG too.
+    std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg") || e.eq_ignore_ascii_case("dwt"))
 }
 
 /// Whether `path` is saved as a drawing (DXF, DWG) rather than exported as an image.
 fn is_drawing_file(path: &str) -> bool {
     let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "dxf" | "dwg" | "")
+    matches!(ext.as_str(), "dxf" | "dwg" | "dwt" | "")
 }
 
 /// Say on the command line what the file couldn't keep, and list it in the result's `notSaved`.
@@ -375,7 +396,7 @@ fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTr
 fn save_reporting(s: &mut Session, p: &Value, run: fn(&mut Session, &Value) -> Result<Value>) -> Result<Value> {
     let lost = s.doc().map(not_saved).unwrap_or_default();
     let mut r = run(s, p)?;
-    if r.get("path").and_then(Value::as_str).is_some_and(is_drawing_file) {
+    if r.get("path").and_then(Value::as_str).is_some_and(drops_unknown) {
         report_not_saved(s, &mut r, &lost);
     }
     Ok(r)

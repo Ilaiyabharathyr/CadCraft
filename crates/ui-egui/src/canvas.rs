@@ -67,6 +67,8 @@ pub struct CanvasState {
     /// Hot grips (object, grip index): the ones Shift+clicked while idle, then the ones the
     /// running GRIP edit works on (the engine's grip modes take them from there).
     pub hot_grips: Vec<(Handle, usize)>,
+    /// Grip dimensional input: the value fields of the grip being stretched.
+    pub grip_dyn: crate::grip_dyn::GripDyn,
     /// A GRIP edit was running last frame (its grips go cold when it ends).
     grip_editing: bool,
     /// The grip whose menu (Stretch, Add Vertex, Lengthen…) a right-click opened.
@@ -181,7 +183,9 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     let t = Tokens::get();
     let s = &app.session.settings;
     let wb = xf.world_bounds();
-    if s.gridmode {
+    if s.gridmode && s.isodraft {
+        draw_iso_grid(app, p, xf);
+    } else if s.gridmode {
         let major_n = f64::from(s.gridmajor.max(1));
         let minor = adaptive(s.gridunit.x, xf.scale, 8.0);
         let major = minor * major_n;
@@ -220,6 +224,28 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
     if xf.rect.x_range().contains(o.x) {
         p.line_segment([pos2(o.x, xf.rect.top()), pos2(o.x, xf.rect.bottom())], Stroke::new(1.0, t.axis_y));
     }
+}
+
+/// The isometric grid (SNAPSTYL 1): lines at 30°, 90° and 150° through the snap lattice, GRIDUNIT
+/// Y apart along the axes, coarsened while they would crowd closer than 8 pixels.
+fn draw_iso_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
+    use cadcraft_engine::snap::iso;
+    let t = Tokens::get();
+    let s = &app.session.settings;
+    let mut d = s.gridunit.y.max(1e-12);
+    for _ in 0..40 {
+        if d * 0.866 * xf.scale >= 8.0 {
+            break;
+        }
+        d *= 5.0;
+    }
+    let (origin, angle) = app.session.doc().map(cadcraft_engine::snap::grid_frame).unwrap_or((Vec2::ZERO, 0.0));
+    let lines = iso::grid_lines(xf.world_bounds(), d, origin, angle, s.gridmajor);
+    p.extend(
+        lines.into_iter().map(|l| {
+            Shape::line_segment([xf.to_screen(l.a), xf.to_screen(l.b)], Stroke::new(1.0, if l.major { t.grid_major } else { t.grid_minor }))
+        }),
+    );
 }
 
 fn clip_infinite(xf: &Xf, base: Vec2, dir: Vec2, ray: bool) -> Option<[Pos2; 2]> {
@@ -384,7 +410,7 @@ fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, prims: &[usize
 
 fn draw_snap_marker(p: &egui::Painter, at: Pos2, hit: &SnapHit) {
     let t = Tokens::get();
-    let s = 5.5;
+    let s = crate::theme::snap_marker_half();
     let st = Stroke::new(2.0, t.snap);
     use snap::mode;
     match hit.mode {
@@ -688,7 +714,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             && let Some(e) = crate::dyninput::parse(&app.cmd.buffer, &f)
             && e.first_locked().is_some()
         {
-            eff = crate::dyninput::constrain(&e, &f, eff);
+            eff = crate::dyninput::constrain(&e, &f, eff, app.cmd.second_locked());
+            app.canvas.snap = None;
+            app.canvas.track = None;
+        }
+        // Grip dimensional input: typed lengths and angles hold the grip and override snaps.
+        let grip_held = crate::grip_dyn::constrain(app, eff);
+        if let Some(q) = grip_held {
+            eff = q;
             app.canvas.snap = None;
             app.canvas.track = None;
         }
@@ -699,12 +732,31 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         if dyn_frame.and_then(|f| crate::dyninput::parse(&app.cmd.buffer, &f)).is_none_or(|e| e.first_locked().is_none()) {
             override_cursor(app, w, &xf);
         }
+        // Typed grip dimensions win over snap overrides too.
+        if let Some(q) = grip_held {
+            app.canvas.cursor = Some(q);
+            app.session.cursor = q;
+            app.canvas.snap = None;
+            app.session.cursor_deferred = None;
+        }
     } else {
         app.canvas.cursor = None;
         app.canvas.snap = None;
         app.session.cursor_deferred = None;
     }
 
+    // A click on the Dynamic Input options menu picks the keyword; elsewhere it closes the menu.
+    let mut picked = false;
+    if pressed_primary && app.cmd.options.is_some() {
+        match hover_pos.and_then(|h| app.cmd.option_at(h)) {
+            Some(k) => {
+                crate::cmdline::pick_option(app, k);
+                picked = true;
+            }
+            None => app.cmd.options = None,
+        }
+    }
+    let pressed_primary = pressed_primary && !picked;
     // Clicks.
     if inside
         && pressed_primary
@@ -722,9 +774,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             {
                 app.cmd.buffer.clear();
             }
-            // A deferred tangent/perpendicular goes to the command as such.
-            let input = app.canvas.snap.filter(|h| h.deferred.is_some()).map_or(Input::Point(p), |h| h.input());
-            if let Err(e) = app.session.input(input) {
+            // Preserve a snap's viewport origin for DIST, and its deferred curve where needed.
+            let result = match app.canvas.snap {
+                Some(hit) => app.session.input_snapped(hit),
+                None => app.session.input(Input::Point(p)),
+            };
+            if let Err(e) = result {
                 app.session.echo(e.to_string());
             }
         } else if let Some(g) = grip_at(app, &xf, hover_pos) {
@@ -806,14 +861,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             let b = xf_paper.to_screen(Vec2::new(sh.size.x, 0.0));
             let paper = Rect::from_two_pos(a, b);
             painter.rect_filled(paper.translate(vec2(5.0, 5.0)), 0.0, Color32::from_black_alpha(110));
-            painter.rect_filled(paper, 0.0, Color32::WHITE);
+            painter.rect_filled(paper, 0.0, t.paper);
             let pa = Rect::from_two_pos(
                 xf_paper.to_screen(Vec2::new(sh.printable.min.x, sh.printable.max.y)),
                 xf_paper.to_screen(Vec2::new(sh.printable.max.x, sh.printable.min.y)),
             );
             let pts = [pa.left_top(), pa.right_top(), pa.right_bottom(), pa.left_bottom(), pa.left_top()];
             painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, Color32::from_gray(150)), 4.0, 4.0));
-            Rgb(255, 255, 255)
+            Rgb(t.paper.r(), t.paper.g(), t.paper.b())
         }
         None => {
             draw_grid(app, &painter, &xf);
@@ -867,6 +922,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &sel), t.selection, 1.5, true);
     }
     app.canvas.draw_ms = crate::now_ms() - t0;
+    compare::paint(app, ui.ctx(), &painter, &xf_paper, rect);
     // Constraint bars and dynamic dimensional constraints (model space, or inside a viewport).
     if sheet.is_none() || active_vp.is_some() {
         let clip = match &active_vp {
@@ -975,7 +1031,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         if app.session.settings.dynmode
             && let Some(hp) = hover_pos
         {
-            dynamic_input(app, &painter, hp);
+            // A stretched grip shows its dimensions instead of the pointer boxes.
+            if !crate::grip_dyn::draw(app, &painter) {
+                dynamic_input(app, &painter, hp);
+            }
         }
     }
     // No continuous repaint while hovering: input events repaint by themselves. Repainting every
@@ -1089,10 +1148,19 @@ fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox
     let len = (rect.height() * app.session.settings.cursorsize as f32 / 100.0).max(12.0);
     let pb = if pickbox { pickbox_half(app.session.settings.pickbox) } else { None };
     let gap = pb.unwrap_or(0.0);
-    p.line_segment([pos2(at.x - len, at.y), pos2(at.x - gap, at.y)], st);
-    p.line_segment([pos2(at.x + gap, at.y), pos2(at.x + len, at.y)], st);
-    p.line_segment([pos2(at.x, at.y - len), pos2(at.x, at.y - gap)], st);
-    p.line_segment([pos2(at.x, at.y + gap), pos2(at.x, at.y + len)], st);
+    // Along the isometric plane's axes in isometric drafting.
+    if app.session.settings.isodraft {
+        for a in cadcraft_engine::snap::iso::cursor_axes(&app.session.settings) {
+            let dir = vec2(a.cos() as f32, -(a.sin() as f32));
+            p.line_segment([at - dir * len, at - dir * gap], st);
+            p.line_segment([at + dir * gap, at + dir * len], st);
+        }
+    } else {
+        p.line_segment([pos2(at.x - len, at.y), pos2(at.x - gap, at.y)], st);
+        p.line_segment([pos2(at.x + gap, at.y), pos2(at.x + len, at.y)], st);
+        p.line_segment([pos2(at.x, at.y - len), pos2(at.x, at.y - gap)], st);
+        p.line_segment([pos2(at.x, at.y + gap), pos2(at.x, at.y + len)], st);
+    }
     if let Some(pb) = pb {
         p.rect_stroke(Rect::from_center_size(at, vec2(pb * 2.0, pb * 2.0)), 0.0, st, egui::StrokeKind::Middle);
     }
@@ -1101,13 +1169,30 @@ fn draw_crosshair(app: &CadApp, p: &egui::Painter, rect: Rect, at: Pos2, pickbox
 /// The Dynamic Input tooltip beside the cursor, styled like the command line. At a point prompt
 /// it shows the pair of value boxes, a view of the command-line text (see [`crate::dyninput`]);
 /// otherwise the prompt with what is being typed, or the live distance and angle.
-fn dynamic_input(app: &CadApp, p: &egui::Painter, at: Pos2) {
+fn dynamic_input(app: &mut CadApp, p: &egui::Painter, hover: Pos2) {
+    app.cmd.option_rows.clear();
+    // While the options menu is open the tooltip stays where it opened, so the menu can be reached.
+    let at = match app.cmd.options {
+        Some(_) => *app.cmd.options_anchor.get_or_insert(hover),
+        None => {
+            app.cmd.options_anchor = None;
+            hover
+        }
+    };
     let Some(prompt) = app.session.current_prompt() else { return };
+    // DYNPROMPT = 0: no prompt beside the cursor (the value boxes stay).
+    let show_prompt = app.session.settings.dynprompt;
+    let options = show_prompt && !prompt.keywords.is_empty();
     if let Some(f) = crate::cmdline::dyn_frame(app)
         && let Some(e) = crate::dyninput::parse(&app.cmd.buffer, &f)
         && let Some(c) = app.canvas.cursor
     {
-        dynamic_input_boxes(p, at, crate::i18n::t(&prompt.message), &f, &e, c);
+        let message = if show_prompt { crate::i18n::t(&prompt.message) } else { "" };
+        let r = dynamic_input_boxes(p, at, message, &f, &e, c, app.cmd.second_locked(), options);
+        options_menu(app, p, r, hover);
+        return;
+    }
+    if !show_prompt {
         return;
     }
     let mut text = crate::i18n::t(&prompt.message).to_string();
@@ -1130,8 +1215,54 @@ fn dynamic_input(app: &CadApp, p: &egui::Painter, at: Pos2) {
     }
     let t = Tokens::get();
     let galley = p.layout_no_wrap(text, crate::theme::small(), t.text);
-    let r = tooltip_frame(p, at, galley.size() + vec2(12.0, 8.0));
+    let hint = if options { OPTIONS_HINT_W } else { 0.0 };
+    let r = tooltip_frame(p, at, galley.size() + vec2(12.0 + hint, 8.0));
     p.galley(r.min + vec2(6.0, 4.0), galley, t.text);
+    if options {
+        options_hint(p, r);
+    }
+    options_menu(app, p, r, hover);
+}
+
+/// Room for the down-arrow sign that a prompt has options.
+const OPTIONS_HINT_W: f32 = 14.0;
+
+/// The down-arrow sign at the right end of the tooltip `r`: the prompt has options, and Down
+/// Arrow lists them.
+fn options_hint(p: &egui::Painter, r: Rect) {
+    let t = Tokens::get();
+    let c = pos2(r.right() - OPTIONS_HINT_W / 2.0 - 2.0, r.center().y + 1.0);
+    p.add(Shape::convex_polygon(vec![pos2(c.x - 4.0, c.y - 2.5), pos2(c.x + 4.0, c.y - 2.5), pos2(c.x, c.y + 2.5)], t.text_dim, Stroke::NONE));
+}
+
+/// The options menu under the tooltip `r` (DYNPROMPT): one row per keyword, the highlighted one
+/// marked; the rows are kept for clicks.
+fn options_menu(app: &mut CadApp, p: &egui::Painter, r: Rect, hover: Pos2) {
+    let Some(mut menu) = app.cmd.options.clone() else { return };
+    let t = Tokens::get();
+    let font = crate::theme::small();
+    let rows: Vec<_> = menu.keywords.iter().map(|k| p.layout_no_wrap(k.clone(), font.clone(), t.text)).collect();
+    let row_h = rows.iter().map(|g| g.size().y).fold(12.0, f32::max) + 6.0;
+    let w = rows.iter().map(|g| g.size().x).fold(60.0, f32::max) + 28.0;
+    let h = row_h * rows.len() as f32 + 4.0;
+    let m = Rect::from_min_size(pos2(r.left(), r.bottom() + 2.0), vec2(w, h));
+    p.rect_filled(m, 3.0, t.cmd_bg);
+    p.rect_stroke(m, 3.0, Stroke::new(1.0, t.cmd_border), egui::StrokeKind::Inside);
+    let row_at = |i: usize| Rect::from_min_size(pos2(m.left() + 2.0, m.top() + 2.0 + row_h * i as f32), vec2(w - 4.0, row_h));
+    // The row under the pointer is the highlighted one.
+    if let Some(i) = (0..menu.keywords.len()).find(|i| row_at(*i).contains(hover)) {
+        menu.index = i;
+        app.cmd.options = Some(menu.clone());
+    }
+    for (i, (g, k)) in rows.into_iter().zip(&menu.keywords).enumerate() {
+        let row = row_at(i);
+        if i == menu.index {
+            p.rect_filled(row, 2.0, t.cmd_keyword_hover);
+            p.circle_filled(pos2(row.left() + 9.0, row.center().y), 2.5, t.accent);
+        }
+        p.galley(pos2(row.left() + 20.0, row.center().y - g.size().y / 2.0), g, t.text);
+        app.cmd.option_rows.push((row, k.clone()));
+    }
 }
 
 /// The tooltip background, matching the command line bar; returns its rectangle.
@@ -1147,7 +1278,17 @@ fn tooltip_frame(p: &egui::Painter, at: Pos2, size: egui::Vec2) -> Rect {
 /// text colour, a locked value (a separator typed after it) gets a lock, the active box gets the
 /// accent outline, and open boxes show the cursor's live value, dimmed. Values measured from the
 /// last point are marked with `@`.
-fn dynamic_input_boxes(p: &egui::Painter, at: Pos2, message: &str, f: &crate::dyninput::Frame, e: &crate::dyninput::Entry<'_>, cursor: Vec2) {
+#[allow(clippy::too_many_arguments)]
+fn dynamic_input_boxes(
+    p: &egui::Painter,
+    at: Pos2,
+    message: &str,
+    f: &crate::dyninput::Frame,
+    e: &crate::dyninput::Entry<'_>,
+    cursor: Vec2,
+    second_locked: bool,
+    options: bool,
+) -> Rect {
     use crate::dyninput::Format;
     let t = Tokens::get();
     let font = crate::theme::small();
@@ -1170,7 +1311,13 @@ fn dynamic_input_boxes(p: &egui::Painter, at: Pos2, message: &str, f: &crate::dy
             e.first_locked().is_some(),
             !e.split,
         ),
-        (label_second, if e.second.is_empty() { live_second } else { e.second.to_owned() }, !e.second.is_empty(), false, e.split),
+        (
+            label_second,
+            if e.second.is_empty() { live_second } else { e.second.to_owned() },
+            !e.second.is_empty(),
+            second_locked,
+            e.split && !second_locked,
+        ),
     ];
 
     let msg = p.layout_no_wrap(message.to_owned(), font.clone(), t.text_dim);
@@ -1194,7 +1341,11 @@ fn dynamic_input_boxes(p: &egui::Painter, at: Pos2, message: &str, f: &crate::dy
     for (label, _, bw, _, _) in &laid {
         w += gap + label.size().x + 3.0 + bw;
     }
-    let r = tooltip_frame(p, at, vec2(w + pad, box_h + 2.0 * pad - 2.0));
+    let hint = if options { OPTIONS_HINT_W } else { 0.0 };
+    let r = tooltip_frame(p, at, vec2(w + pad + hint, box_h + 2.0 * pad - 2.0));
+    if options {
+        options_hint(p, r);
+    }
     let cy = r.center().y;
     let mut x = r.left() + pad;
     let (msg_w, msg_h) = (msg.size().x, msg.size().y);
@@ -1223,6 +1374,7 @@ fn dynamic_input_boxes(p: &egui::Painter, at: Pos2, message: &str, f: &crate::dy
         }
         x += bw;
     }
+    r
 }
 
 /// A small padlock, drawn in code: body plus shackle.
@@ -1253,7 +1405,6 @@ fn viewport_label(p: &egui::Painter, rect: Rect) {
 }
 
 fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
-    let t = Tokens::get();
     let l = crate::viewcube::Layout::new(rect);
     let (c, ring) = (l.center, l.ring);
     let p = ui.painter_at(rect);
@@ -1261,7 +1412,7 @@ fn draw_viewcube(app: &mut CadApp, ui: &mut egui::Ui, rect: Rect) {
     // WCS pill.
     let pill = Rect::from_center_size(c + vec2(0.0, ring + 26.0), vec2(56.0, 16.0));
     p.rect_filled(pill, 8.0, Color32::from_rgb(0x48, 0x50, 0x5c));
-    p.text(pill.center(), egui::Align2::CENTER_CENTER, crate::tl!("WCS ⌄"), crate::theme::small(), t.canvas_ink);
+    p.text(pill.center(), egui::Align2::CENTER_CENTER, crate::tl!("WCS ⌄"), crate::theme::small(), Tokens::DARK.canvas_ink);
 }
 
 /// A click on grip `g` (idle): Shift+click makes it hot or cold again; a plain click starts
@@ -1380,3 +1531,6 @@ mod tests {
         assert_eq!(ix.prims(2, &b, &hs(&[9, 3])), vec![0, 1]);
     }
 }
+
+/// The COMPARE overlay.
+mod compare;

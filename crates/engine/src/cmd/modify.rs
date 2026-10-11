@@ -1182,6 +1182,8 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                     .collect(),
             )
         }
+        // A helix explodes into its spline (seen from above).
+        EntityKind::Helix(h) => Some(vec![Entity { handle: Handle(0), common: e.common.clone(), kind: EntityKind::Spline(h.spline()) }]),
         EntityKind::Polyline3d(p) => Some(
             p.points
                 .windows(2)
@@ -1214,6 +1216,19 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                             valign: Default::default(),
                         }),
                     }
+                })
+                .collect(),
+        ),
+        // A region explodes into its boundary's lines and arcs.
+        EntityKind::Region(r) => Some(
+            r.segments()
+                .into_iter()
+                .map(|s| {
+                    let k = match s {
+                        Segment::Line(l) => line(l.a, l.b),
+                        Segment::Arc { arc: a, .. } => arc(&a),
+                    };
+                    Entity { handle: Handle(0), common: e.common.clone(), kind: k }
                 })
                 .collect(),
         ),
@@ -1259,6 +1274,7 @@ pub(crate) fn explode_kind(d: &cadcraft_doc::Drawing, e: &Entity) -> Option<Vec<
                         contents: g.value.clone(),
                         line_spacing: 1.0,
                         line_spacing_exact: false,
+                        columns: None,
                     }),
                 });
             }

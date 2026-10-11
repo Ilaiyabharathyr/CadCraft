@@ -25,6 +25,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),
         "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
+        o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
     if !open {
@@ -37,6 +38,11 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         let s = &mut app.session.settings;
         ui.heading(crate::tl!("Snap and Grid"));
         ui.checkbox(&mut s.snapmode, crate::tl!("Snap On (F9)"));
+        // SNAPSTYL: the isometric snap and grid (ISODRAFT).
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut s.isodraft, false, crate::tl!("Rectangular snap"));
+            ui.radio_value(&mut s.isodraft, true, crate::tl!("Isometric snap"));
+        });
         ui.horizontal(|ui| {
             ui.label(crate::tl!("Snap X spacing"));
             ui.add(egui::DragValue::new(&mut s.snapunit.x).speed(0.05).range(0.0001..=1e6));
@@ -115,6 +121,8 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     ui.radio_value(&mut s.dynpi_absolute, false, crate::tl!("Relative"));
                     ui.radio_value(&mut s.dynpi_absolute, true, crate::tl!("Absolute"));
                 });
+                // DYNPROMPT: the prompt and its options (Down Arrow) beside the cursor.
+                ui.checkbox(&mut s.dynprompt, crate::tl!("Show command prompting near the crosshairs"));
             });
         });
         ui.checkbox(&mut s.orthomode, crate::tl!("Ortho (F8)"));
@@ -384,6 +392,14 @@ fn insert_block(app: &mut CadApp, name: &str) {
     }
 }
 
+/// The editor's lines as a list: a hanging indent of three text heights with a tab stop there
+/// (`\pxi-3,l3,t3;`) and each line a bullet or its number and a tab.
+fn as_list(buf: &str, numbered: bool) -> String {
+    let lines: Vec<String> =
+        buf.split('\n').enumerate().map(|(i, l)| if numbered { format!("{}.\t{l}", i + 1) } else { format!("•\t{l}") }).collect();
+    format!("\\pxi-3,l3,t3;{}", lines.join("\n"))
+}
+
 /// The multiline text editor shown while MTEXT asks for its contents.
 fn mtext_editor(app: &mut CadApp, ctx: &egui::Context) {
     let active = app.session.running.as_ref().is_some_and(|r| r.id == "mtext")
@@ -422,6 +438,16 @@ fn mtext_editor(app: &mut CadApp, ctx: &egui::Context) {
                 }
                 if ui.button("⌀").on_hover_text(crate::tl!("Diameter")).clicked() {
                     buf.push_str("%%c");
+                }
+                ui.separator();
+                if ui.button("⇥").on_hover_text(crate::tl!("Insert tab")).clicked() {
+                    buf.push('\t');
+                }
+                if ui.button("•≡").on_hover_text(crate::tl!("Bulleted list")).clicked() {
+                    buf = as_list(&buf, false);
+                }
+                if ui.button("1≡").on_hover_text(crate::tl!("Numbered list")).clicked() {
+                    buf = as_list(&buf, true);
                 }
             });
             let r = ui.add(

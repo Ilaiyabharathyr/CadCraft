@@ -23,7 +23,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{source, targets?: [hex] (default: selection), properties?: [name] | {name: bool} (default: all; names: color, layer, linetype, ltscale, lineweight, transparency, thickness, plotStyle, dimension, text, hatch, polyline, viewport, table, multileader)} → {changed}")
             .interactive(|_| Ok(Box::new(matchprop::MatchPropM::new()))),
         CommandSpec::new("color", "Color...", run_color).menu(&["Format", "Color..."]).alias(&["col", "colour"]).params("{color: \"ByLayer\" | \"red\" | 1..255 | \"r,g,b\"}"),
-        CommandSpec::new("linetype", "Linetype...", run_linetype).menu(&["Format", "Linetype..."]).alias(&["lt", "ltype"]).params("{current?: name, load?: name | \"*\"}"),
+        CommandSpec::new("linetype", "Linetype...", run_linetype).menu(&["Format", "Linetype..."]).alias(&["lt", "ltype"]).params("{current?: name, load?: name | \"*\" (with a file: comma-separated names, wildcards), file?: path to a .lin file | text?: its contents, reload?: bool}"),
+        CommandSpec::new("hatch.patterns", "Hatch Patterns", super::hatch::run_patterns)
+            .params("{file?: path to a .pat file | text?: its contents, clear?: bool} → {standard, user, added, warnings} (HATCH also takes patternFile | patternText)")
+            .enabled(always)
+            .noundo(),
+        CommandSpec::new("-linetype", "Linetype", run_linetype).params("{current?, load?, file? | text?, reload?} (as LINETYPE)").interactive(|_| Ok(Box::new(linfile::DashLinetype::new()))),
         CommandSpec::new("lweight", "Lineweight...", run_lweight).menu(&["Format", "Lineweight..."]).alias(&["lw", "lineweight"]).params("{lineweight: mm | ByLayer}"),
         CommandSpec::new("ltscale", "Linetype Scale", run_ltscale).alias(&["lts"]).params("{scale}"),
         CommandSpec::new("units", "Units...", run_units).menu(&["Format", "Units..."]).alias(&["un"]).params("{lunits?: 1..5, luprec?: 0..8, aunits?: 0..4, auprec?: 0..8, insunits?}"),
@@ -50,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("tablestyle", "Table Style...", run_tablestyle)
             .menu(&["Format", "Table Style..."])
             .alias(&["ts"])
-            .params("{name, textHeight?, margin?, title?, header?, current?} → styles"),
+            .params("{name, textHeight?, margin?, title?, header?, current?, cellStyle?: {name, …} (see tablestyle.cellstyle)} → styles"),
         CommandSpec::new("mleaderstyle", "Multileader Style...", run_mleaderstyle)
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
@@ -338,6 +343,9 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 EntityKind::Hatch(h) => {
                     if let Some(v) = str_param(p, "pattern") {
+                        if !h.pattern.eq_ignore_ascii_case(v) {
+                            h.pattern_lines = super::hatch::lines_for(v);
+                        }
                         h.pattern = v.to_ascii_uppercase();
                         h.solid = h.pattern == "SOLID";
                         if !h.solid {
@@ -375,7 +383,12 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+mod linfile;
+
 fn run_linetype(s: &mut Session, p: &Value) -> Result<Value> {
+    if linfile::has_file(p) {
+        return linfile::run(s, p);
+    }
     let d = s.doc_mut()?;
     if let Some(load) = str_param(p, "load") {
         let lib = cadcraft_doc::library::standard_linetypes_for(d);
@@ -808,6 +821,7 @@ fn run_tablestyle(s: &mut Session, p: &Value) -> Result<Value> {
                 st.header = b;
             }
         }
+        super::table::tablestyle_cell_style(d, name, p)?;
         if bool_or(p, "current", true) {
             d.header.set_str("CTABLESTYLE", name);
         }

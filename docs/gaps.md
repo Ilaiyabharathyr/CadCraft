@@ -13,7 +13,7 @@ do them first.
 
 | # | Gap | Why it ranks here | Est. | Doc |
 |---|---|---|---|---|
-| 1 | **[alpha blocker]** **Saving drops whatever we don't model** (Unknown entities, IMAGE, layer states, block descriptions, true colours, MULTILEADER written as LEADER+MTEXT, groups, named views/UCS, foreign xdata) | Opening a colleague's DWG and saving it silently deletes content: the one thing a CAD user can't forgive | 15–25 | [file formats](file-format-parity.md) |
+| 1 | **[alpha blocker]** **Saving DWG drops what we don't model** (DXF now writes back unknown entities and objects, foreign xdata, extension dictionaries, reactors, layer states and colour books, #528; through DWG, acadrust drops custom-class entities and objects, xdata on table records and blocks, entity colour books and reactors; MULTILEADER is still written as LEADER+MTEXT) | Opening a colleague's DWG and saving it still deletes some content: the one thing a CAD user can't forgive | 6–10 | [file formats](file-format-parity.md) |
 | 2 | **[alpha blocker]** **No real-file test corpus and no check in AutoCAD** | All 36 file tests are synthetic; nobody has verified a CADCraft DWG/DXF opens cleanly in AutoCAD | 10–15 + human | [file formats](file-format-parity.md#tests) |
 | 3 | **Tracking leftovers** (object snap tracking, Extension, Parallel and Apparent Intersection landed, #379): polar angles relative to the last segment, PolarSnap, temporary tracking point | Small now; ranks lower at the next review | 3–5 | [ui](ui-parity.md#tracking-polar-ortho-grid-and-snap--70) |
 | 4 | **No code pages when reading pre-2007 files** (saving DWG/DXF at 2000–2018 and binary DXF landed, #421) | Pre-2007 CJK/Cyrillic files are garbled | 3–5 | [file formats](file-format-parity.md) |
@@ -29,7 +29,7 @@ do them first.
 | # | Gap | Evidence | User impact | Est. |
 |---|---|---|---|---|
 | F1 | **[alpha blocker]** Prompt options print "not available yet": PEDIT Edit vertex Break/Regen/Tangent, some SPLINEDIT options; MTEXT Dynamic/Static columns (no column model). SPLINE, MTEXT and MLEADER options done (#408): closed splines keep but ignore a fit tolerance, SPLINE Object fits the polyline's vertices (no spline frame is kept) (TRIM/EXTEND, PLINE arc mode and Length, XLINE done (#397); OFFSET, ROTATE and FILLET options done earlier) | `modify2.rs:594,783,806`, `cmd/mtext_opts.rs` | Medium: the most-used commands are done | 3–6 |
-| F2 | **[alpha blocker]** No xrefs (XATTACH, XREF palette, REFEDIT, BIND, XCLIP, overlay, paths); DXF xref blocks read with an empty path | `dxf_read.rs:923` | High: multi-file projects | 30–45 |
+| F2 | XREF editing in place and clipping: REFEDIT and XCLIP are missing. XATTACH, the External References palette, -XREF (Bind/Detach/Path/Unload/Reload/Overlay), XBIND, XOPEN, overlays, relative paths and loading at open are done (#525). Unloaded state and xref-layer overrides last only for the session | `cmd/blocks/xref.rs` | Medium: xrefs can't be edited in place or clipped | 15–25 |
 | F3 | **[alpha blocker]** (block editor and REFEDIT; dynamic-block authoring is beta) No block editor (BEDIT) or dynamic blocks (parameters, actions, visibility, lookup); dynamic blocks from other files lose their behaviour | issue #185 offers help | High: standard libraries are dynamic | 50–75 |
 | F4 | Autosave leftovers: no autosave in the web build (browser storage); autosave files are DXF, not DWG; no AUDITCTL `.adt` log and no separate RECOVER mode in the file readers (SAVETIME, Drawing Recovery, AUDIT and RECOVER landed with #406) | `engine/src/autosave.rs`, `engine/src/audit.rs` | Low-medium (web users) | 3–5 |
 | F5 | Arrays are not associative: no ARRAYEDIT; ARRAY/ARRAYRECT/ARRAYPOLAR edit the array in an option loop, then create plain copies (ASsociative, Levels, polar ROWs and grip editing print "not available yet") | `cmd/array.rs` | Medium-high | 8–12 |
@@ -37,7 +37,7 @@ do them first.
 | F8 | TOLERANCE leftovers (feature control frames landed, #420: model, our own symbol drawing, DXF, command-line prompts, explode, grips): no Geometric Tolerance dialog, no LEADER/QLEADER tolerance annotation, no in-place editing of a frame's contents | `cmd/tolerance.rs` | Low-medium (mechanical) | 2–4 |
 | F9 | MTEXT editor is a dialog box, not in place; no columns, bullets, numbering, tabs, indents; no fields (FIELD, UPDATEFIELD); no spell check (SPELL) | `ui-egui/dialogs.rs:188-240` | Medium-high | 30–45 |
 | F10 | MLEADER: no MLEADEREDIT/ALIGN/COLLECT; MLEADERSTYLE has 5 fields (block content and spline/no-leader types are per command, not in the style; block content has no attributes) | `annotate.rs`, `cmd/mleader_content.rs`, `tables.rs:417` | Medium | 8–12 |
-| F11 | Tables: no cell styles, formulas, data links, table breaking | `cmd/table.rs` | Medium | 10–15 |
+| F11 | Tables (cell styles, formulas, TABLEDIT, TABLEEXPORT, table breaking and CSV data links landed, #534): formulas aren't read from or written as AutoCAD FIELD objects (other programs see values); number formats apply to formula results only; cell text doesn't wrap; custom cell styles, breaks and data links travel as CADCraft xdata (not through DWG); data links read CSV only (no Excel ranges, no write-back, not on the web); no cell-style tab in the Table Style dialog | `cmd/table/*`, `io/dxf_table.rs` | Low-medium | 6–10 |
 | F12 | Annotative scaling: the flag is stored, nothing scales; no scale list, no "Annotative Object Scale" commands | 4 uncovered menu items | Medium-high in layouts | 10–15 |
 | F13 | Hatch: 23 patterns (AutoCAD ~85; ours must stay original); no hatch dialog (HATCH and HATCHEDIT options work at the command line and in JSON), no MPolygon; HATCHEDIT can't add or remove boundaries; a hatch copied with its boundary isn't linked to the copy; HPGAPTOL closes gaps between curve ends only | `doc/src/library.rs`, `cmd/hatch.rs`, `cmd/hatch/edit.rs` | Medium | 8–12 |
 | F14 | **[alpha blocker]** No plot preview, plotter devices, PUBLISH/batch plot; Print opens no plot dialog (#160, PR #200). Plot styles (CTB and STB, [plot-styles.md](plot-styles.md)) apply since #410; their end/join/fill styles aren't applied and binary `.ctb`/`.stb` files can't be read | `palettes.rs:666` | High for sheet output | 15–25 |
@@ -47,11 +47,10 @@ do them first.
 | F18 | Layer bugs: edits change geometry on locked layers (#87, PR #196); delete/purge removes layers used by blocks (#72, PR #189); rename misses paper space and blocks (#75, PR #191); linetype rename breaks assignments (#74, PR #195); rejected freeze changes colour (#71, PR #188) | issues | High (correctness) | 3–5 (PRs open) |
 | F19 | MATCHPROP Settings is a keyword prompt (no dialog) and has no material, shadow or centre-object settings; TEXTTOFRONT and HATCHTOBACK act on the current space only; OVERKILL doesn't compare polyline segments with other objects (picker and Settings, DRAWORDER Above/Under, TEXTTOFRONT, HATCHTOBACK, OVERKILL tolerance/ignore/overlap/end-to-end options landed, #439) | `props/matchprop.rs`, `draworder.rs`, `overkill.rs` | Low | 2–4 |
 | F20 | OPTIONS/Preferences dialog missing (#23) (UNITS has a dialog since #38) | — | Medium | 6–10 |
-| F21 | MLINE is two polylines (no MLINE entity, MLSTYLE); REGION makes polylines (no region entity); HELIX is a polyline | `draw2.rs:116,123`, `hatch.rs:267` | Medium-low | 8–12 |
+| F21 | MLINE, REGION and HELIX are objects since #510, with gaps: MLEDIT has no Merged Tee and tees trim square; UNION/SUBTRACT/INTERSECT only combine regions whose boundaries don't meet; regions are saved as closed polylines (no ACIS data); PURGE skips multiline styles | `draw2/mline.rs`, `inquiry/regions.rs`, `dxf_region.rs` | Low | 6–10 |
 | F22 | Inquiry: MASSPROP approximate; COUNT counts model-space inserts only; no QuickCalc palette (CAL is an evaluator); no DWG Compare | `utility.rs:203,310-352`, `inquiry.rs:305` | Low-medium | 15–25 |
 | F23 | No Sheet Set Manager, eTransmit, Share, Traces, Markup Import, Activity Insights | menu items uncovered | Low-medium (team workflows) | 40–70 |
 | F24 | No 3D: UCS, 3D views, orbit, solids, surfaces, meshes, sections, visual styles, materials, lights, rendering (150 menu items) | [parity-checklist](parity-checklist.md) | Medium (3D users) | 300–450 |
-| F25 | Constraint solver: no DOF report, Smooth not G2, no ellipse/spline/block geometry, no inference while drawing; DCANGULAR can succeed unsatisfied (#73, PR #190) | [geometry-parity](geometry-parity.md#constraint-solver--50) | Low-medium | 20–30 |
 
 ## UI/UX
 
@@ -77,7 +76,7 @@ Detail: [file-format-parity.md](file-format-parity.md).
 
 | # | Gap | User impact | Est. |
 |---|---|---|---|
-| FF1 | **[alpha blocker]** Round-trip what we don't model: keep Unknown entities and objects, foreign xdata, extension dictionaries; write IMAGE (with IMAGEDEF), VIEW/UCS/VPORT tables, groups, layer states, block descriptions, true colours (#201, #204, #208, #209, #213, #223); WIPEOUT and gradients done (#147, #162) | High | 12–20 |
+| FF1 | **[alpha blocker]** Round-trip what we don't model. DXF done (#528): unknown entities and objects (with their CLASS records), foreign xdata (hyperlinks included), extension dictionaries, persistent reactors, DICTIONARYVAR and XRECORDs, layer states, colour book colours, references remapped on save; IMAGE, VIEW/UCS, groups, block descriptions, true colours, transparency (#201, #204, #208, #209, #213, #223); WIPEOUT and gradients (#147, #162). Left: through DWG, acadrust drops custom-class entities and objects, xdata on table records and blocks, entity colour book names and reactors; UCS elevation; MTEXT background colours; unknown entities follow only layer edits, and renamed layers and blocks lose their foreign data | High | 6–10 |
 | FF2 | **[alpha blocker]** Native MULTILEADER objects (read and write) | High | 6–10 |
 | FF3 | Save-version leftovers (DXF/DWG 2000–2018, binary DXF, SAVEAS `version`/`binary` and the default save version landed, #421): no R14 DWG or R12 DXF output; the Save dialog can't pick the version per file (the file picker doesn't report the chosen type; File > Default Save Format sets it); no command-line SAVEAS format prompt | Low | 2–4 |
 | FF4 | Code pages (`$DWGCODEPAGE`, ANSI_932/936/949/950/125x) when reading pre-2007 files | Medium-high (Asia, Eastern Europe) | 3–5 |
@@ -85,7 +84,7 @@ Detail: [file-format-parity.md](file-format-parity.md).
 | FF6 | **[alpha blocker]** DWG throughput: a 10 MB DWG took ~2 min to fail (#57) | High for real projects | 6–10 |
 | FF7 | Table record and object handles from other programs' files are renumbered on the first save (entity handles are kept; `*D` blocks no longer duplicate and once reopened, CADCraft's own files keep every handle across saves, #495) | Low | 4–6 |
 | FF8 | SHX fonts (shape and big fonts) not read | Medium-high (text metrics differ) | 8–12 |
-| FF9 | Templates (DWT), user `.lin`/`.pat` files, `.ctb`/`.stb`, `.pc3`, `.pgp` | Medium | 20–30 |
+| FF9 | `.pc3` plotter configuration files; linetype shape (SHX) elements are skipped (templates and `.dwt`, user `.lin`/`.pat` and `.pgp` alias files landed, #552; `.ctb`/`.stb`, #410) | Low-medium | 5–10 |
 | FF10 | PDF: text as real fonts, layers (OCG), multi-sheet; PDF import and underlays; raster image attach | Medium | 30–50 |
 | FF11 | DWF/DWFx, DGN, WMF, EPS, ACIS/STL and other exchange formats | Low-medium | 50–100 |
 | FF12 | DWG in the web build | Medium | 6–10 |
