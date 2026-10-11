@@ -331,6 +331,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
         text: true,
         fill: true,
         lineweights,
+        ..Default::default()
     };
     let list = cadcraft_render::build_plot(d, &space, &ropts);
     let b = list.bounds;
