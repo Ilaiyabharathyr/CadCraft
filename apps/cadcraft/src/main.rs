@@ -20,38 +20,69 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod workspace;
 
 use cadcraft_engine::Session;
 use cadcraft_ui_egui::{CadApp, Services, i18n};
 
-struct App(CadApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App {
+    cad: CadApp,
+    workspace: workspace::Workspace,
+    workspace_error: Option<String>,
+    #[cfg(target_os = "macos")]
+    native_menu: Option<native_menu::NativeMenu>,
+}
+
+impl App {
+    fn persist_workspace(&mut self, final_attempt: bool) {
+        let result = if final_attempt { self.workspace.save_on_exit(&self.cad.ui) } else { self.workspace.save_if_changed(&self.cad.ui) };
+        if let Err(error) = result {
+            if self.workspace_error.as_ref() != Some(&error) {
+                eprintln!("CADCraft workspace: {error}");
+                self.cad.set_status(format!("Workspace could not be saved: {error}"));
+                self.workspace_error = Some(error);
+            }
+        } else {
+            self.workspace_error = None;
+        }
+    }
+}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
-            if self.1.is_none() && std::env::var_os("CADCRAFT_NO_NATIVE_MENU").is_none() {
-                self.1 = Some(native_menu::NativeMenu::install(&mut self.0));
+            if self.native_menu.is_none() && std::env::var_os("CADCRAFT_NO_NATIVE_MENU").is_none() {
+                self.native_menu = Some(native_menu::NativeMenu::install(&mut self.cad));
             }
-            if let Some(m) = &mut self.1 {
-                m.poll(&mut self.0, ctx);
+            if let Some(m) = &mut self.native_menu {
+                m.poll(&mut self.cad, ctx);
             }
         }
-        self.0.logic(ctx);
-        if std::mem::take(&mut self.0.quit_requested) {
+        self.cad.logic(ctx);
+        self.persist_workspace(false);
+        if std::mem::take(&mut self.cad.quit_requested) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.0.raw_input_hook(raw);
+        self.cad.raw_input_hook(raw);
         cadcraft_ui_egui::cmdline::capture_tab(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.0.ui(ui);
+        self.cad.ui(ui);
+        self.persist_workspace(false);
+    }
+    /// A normal exit: the workspace is saved, and this run's autosave files are not needed (a
+    /// crash leaves them for recovery).
+    fn on_exit(&mut self) {
+        self.persist_workspace(true);
+        self.cad.shutdown_autosave();
     }
     /// Preferences (the interface theme) survive restarts; window and egui state are not kept.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.0.prefs_json());
+        storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.cad.prefs_json());
+        storage.set_string(cadcraft_ui_egui::autosave::PREFS_KEY, cadcraft_ui_egui::autosave::prefs_json());
     }
     fn persist_egui_memory(&self) -> bool {
         false
@@ -64,6 +95,9 @@ pub fn install_io() {
         read: |b, name| cadcraft_io::read(b, name).map_err(|e| e.to_string()),
         write: |d, name| cadcraft_io::write(d, name).map_err(|e| e.to_string()),
         plot: Some(|d, space, opts| cadcraft_io::plot(d, space, opts).map_err(|e| e.to_string())),
+    });
+    cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
+        cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
 }
 
@@ -97,7 +131,7 @@ fn filters_for_save(name: &str) -> [(&'static str, &'static str); 5] {
     filters
 }
 
-/// The per-user settings directory (today it holds `logs/`): `CADCRAFT_CONFIG_DIR` if set, else
+/// The per-user settings directory (it holds `logs/` and `autosave/`): `CADCRAFT_CONFIG_DIR` if set, else
 /// `$XDG_CONFIG_HOME/cadcraft` or `~/.config/cadcraft` on Linux and the BSDs,
 /// `~/Library/Application Support/CADCraft` on macOS, `%APPDATA%\CADCraft` on Windows.
 fn config_dir() -> Option<std::path::PathBuf> {
@@ -219,9 +253,24 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut app = CadApp::new(Session::empty(), services());
+            let (workspace, restored, workspace_error) = workspace::Workspace::load();
+            if let Some(ui) = restored {
+                app.ui = ui;
+            }
+            if let Some(error) = &workspace_error {
+                eprintln!("CADCraft workspace: {error}");
+                app.set_status(error);
+            }
             app.system_languages = std::env::var("CADCRAFT_LOCALE").map(|s| vec![s]).unwrap_or_else(|_| sys_locale::get_locales().collect());
             if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::PREFS_KEY)) {
                 app.load_prefs(&prefs);
+            }
+            if let Some(prefs) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::autosave::PREFS_KEY)) {
+                cadcraft_ui_egui::autosave::load_prefs(&prefs);
+            }
+            // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
+            if let Some(dir) = config_dir() {
+                app.enable_autosave(&dir.join("autosave"));
             }
             app.integrated_titlebar = cfg!(target_os = "macos");
             if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
@@ -243,11 +292,13 @@ fn main() -> eframe::Result {
             if app.session.docs.is_empty() {
                 app.session.new_drawing(false);
             }
-            Ok(Box::new(App(
-                app,
+            Ok(Box::new(App {
+                cad: app,
+                workspace,
+                workspace_error,
                 #[cfg(target_os = "macos")]
-                None,
-            )))
+                native_menu: None,
+            }))
         }),
     )
 }
