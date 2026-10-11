@@ -35,14 +35,28 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
     assert_eq!(tr("unknown", "Open"), "Open");
 }
 
-#[test]
-fn translations_cover_commands_menus_tools_and_snap_labels() {
-    for language in ["uk", "pt-BR"] {
-        assert_covers_commands_menus_tools_and_snap_labels(language);
+/// Ukrainian is the reference translation and must cover everything. Other languages fall back
+/// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
+/// command doesn't require a row in every language.
+const REQUIRED: &[&str] = &["uk"];
+const REPORTED: &[&str] = &["pt-BR"];
+
+fn check(language: &str, what: &str, missing: Vec<String>) {
+    if REQUIRED.contains(&language) {
+        assert!(missing.is_empty(), "{language}: missing {what}: {missing:?}");
+    } else if !missing.is_empty() {
+        eprintln!("{language}: {} {what} fall back to English: {missing:?}", missing.len());
     }
 }
 
-fn assert_covers_commands_menus_tools_and_snap_labels(language: &str) {
+#[test]
+fn translations_cover_commands_menus_tools_and_snap_labels() {
+    for language in REQUIRED.iter().chain(REPORTED) {
+        check(language, "translations", missing_commands_menus_tools_and_snap_labels(language));
+    }
+}
+
+fn missing_commands_menus_tools_and_snap_labels(language: &str) -> Vec<String> {
     let catalog = catalog(language).unwrap();
     let mut sources = BTreeSet::new();
     sources.extend(crate::menus::MENUS.iter().copied());
@@ -61,18 +75,17 @@ fn assert_covers_commands_menus_tools_and_snap_labels(language: &str) {
         }
     }
     sources.extend(cadcraft_engine::snap::mode::ALL.iter().map(|(_, name)| *name));
-    let missing: Vec<_> = sources.into_iter().filter(|s| !s.is_empty() && !catalog.contains_key(&("", *s))).collect();
-    assert!(missing.is_empty(), "{language}: missing translations: {missing:?}");
+    sources.into_iter().filter(|s| !s.is_empty() && !catalog.contains_key(&("", *s))).map(str::to_string).collect()
 }
 
 #[test]
 fn every_marked_ui_literal_has_a_translation() {
-    for language in ["uk", "pt-BR"] {
-        assert_every_marked_ui_literal_has_a_translation(language);
+    for language in REQUIRED.iter().chain(REPORTED) {
+        check(language, "UI translations", missing_marked_ui_literals(language).into_iter().collect());
     }
 }
 
-fn assert_every_marked_ui_literal_has_a_translation(language: &str) {
+fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
     let catalog = catalog(language).unwrap();
     let sources = [
         include_str!("../xrefs.rs"),
@@ -119,7 +132,7 @@ fn assert_every_marked_ui_literal_has_a_translation(language: &str) {
             }
         }
     }
-    assert!(missing.is_empty(), "{language}: missing UI translations: {missing:?}");
+    missing
 }
 
 #[test]
