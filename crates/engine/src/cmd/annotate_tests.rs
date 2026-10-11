@@ -2,7 +2,7 @@ use cadcraft_doc::{AssocSnap, DimKind, Dimension, EntityKind, Handle};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
-use crate::Session;
+use crate::{Input, Session};
 
 fn h(v: &Value) -> Handle {
     Handle::parse_hex(v["handle"].as_str().unwrap()).unwrap()
@@ -241,6 +241,23 @@ fn dimstyle_commands() {
 }
 
 #[test]
+fn dimstyle_rename_updates_block_dimensions() {
+    let mut s = Session::new();
+    s.execute("dimstyle", &json!({ "name": "DS", "DIMTXT": 2 })).unwrap();
+    s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [5, 3] })).unwrap();
+    s.execute("selectall", &json!({})).unwrap();
+    s.execute("block", &json!({ "name": "BD", "base": [0, 0], "keep": "convert" })).unwrap();
+    let in_block = |s: &Session| {
+        let b = s.doc().unwrap().block("BD").unwrap().clone();
+        b.entities.iter().find_map(|e| if let EntityKind::Dimension(d) = &e.kind { Some(d.style.clone()) } else { None }).unwrap()
+    };
+    assert_eq!(in_block(&s), "DS");
+    assert!(s.execute("dimstyle.delete", &json!({ "name": "DS" })).is_err());
+    s.execute("dimstyle.rename", &json!({ "from": "DS", "to": "DS2" })).unwrap();
+    assert_eq!(in_block(&s), "DS2");
+}
+
+#[test]
 fn dimension_overrides() {
     let mut s = Session::new();
     let d = h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [5, 2] })).unwrap());
@@ -297,6 +314,25 @@ fn dimtedit_and_dimspace() {
     assert!(dim(&s, a).overrides.is_empty() && dim(&s, a).text_rotation == 0.0);
     s.execute("dimspace", &json!({ "base": a.hex(), "handles": [b.hex()], "spacing": 0.5 })).unwrap();
     assert!((dim(&s, b).defpt.y - 1.5).abs() < 1e-9, "{:?}", dim(&s, b).defpt);
+}
+
+#[test]
+fn dimspace_prompts_for_its_inputs() {
+    let mut s = Session::new();
+    let a = h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [10, 0], "at": [0, 5] })).unwrap());
+    let b = h(&s.execute("dimlinear", &json!({ "p1": [0, 0], "p2": [20, 0], "at": [0, 9] })).unwrap());
+    // The menu / typed start used to fail with "`base` dimension is required".
+    s.start("dimspace").unwrap();
+    assert!(s.prompt_text().contains("Select base dimension"), "{}", s.prompt_text());
+    s.input(Input::Pick(vec![a])).unwrap();
+    assert!(s.prompt_text().contains("Select dimensions to space"), "{}", s.prompt_text());
+    s.input(Input::Pick(vec![b])).unwrap();
+    s.input(Input::Enter).unwrap();
+    assert!(s.prompt_text().contains("Enter value"), "{}", s.prompt_text());
+    s.input(Input::Text("2".into())).unwrap();
+    assert!(s.running.is_none());
+    assert!((dim(&s, a).defpt.y - 5.0).abs() < 1e-9, "{:?}", dim(&s, a).defpt);
+    assert!((dim(&s, b).defpt.y - 7.0).abs() < 1e-9, "{:?}", dim(&s, b).defpt);
 }
 
 #[test]
