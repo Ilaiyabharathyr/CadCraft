@@ -202,7 +202,11 @@ impl EntityStore {
             self.push(Arc::unwrap_or_clone(e));
             return false;
         };
-        let Some(c) = self.chunks.get_mut(pos) else { return false };
+        let Some(c) = self.chunks.get_mut(pos) else {
+            // Unreachable in practice too; never lose the object.
+            self.push(Arc::unwrap_or_clone(e));
+            return false;
+        };
         let chunk = Arc::make_mut(c);
         let i = chunk.items.iter().position(|x| x.handle == anchor).unwrap_or(chunk.items.len());
         let i = if above { (i + 1).min(chunk.items.len()) } else { i };
