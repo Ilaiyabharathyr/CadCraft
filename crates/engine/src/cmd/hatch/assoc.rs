@@ -124,6 +124,18 @@ fn detach(h: &mut Hatch) {
     h.loops.iter_mut().for_each(|l| l.sources.clear());
 }
 
+/// Loops of `h` that aren't loops of `prev` (a hatch split by HATCHEDIT, or one that lost an
+/// island, keeps the rest unchanged).
+fn reshaped(prev: &Hatch, h: &Hatch) -> bool {
+    if prev.loops.len() == h.loops.len() {
+        return prev.loops.iter().zip(&h.loops).any(|(a, b)| a.vertices != b.vertices);
+    }
+    if prev.loops.len().saturating_mul(h.loops.len()) > 4_000_000 {
+        return true;
+    }
+    h.loops.iter().any(|l| !prev.loops.iter().any(|q| q.vertices == l.vertices))
+}
+
 /// What happens to one associative hatch after a command; `None` when nothing changes.
 fn follow(before: &Drawing, after: &Drawing, handle: Handle, h: &Hatch, checked: &mut usize) -> Option<(Hatch, Option<String>)> {
     let prev = match before.entity(handle).map(|e| &e.kind) {
@@ -133,9 +145,14 @@ fn follow(before: &Drawing, after: &Drawing, handle: Handle, h: &Hatch, checked:
     let touched = h.loops.iter().flat_map(|l| &l.sources).any(|s| changed(before, after, *s));
     let mut nh = h.clone();
     if !touched {
+        if let (Some(x), Some(y)) = (before.entity(handle), after.entity(handle))
+            && Arc::ptr_eq(x, y)
+        {
+            return None;
+        }
         match prev {
             // Moved or reshaped on its own: no longer tied to the boundary.
-            Some(p) if p.loops.iter().map(|l| &l.vertices).ne(h.loops.iter().map(|l| &l.vertices)) => {
+            Some(p) if reshaped(p, h) => {
                 detach(&mut nh);
                 return Some((nh, None));
             }
