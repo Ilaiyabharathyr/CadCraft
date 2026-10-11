@@ -21,9 +21,11 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "dsettings" => dsettings(app, ctx, &mut open),
         "units" => units(app, ctx, &mut open),
         "about" => about(ctx, &mut open),
+        "preview" => crate::exchange::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),
         "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
+        o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
     if !open {
@@ -41,6 +43,18 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             ui.add(egui::DragValue::new(&mut s.snapunit.x).speed(0.05).range(0.0001..=1e6));
             ui.label(crate::tl!("Y"));
             ui.add(egui::DragValue::new(&mut s.snapunit.y).speed(0.05).range(0.0001..=1e6));
+        });
+        // SNAPTYPE and POLARDIST.
+        ui.horizontal(|ui| {
+            ui.label(crate::tl!("Snap type"));
+            ui.radio_value(&mut s.polarsnap, false, crate::tl!("Grid snap"));
+            ui.radio_value(&mut s.polarsnap, true, crate::tl!("PolarSnap"));
+        });
+        ui.add_enabled_ui(s.polarsnap, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(crate::tl!("Polar distance"));
+                ui.add(egui::DragValue::new(&mut s.polardist).speed(0.05).range(0.0..=1e6));
+            });
         });
         ui.checkbox(&mut s.gridmode, crate::tl!("Grid On (F7)"));
         ui.horizontal(|ui| {
@@ -62,6 +76,7 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             });
         });
         s.polarang = deg.to_radians();
+        tracking_options(ui, s);
         ui.separator();
         ui.heading(crate::tl!("Object Snap"));
         let mut on = s.osmode & cadcraft_engine::snap::mode::OFF == 0;
@@ -101,9 +116,55 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     ui.radio_value(&mut s.dynpi_absolute, false, crate::tl!("Relative"));
                     ui.radio_value(&mut s.dynpi_absolute, true, crate::tl!("Absolute"));
                 });
+                // DYNPROMPT: the prompt and its options (Down Arrow) beside the cursor.
+                ui.checkbox(&mut s.dynprompt, crate::tl!("Show command prompting near the crosshairs"));
             });
         });
         ui.checkbox(&mut s.orthomode, crate::tl!("Ortho (F8)"));
+    });
+}
+
+/// The polar and object snap tracking options of Drafting Settings: additional angles
+/// (POLARMODE bit 4, POLARADDANG), tracking on every polar angle (bit 2) and angles relative to
+/// the last segment (bit 1).
+fn tracking_options(ui: &mut egui::Ui, s: &mut cadcraft_engine::Settings) {
+    use cadcraft_engine::snap::tracking::polarmode;
+    /// A radio button for POLARMODE `bit` being `on`.
+    fn flag(ui: &mut egui::Ui, flags: &mut u32, bit: u32, on: bool, label: &str) {
+        if ui.radio((*flags & bit != 0) == on, label).clicked() {
+            *flags = if on { *flags | bit } else { *flags & !bit };
+        }
+    }
+    let mut additional = s.polar_flags & polarmode::ADDITIONAL != 0;
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut additional, crate::tl!("Additional angles")).changed() {
+            s.polar_flags ^= polarmode::ADDITIONAL;
+        }
+        // The list as typed (degrees separated by `;`), kept while it doesn't parse yet.
+        let id = ui.id().with("polaraddang");
+        let shown = cadcraft_engine::sysvars::format_angle_list(&s.polaraddang);
+        let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
+        let resp = ui.add_enabled(additional, egui::TextEdit::singleline(&mut text).desired_width(140.0));
+        if resp.changed()
+            && let Some(angles) = cadcraft_engine::sysvars::parse_angle_list(&text)
+        {
+            s.polaraddang = angles;
+        }
+        if resp.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, text));
+        } else {
+            ui.data_mut(|d| d.remove::<String>(id));
+        }
+    });
+    ui.label(crate::tl!("Object Snap Tracking Settings"));
+    ui.horizontal(|ui| {
+        flag(ui, &mut s.polar_flags, polarmode::TRACK_POLAR, false, crate::tl!("Track orthogonally only"));
+        flag(ui, &mut s.polar_flags, polarmode::TRACK_POLAR, true, crate::tl!("Track using all polar angle settings"));
+    });
+    ui.label(crate::tl!("Polar angle measurement"));
+    ui.horizontal(|ui| {
+        flag(ui, &mut s.polar_flags, polarmode::RELATIVE, false, crate::tl!("Absolute"));
+        flag(ui, &mut s.polar_flags, polarmode::RELATIVE, true, crate::tl!("Relative to last segment"));
     });
 }
 
