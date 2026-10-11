@@ -23,6 +23,7 @@ mod modify2;
 mod mtext_opts;
 mod pline_opts;
 mod props;
+pub use props::MatchProps;
 mod qselect;
 mod settings;
 mod spline_opts;
