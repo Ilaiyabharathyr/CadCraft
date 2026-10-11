@@ -474,6 +474,8 @@ pub struct Session {
     /// The deferred tangent/perpendicular snap under the cursor, if any (from the UI; lets the
     /// rubber band show the line it resolves to).
     pub cursor_deferred: Option<snap::Deferred>,
+    /// Origin of the point currently being fed by `input_snapped`; never reused by typed points.
+    picked_viewport: Option<snap::ViewportPoint>,
     /// Object snap tracking: acquired points and the path under the cursor (from the UI's
     /// [`Session::snap_cursor`] calls; direct distance entry follows the path).
     pub tracking: snap::tracking::Tracker,
@@ -516,6 +518,7 @@ impl Session {
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
+            picked_viewport: None,
             tracking: snap::tracking::Tracker::default(),
             viewport_px: (1200.0, 800.0),
             clipboard: Vec::new(),
@@ -731,6 +734,16 @@ impl Session {
                 Ok(())
             }
         }
+    }
+
+    /// Feed an object-snap pick, retaining its viewport origin for measurements. Point modifiers
+    /// that combine or constrain coordinates produce ordinary drawing-space points.
+    pub fn input_snapped(&mut self, hit: snap::SnapHit) -> Result<()> {
+        let source = hit.viewport.filter(|_| self.point_mods.iter().all(|f| matches!(f, pointmod::Frame::Snap { mode } if *mode != 0)));
+        let previous = std::mem::replace(&mut self.picked_viewport, source);
+        let result = self.input(hit.input());
+        self.picked_viewport = previous;
+        result
     }
 
     /// Give an input to the running command. With no command running, `Enter` repeats the last
