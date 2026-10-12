@@ -460,6 +460,18 @@ fn scattered_dot_pattern_reads_solid_once_dots_fill_the_pixels() {
     assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, 0.125));
 }
 
+/// `a` and `b` are the same segments up to floating-point noise (a corner exactly on a pattern
+/// line can come out as -3e-16 instead of 0 depending on the platform's float code generation).
+fn assert_same_segments(a: &[Vec<Vec2>], b: &[Vec<Vec2>], what: &str) {
+    assert_eq!(a.len(), b.len(), "{what}");
+    for (x, y) in a.iter().zip(b) {
+        assert_eq!(x.len(), y.len(), "{what}");
+        for (p, q) in x.iter().zip(y) {
+            assert!(p.dist(*q) < 1e-9, "{what}: {x:?} != {y:?}");
+        }
+    }
+}
+
 #[test]
 fn normal_zoom_pattern_is_unchanged() {
     // Lines and dash repeats a few pixels long or more: the level of detail changes nothing.
@@ -469,10 +481,10 @@ fn normal_zoom_pattern_is_unchanged() {
         let full = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, 0.0, None);
         assert!(!full.is_empty(), "{pattern}");
         assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, px), "{pattern}");
-        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, None), full, "{pattern}");
+        assert_same_segments(&crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, None), &full, pattern);
         // A view covering the whole hatch changes nothing either.
         let all = Bounds2::new(Vec2::new(-1.0, -1.0), Vec2::new(7.0, 5.0));
-        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, Some(&all)), full, "{pattern}");
+        assert_same_segments(&crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, Some(&all)), &full, pattern);
     }
 }
 
