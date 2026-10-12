@@ -50,6 +50,11 @@ pub enum DocError {
 
 pub type Result<T> = std::result::Result<T, DocError>;
 
+/// Application-keyed extension data (the DXF APPID idea): each application stores its own JSON
+/// under its name, e.g. `ext["LAMB"]`. Carried on `Common`, `Layer` and `Drawing`; it travels with
+/// every clone, so entity copies and undo snapshots keep it. Not yet read or written by DXF I/O.
+pub type Extension = BTreeMap<String, serde_json::Value>;
+
 /// Which entity collection: model space or a named layout's paper space.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +100,8 @@ pub struct Drawing {
     /// Objects hidden for this session by ISOLATEOBJECTS / HIDEOBJECTS. Never written to a file:
     /// a drawing opens with everything shown again.
     pub hidden_objects: BTreeSet<Handle>,
+    /// Per-drawing extension data, keyed by application name.
+    pub ext: Extension,
 }
 
 impl Default for Drawing {
@@ -148,6 +155,7 @@ impl Drawing {
             scales: imperial_scales(),
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
+            ext: Extension::new(),
         }
     }
 

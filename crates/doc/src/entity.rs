@@ -7,6 +7,7 @@ use cadcraft_geom::{
 use serde::{Deserialize, Serialize};
 
 mod mline;
+use crate::Extension;
 pub use mline::*;
 
 /// A database handle (DXF group 5), unique per drawing.
@@ -103,6 +104,9 @@ pub struct Common {
     /// The annotation scales an annotative object supports (empty: not annotative).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub anno_scales: Vec<crate::AnnoScale>,
+    /// Per-entity extension data, keyed by application name. Cloned with the entity.
+    #[serde(default, skip_serializing_if = "Extension::is_empty")]
+    pub ext: Extension,
 }
 
 impl Default for Common {
@@ -119,6 +123,7 @@ impl Default for Common {
             extrusion: Vec3::Z,
             plot_style: "ByLayer".into(),
             anno_scales: Vec::new(),
+            ext: Extension::new(),
         }
     }
 }
