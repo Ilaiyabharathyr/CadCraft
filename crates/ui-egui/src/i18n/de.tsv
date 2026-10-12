@@ -333,6 +333,10 @@
 	Import	Importieren
 	In	Vergrößern
 	In-window Menu Bar	Menüleiste im Fenster
+	Align Multileaders	Mehrfachführungslinien ausrichten
+	Collect	Sammeln
+	Collect Multileaders	Mehrfachführungslinien sammeln
+	Edit Multileader	Mehrfachführungslinie bearbeiten
 	Include in new selection set	In neuen Auswahlsatz aufnehmen
 	Increment angle	Inkrementwinkel
 	Index Color	Indexfarbe
@@ -1015,7 +1019,3 @@
 	Left device button: zoom extents. Right device button: calibrate.	Linke Gerätetaste: auf Grenzen zoomen. Rechte Gerätetaste: kalibrieren.
 	Hatch Pattern	Schraffurmuster
 	Search for pattern	Muster suchen
-	Align Multileaders	Mehrfachführungslinien ausrichten
-	Collect	Sammeln
-	Collect Multileaders	Mehrfachführungslinien sammeln
-	Edit Multileader	Mehrfachführungslinie bearbeiten
