@@ -476,8 +476,13 @@ impl Spline {
     /// backward for negative), clamped to the domain.
     pub fn param_at_length(&self, from: f64, len: f64) -> f64 {
         let (lo, hi) = self.domain();
+        // Check validity before clamping: an invalid spline can carry reversed domain bounds,
+        // and `f64::clamp` panics when min > max.
+        if !self.is_valid() {
+            return if from.is_finite() { from } else { lo };
+        }
         let from = if from.is_finite() { from.clamp(lo, hi) } else { lo };
-        if !self.is_valid() || !len.is_finite() || len == 0.0 {
+        if !len.is_finite() || len == 0.0 {
             return from;
         }
         let speed = |t: f64| self.derivative(t).len();
@@ -693,6 +698,25 @@ mod tests {
         let t = q.param_at_length(hi, -std::f64::consts::PI / 2.0);
         assert!(q.eval(t).near(Vec2::new(-2f64.sqrt(), 2f64.sqrt()), 1e-6));
         assert_eq!(q.param_at_length(lo, 1e9), hi);
+    }
+
+    #[test]
+    fn param_at_length_never_panics_on_invalid_domain() {
+        // Reversed knots: domain() returns lo > hi, which `f64::clamp` would panic on.
+        // knots[degree] > knots[control.len()] gives a reversed domain (2.0, 1.0).
+        let s = Spline { degree: 1, knots: vec![0.0, 2.0, 1.0, 1.0], control: vec![Vec2::X, Vec2::Y], ..Spline::default() };
+        assert!(!s.is_valid());
+        assert_eq!(s.domain(), (2.0, 1.0));
+        assert!(s.param_at_length(0.5, 1.0).is_finite());
+        assert!(s.param_at_length(f64::NAN, 1.0).is_finite());
+        assert!(s.param_at_length(0.5, f64::NAN).is_finite());
+        // An empty spline has no knots to bound the domain with.
+        let e = Spline::default();
+        assert!(!e.is_valid());
+        assert!(e.param_at_length(0.5, 1.0).is_finite());
+        // Degenerate input must not panic in the length helpers either.
+        assert_eq!(s.length_between(0.0, 1.0), 0.0);
+        assert_eq!(s.length(), 0.0);
     }
 
     #[test]
