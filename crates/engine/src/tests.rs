@@ -1184,3 +1184,17 @@ fn block_rotation_property_turns_attribute_text() {
     assert_eq!(t.value, "hello");
     assert!((t.height - 2.5).abs() < 1e-12);
 }
+
+#[test]
+fn bare_variable_name_runs_setvar() {
+    let mut s = Session::new();
+    s.cmdline("pickadd").unwrap();
+    assert!(s.current_prompt().is_some());
+    s.cmdline("0").unwrap();
+    assert!(s.current_prompt().is_none());
+    assert_eq!(crate::sysvars::get(&s, "PICKADD"), Some(json!(0)));
+    // Not a command and not a variable: still an error.
+    assert!(s.cmdline("nosuchthing").is_err());
+    // A dash or dot prefix never means a variable.
+    assert!(s.cmdline("-pickadd").is_err());
+}
