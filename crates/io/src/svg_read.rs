@@ -350,7 +350,7 @@ impl Parser {
             return Ok(());
         };
         let nums: Vec<f64> = Numbers::new(&raw).collect();
-        let mut pts: Vec<Vec2> = nums.chunks_exact(2).map(|c| self.map(Vec2::new(c[0], c[1]))).collect();
+        let mut pts: Vec<Vec2> = nums.as_chunks::<2>().0.iter().map(|[x, y]| self.map(Vec2::new(*x, *y))).collect();
         if pts.len() > MAX_CURVE_POINTS {
             pts.truncate(MAX_CURVE_POINTS);
         }
@@ -723,8 +723,7 @@ fn parse_path(d: &str) -> Result<Vec<Subpath>> {
         }
     };
 
-    loop {
-        let Some(tok) = lookahead.take().or_else(|| tk.next_tok()) else { break };
+    while let Some(tok) = lookahead.take().or_else(|| tk.next_tok()) {
         let rel = match tok {
             Tok::Cmd(c) => {
                 if c.eq_ignore_ascii_case(&b'z') {
