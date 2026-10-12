@@ -35,6 +35,11 @@ sys-locale = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21", default-features = false }
+# Finder double-click, Open With, Dock drops and `open -a CADCraft plan.dxf` arrive as a
+# kAEOpenDocuments Apple event, which winit 0.30 doesn't handle (#158). This audited crate (also used
+# by GridCraft, PdfCraft and PhotoCraft) registers the handler (Objective-C interop needs unsafe, which
+# our workspace forbids) behind a safe API. Pinned exactly: review the diff before bumping.
+fmv-macos-events = "=0.1.0"
 
 # Rust HID backends: no proprietary SDK or C HID library.
 [target.'cfg(target_os = "windows")'.dependencies]
