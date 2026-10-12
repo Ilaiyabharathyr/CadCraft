@@ -9,4 +9,3 @@
 *.swp
 /apps/cadcraft-web/dist/
 /.claude/worktrees/
-/out-i18n/
