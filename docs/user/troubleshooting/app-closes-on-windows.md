@@ -5,7 +5,7 @@ order: 10
 verified: 0.5.0
 ---
 
-If CADCraft 0.5.0 opens a window and closes again within a second, start it with the Vulkan graphics backend from PowerShell. That works around the problem.
+If CADCraft 0.5.0 opens a window and closes again within a second, start it with the Vulkan graphics backend from PowerShell. That works around the problem. On Intel graphics, use `gl` instead.
 
 ## Symptoms
 
@@ -29,7 +29,7 @@ On AMD graphics do not use `gl`: it can bring back the `atio6axx.dll` driver cra
 
 ## Why this happens
 
-CADCraft 0.5.0 draws with DirectX 12 on Windows and compiles its shaders with DXC. The 0.5.0 Windows build does not ship the DXC compiler files (`dxcompiler.dll` and `dxil.dll`), so on some PCs the graphics device is lost before the first frame and the app exits. This is issue [#608](https://github.com/storytold/cadcraft/issues/608). The issue reports that starting with Vulkan instead gets the app running. A fix that uses FXC, the compiler built into Windows, is merged after 0.5.0 (#613) and is not in a release yet.
+CADCraft 0.5.0 draws with DirectX 12 on Windows and compiles its shaders with DXC. The 0.5.0 Windows build does not ship the DXC compiler files (`dxcompiler.dll` and `dxil.dll`), so on some PCs the graphics device is lost before the first frame and the app exits. This is issue [#608](https://github.com/storytold/cadcraft/issues/608). The issue reports that starting with Vulkan instead gets the app running. A fix that uses FXC, the compiler built into Windows, was merged after 0.5.0 ([pull request #613](https://github.com/storytold/cadcraft/pull/613)) and is not in a release yet.
 
 ## Still stuck?
 

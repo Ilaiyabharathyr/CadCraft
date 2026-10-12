@@ -50,7 +50,7 @@ People trust CADCraft with their drawings; a crash loses their work. **This outr
 
 ## User docs
 
-User docs live in `docs/user/` and are published at https://getartcraft.com/docs/cadcraft. If a change alters something a user sees or does (menu or dialog labels, install, file formats, errors), update the matching page in `docs/user/` in the same PR, or add one. Rules: `docs/user/AGENTS.md`. The contributor docs in `docs/*.md` are a separate thing and are not published there.
+User docs live in `docs/user/` and are published at https://getartcraft.com/docs/cadcraft. If a change alters something a user sees or does (menu or dialog labels, install, file formats, errors), update the matching page in `docs/user/` in the same PR, or add one. Rules: `docs/user/AGENTS.md`. Pages describe the latest release. For a change that is not released yet, write that it was added after <version> and is not in a release yet, or update the page when the release ships. The contributor docs in `docs/*.md` are a separate thing and are not published there.
 
 ## Contributor credits (About window)
 
