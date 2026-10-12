@@ -132,6 +132,69 @@ fn store() -> PlotterStore {
     })
 }
 
+/// A plot for a system printer: the PDF the PDF plotter wrote, and how to print it.
+pub struct PrintJob<'a> {
+    pub printer: &'a str,
+    /// The paper's name as the printer's device lists it.
+    pub paper: &'a str,
+    pub copies: u32,
+    pub title: &'a str,
+    pub pdf: &'a [u8],
+}
+
+/// The host's printers: `list` gives them as devices (`system` set), `print` sends a job and
+/// returns its id.
+#[derive(Clone, Copy)]
+pub struct SystemPrinters {
+    pub list: fn() -> Vec<PlotterConfig>,
+    pub print: fn(&PrintJob) -> std::result::Result<String, String>,
+}
+
+static PRINTERS: OnceLock<SystemPrinters> = OnceLock::new();
+
+/// Install the host's printers (first call wins). Without them only files are plotted.
+pub fn set_system_printers(p: SystemPrinters) {
+    let _ = PRINTERS.set(p);
+}
+
+/// Most copies of one print job.
+pub const MAX_COPIES: u64 = 999;
+
+/// The system printers, listed again at most every few seconds (listing asks the system).
+fn system_printers() -> Vec<PlotterConfig> {
+    let Some(h) = PRINTERS.get() else { return Vec::new() };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::time::{Duration, Instant};
+        type Cached = Option<(Instant, Vec<PlotterConfig>)>;
+        static CACHE: Mutex<Cached> = Mutex::new(None);
+        const TTL: Duration = Duration::from_secs(5);
+        let mut c = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, list)) = c.as_ref()
+            && at.elapsed() < TTL
+        {
+            return list.clone();
+        }
+        let list: Vec<PlotterConfig> = (h.list)().into_iter().filter(|p| p.system && !is_builtin(&p.name)).collect();
+        *c = Some((Instant::now(), list.clone()));
+        list
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        (h.list)().into_iter().filter(|p| p.system && !is_builtin(&p.name)).collect()
+    }
+}
+
+/// Print `pdf` on the system printer `printer`; returns the job id.
+pub(crate) fn print_pdf(cmd: &str, printer: &str, paper: &str, copies: u64, title: &str, pdf: &[u8]) -> Result<String> {
+    let h = PRINTERS.get().ok_or_else(|| bad(cmd, "there are no system printers in this build"))?;
+    let Some(dev) = system_printers().into_iter().find(|p| p.name.eq_ignore_ascii_case(printer.trim())) else {
+        return Err(bad(cmd, format!("unknown printer `{printer}`")));
+    };
+    let copies = copies.clamp(1, MAX_COPIES) as u32;
+    (h.print)(&PrintJob { printer: &dev.name, paper, copies, title, pdf }).map_err(|e| bad(cmd, format!("{}: {e}", dev.name)))
+}
+
 /// Most user devices listed.
 const MAX_DEVICES: usize = 1000;
 
@@ -159,6 +222,7 @@ fn builtin(name: &str, output: PlotOutput, description: &str) -> PlotterConfig {
         orientation: Orientation::Landscape,
         default_paper,
         papers,
+        system: false,
     }
 }
 
@@ -185,10 +249,13 @@ fn user_devices() -> Vec<PlotterConfig> {
     out
 }
 
-/// Every device: the built-in ones first, then the user's.
+/// Every device: the built-in ones first, then the system printers, then the user's.
 pub fn devices() -> Vec<PlotterConfig> {
     let mut v = builtins();
-    v.extend(user_devices());
+    let printers = system_printers();
+    v.extend(user_devices().into_iter().filter(|u| !printers.iter().any(|p| p.name.eq_ignore_ascii_case(&u.name))));
+    let at = BUILTIN.len();
+    v.splice(at..at, printers);
     v
 }
 
@@ -206,6 +273,9 @@ pub fn find_device(name: &str) -> Option<PlotterConfig> {
     }
     if let Some((b, o, d)) = BUILTIN.iter().find(|(b, _, _)| b.eq_ignore_ascii_case(n)) {
         return Some(builtin(b, *o, d));
+    }
+    if let Some(p) = system_printers().into_iter().find(|p| p.name.eq_ignore_ascii_case(n)) {
+        return Some(p);
     }
     let st = store();
     let direct = cadcraft_doc::plotter_file_name(n).and_then(|f| PlotterConfig::from_file_text(&(st.read)(&f).ok()?).ok());
@@ -314,6 +384,13 @@ pub(crate) fn plot_options(s: &Session, p: &Value, cmd: &str) -> Result<Value> {
         None if layout.is_none() => dev.default_paper(),
         None => None,
     };
+    // A system printer gets the plotter's PDF, on the paper by its name on that printer
+    // (EXPORTPDF still writes the PDF).
+    if dev.system && cmd == "plot" {
+        o.insert("printer".into(), json!(dev.name));
+        let on = paper.map(|pp| pp.name.clone()).or_else(|| layout.as_ref().map(|pg| pg.paper.clone())).unwrap_or_default();
+        o.insert("printerPaper".into(), json!(on));
+    }
     if let Some(pp) = paper {
         o.remove("paper");
         o.insert("width".into(), json!(pp.width));

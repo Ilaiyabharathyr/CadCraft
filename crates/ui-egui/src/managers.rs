@@ -776,6 +776,8 @@ struct PlotState {
     page: cadcraft_doc::PageSetup,
     /// Plot area "window" corners in drawing units: [x1, y1, x2, y2].
     window: [f64; 4],
+    /// Copies a system printer prints.
+    copies: u32,
 }
 
 /// The page setup a plot of `target` starts from: the layout's, or model-space defaults (fitted
@@ -872,10 +874,12 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
         if ext.is_empty() {
             ext = cadcraft_geom::Bounds2::new(cadcraft_geom::Vec2::ZERO, cadcraft_geom::Vec2::new(12.0, 9.0));
         }
-        PlotState { generation, page: plot_page(d, &target), target, window: [ext.min.x, ext.min.y, ext.max.x, ext.max.y] }
+        PlotState { generation, page: plot_page(d, &target), target, window: [ext.min.x, ext.min.y, ext.max.x, ext.max.y], copies: 1 }
     });
     let model = st.target == "Model";
     let choices = PageChoices::new(ctx, d);
+    // A system printer prints the plot; other devices write a file.
+    let printer = choices.devices.iter().any(|dv| dv.system && dv.name.eq_ignore_ascii_case(&st.page.device));
     // Print... in a preview opened from here plots with these settings.
     let mut ok = temp::<bool>(ctx, PLOT_NOW) == Some(true);
     set_temp(ctx, PLOT_NOW, false);
@@ -903,6 +907,11 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                 };
                 if let Some((k, v)) = page_rows(ui, egui::Id::new(("plot", st.target.as_str())), &st.page, &rows, &choices) {
                     apply_page_change(&mut st.page, k, &v);
+                }
+                if printer {
+                    ui.label("Number of copies");
+                    ui.add(egui::DragValue::new(&mut st.copies).range(1..=999));
+                    ui.end_row();
                 }
                 if model && st.page.plot_area == "window" {
                     for (i, label) in [(0, "First corner"), (2, "Opposite corner")] {
@@ -968,7 +977,11 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     }
     if ok {
         let mut params = plot_params(&st, None);
-        if let Some(pick) = app.services.pick_save.as_ref() {
+        if printer {
+            if let Some(o) = params.as_object_mut() {
+                o.insert("copies".into(), json!(st.copies.max(1)));
+            }
+        } else if let Some(pick) = app.services.pick_save.as_ref() {
             let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
             let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
             let suggested = format!("{}-{}.{ext}", stem.unwrap_or_else(|| "Drawing".into()), st.target);
@@ -982,6 +995,7 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
         match app.run("plot", params) {
             Ok(r) => {
                 let msg = match r.get("path").and_then(Value::as_str) {
+                    _ if printer => format!("Sent {} to {} (job {})", st.target, st.page.device, r["job"].as_str().unwrap_or("?")),
                     Some(path) => format!("Plotted {} to {path}", st.target),
                     None => format!("Plotted {} ({} bytes of PDF; there is no file dialog here)", st.target, r["bytes"]),
                 };
@@ -1085,7 +1099,7 @@ mod plot_dialog_tests {
 
     fn state(target: &str) -> PlotState {
         let d = cadcraft_doc::Drawing::new_metric();
-        PlotState { generation: 0, page: plot_page(&d, target), target: target.into(), window: [0.0, 0.0, 10.0, 10.0] }
+        PlotState { generation: 0, page: plot_page(&d, target), target: target.into(), window: [0.0, 0.0, 10.0, 10.0], copies: 1 }
     }
 
     #[test]
