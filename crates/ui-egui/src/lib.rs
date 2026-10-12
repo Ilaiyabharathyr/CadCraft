@@ -195,7 +195,8 @@ pub struct CadApp {
     /// Caps the frame rate when presenting without vsync (see [`gpu::FrameCap`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub frame_cap: Option<gpu::FrameCap>,
-    /// Interface fonts installed, and whether with a CJK font (`None` until the first frame).
+    /// Interface fonts installed, and whether with a CJK font (`None` until the first frame). The CJK
+    /// font is loaded for the Chinese interface and while an open drawing's name needs it.
     fonts_cjk: Option<bool>,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
@@ -414,7 +415,7 @@ impl CadApp {
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        let cjk = self.language().starts_with("zh");
+        let cjk = self.language().starts_with("zh") || self.session.docs.iter().any(|d| theme::needs_cjk(&d.title));
         if self.fonts_cjk != Some(cjk) {
             theme::install_fonts(ctx, cjk);
             self.fonts_cjk = Some(cjk);
@@ -610,6 +611,36 @@ mod tests {
         let raw = egui::RawInput { system_theme: system, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| app.logic(ui.ctx()));
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn cjk_drawing_names_load_the_cjk_font() {
+        assert!(theme::needs_cjk("图纸A图纸_t3.dwg"));
+        assert!(theme::needs_cjk("図面.dxf"));
+        assert!(theme::needs_cjk("도면.dwg"));
+        assert!(!theme::needs_cjk("Drawing1"));
+        assert!(!theme::needs_cjk("Ünterlage_é.dwg"));
+        let mut a = app();
+        a.session.new_drawing(false);
+        let ctx = egui::Context::default();
+        frame(&mut a, &ctx, None);
+        assert_eq!(a.fonts_cjk, Some(false), "English interface, Latin name");
+        frame(&mut a, &ctx, None);
+        assert!(!ctx.fonts_mut(|f| f.has_glyphs(&theme::body(), "图纸")), "no CJK glyphs before a name needs them");
+        if let Some(d) = a.session.docs.first_mut() {
+            d.title = "图纸A图纸_t3.dwg".into();
+        }
+        frame(&mut a, &ctx, None);
+        assert_eq!(a.fonts_cjk, Some(true), "a Chinese drawing name needs the CJK font");
+        if theme::cjk_font().is_some() {
+            frame(&mut a, &ctx, None);
+            assert!(ctx.fonts_mut(|f| f.has_glyphs(&theme::body(), "图纸")), "the tab shows the characters, not boxes");
+        }
+        if let Some(d) = a.session.docs.first_mut() {
+            d.title = "Drawing1".into();
+        }
+        frame(&mut a, &ctx, None);
+        assert_eq!(a.fonts_cjk, Some(false));
     }
 
     #[test]

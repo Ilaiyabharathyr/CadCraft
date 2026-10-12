@@ -388,6 +388,26 @@ pub fn cjk_font() -> Option<&'static std::path::Path> {
     None
 }
 
+/// Whether `text` has Chinese, Japanese or Korean characters that only a CJK font can show.
+pub fn needs_cjk(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(
+            u32::from(c),
+            0x1100..=0x11FF
+                | 0x2E80..=0x2FDF
+                | 0x3000..=0x303F
+                | 0x3040..=0x30FF
+                | 0x3100..=0x31FF
+                | 0x3400..=0x4DBF
+                | 0x4E00..=0x9FFF
+                | 0xAC00..=0xD7AF
+                | 0xF900..=0xFAFF
+                | 0xFF00..=0xFFEF
+                | 0x20000..=0x3FFFF
+        )
+    })
+}
+
 /// Whether the interface can show `language`: Chinese needs an installed CJK font.
 pub fn can_show(language: &str) -> bool {
     !language.starts_with("zh") || cjk_font().is_some()
