@@ -7,6 +7,8 @@ use cadcraft_doc::{Drawing, EntityKind, Handle};
 use cadcraft_engine::{HatchPicks, PickMode};
 use serde_json::{Value, json};
 
+use crate::CadApp;
+
 /// The gradient shapes the dialog offers; each can also be inverted (`INV` + name).
 pub(crate) const SHAPES: [&str; 5] = ["LINEAR", "CYLINDER", "CURVED", "SPHERICAL", "HEMISPHERICAL"];
 
@@ -248,6 +250,53 @@ pub fn merge_picks(st: &mut HatchDlgState, picks: HatchPicks) {
     st.error = None;
 }
 
+/// Hide the dialog and run HATCHPICK in `mode`; [`resume`] brings the dialog back.
+pub fn start_pick(app: &mut CadApp, mode: PickMode) {
+    let Some(st) = app.hatch_dlg.as_mut() else { return };
+    st.picking = Some(mode);
+    st.error = None;
+    app.session.hatch_picks = None;
+    app.ui.dialog = None;
+    app.start("hatchpick");
+    let kw = match mode {
+        PickMode::Points => "Points",
+        PickMode::Objects => "Objects",
+        PickMode::Origin => "oRigin",
+        PickMode::Hatch => "Hatch",
+    };
+    if app.session.running.is_some()
+        && let Err(e) = app.session.input(cadcraft_engine::Input::Keyword(kw.into()))
+    {
+        app.session.echo(e.to_string());
+    }
+}
+
+/// Every frame: once a HATCHPICK the dialog started has ended, take its picks and bring the
+/// dialog back (unchanged when the pick was cancelled). A different drawing by then drops the
+/// dialog and its picks; a Hatch pick that found none closes it.
+pub fn resume(app: &mut CadApp) {
+    let Some(mode) = app.hatch_dlg.as_ref().and_then(|s| s.picking) else { return };
+    if app.session.running.is_some() {
+        return;
+    }
+    let picks = app.session.hatch_picks.take();
+    let uid = app.session.state().ok().map(|s| s.uid);
+    let Some(mut st) = app.hatch_dlg.take() else { return };
+    if uid != Some(st.uid) {
+        return;
+    }
+    st.picking = None;
+    if mode == PickMode::Hatch {
+        let next = picks.and_then(|p| app.session.doc().ok().and_then(|d| edit_state(d, st.uid, p.handles)));
+        let Some(next) = next else { return };
+        st = next;
+    } else if let Some(p) = picks {
+        merge_picks(&mut st, p);
+    }
+    app.hatch_dlg = Some(st);
+    app.ui.dialog = Some("hatch".into());
+}
+
 #[cfg(test)]
 mod tests {
     use cadcraft_color::Color;
@@ -262,6 +311,82 @@ mod tests {
         let mut s = Session::new();
         let r = s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
         (s, Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap())
+    }
+
+    use crate::{CadApp, Services};
+
+    fn app_with_rect() -> (CadApp, Handle) {
+        let (s, r) = session_with_rect();
+        (CadApp::new(s, Services::default()), r)
+    }
+
+    fn open_create(app: &mut CadApp) {
+        let st = app.session.state().unwrap();
+        app.hatch_dlg = Some(create_state(&st.doc, st.uid, false));
+        app.ui.dialog = Some("hatch".into());
+    }
+
+    #[test]
+    fn pick_points_hides_the_dialog_and_brings_it_back_with_the_points() {
+        let (mut app, _) = app_with_rect();
+        open_create(&mut app);
+        start_pick(&mut app, PickMode::Points);
+        assert_eq!(app.ui.dialog, None, "hidden while picking");
+        assert!(app.session.prompt_text().contains("Pick internal point"));
+        resume(&mut app);
+        assert_eq!(app.ui.dialog, None, "still picking");
+        app.session.input(cadcraft_engine::Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+        app.session.input(cadcraft_engine::Input::Enter).unwrap();
+        resume(&mut app);
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        let st = app.hatch_dlg.clone().unwrap();
+        assert_eq!((st.points, st.picking), (vec![[5.0, 5.0]], None));
+    }
+
+    #[test]
+    fn escape_brings_the_dialog_back_unchanged() {
+        let (mut app, r) = app_with_rect();
+        open_create(&mut app);
+        if let Some(st) = app.hatch_dlg.as_mut() {
+            st.handles.push(r);
+        }
+        let before = app.hatch_dlg.clone();
+        start_pick(&mut app, PickMode::Points);
+        app.session.input(cadcraft_engine::Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+        app.session.cancel();
+        resume(&mut app);
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        assert_eq!(app.hatch_dlg, before);
+    }
+
+    #[test]
+    fn switching_drawings_drops_the_dialog() {
+        let (mut app, _) = app_with_rect();
+        open_create(&mut app);
+        start_pick(&mut app, PickMode::Points);
+        app.session.input(cadcraft_engine::Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+        app.session.input(cadcraft_engine::Input::Enter).unwrap();
+        app.session.new_drawing(false);
+        resume(&mut app);
+        assert_eq!(app.ui.dialog, None);
+        assert_eq!(app.hatch_dlg, None);
+    }
+
+    #[test]
+    fn hatch_pick_opens_edit_mode_or_nothing() {
+        let (mut app, _) = app_with_rect();
+        let hx = app.session.execute("hatch", &json!({ "points": [[5, 5]] })).unwrap()["handle"].as_str().unwrap().to_string();
+        open_create(&mut app);
+        start_pick(&mut app, PickMode::Hatch);
+        app.session.input(cadcraft_engine::Input::Pick(vec![Handle::parse_hex(&hx).unwrap()])).unwrap();
+        resume(&mut app);
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        assert_eq!(app.hatch_dlg.clone().unwrap().edit, vec![Handle::parse_hex(&hx).unwrap()]);
+        // Nothing picked: no dialog.
+        start_pick(&mut app, PickMode::Hatch);
+        app.session.input(cadcraft_engine::Input::Enter).unwrap();
+        resume(&mut app);
+        assert_eq!((app.ui.dialog.clone(), app.hatch_dlg.clone()), (None, None));
     }
 
     #[test]
