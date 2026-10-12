@@ -253,8 +253,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
         return;
     }
     let events = ctx.input(|i| i.events.clone());
-    let selection = app.session.selection();
-    app.cmd.watch_selection(&selection);
+    app.cmd.watch_selection(app.session.selection_ref());
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     let text_prompt = app.session.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number);
     options_still_fit(app);
@@ -313,7 +312,7 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
                         press,
                         &app.cmd.buffer,
                         app.session.running.is_some(),
-                        !app.session.selection().is_empty(),
+                        !app.session.selection_ref().is_empty(),
                         app.cmd.typed_since_selection,
                     );
                     if erase {

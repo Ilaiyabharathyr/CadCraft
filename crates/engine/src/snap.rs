@@ -245,15 +245,29 @@ fn osnap_in_with_prims(
     // meet (lines extended, arcs as full circles: in 2D, the "apparent" crossing of objects
     // that don't reach each other).
     if osmode & (mode::INT | mode::APP) != 0 {
-        let segs: Vec<Vec<Segment>> = near_prims.iter().take(200).map(prim_segments).collect();
+        let probe = Bounds2::new(cursor, cursor).expand(aperture);
+        let segs: Vec<Vec<(Segment, bool)>> = near_prims
+            .iter()
+            .take(200)
+            .map(|p| {
+                let extended = osmode & mode::APP != 0 && extendable(p);
+                prim_segments(p)
+                    .into_iter()
+                    .filter_map(|s| {
+                        let nearby = intersection_near(&s, &probe);
+                        (nearby || extended).then_some((s, nearby))
+                    })
+                    .collect()
+            })
+            .collect();
         let real = if osmode & mode::INT != 0 { mode::INT } else { mode::APP };
         for i in 0..segs.len() {
             for j in i + 1..segs.len() {
                 // Extending a tessellated ellipse or spline chord means nothing.
                 let extend = osmode & mode::APP != 0 && [i, j].iter().all(|k| near_prims.get(*k).is_some_and(extendable));
-                for a in segs.get(i).into_iter().flatten() {
-                    for b in segs.get(j).into_iter().flatten() {
-                        for x in intersect_ext(&fix_circle(a), &fix_circle(b), false) {
+                for (a, near_a) in segs.get(i).into_iter().flatten() {
+                    for (b, near_b) in segs.get(j).into_iter().flatten() {
+                        for x in if *near_a && *near_b { intersect_ext(&fix_circle(a), &fix_circle(b), false) } else { Vec::new() } {
                             if x.dist(cursor) <= aperture {
                                 cands.push((real, x));
                             }
@@ -272,6 +286,24 @@ fn osnap_in_with_prims(
     }
     let hit = finish(cands, &near_prims, cursor, aperture, osmode, base, deferred, clip);
     Some((hit, near_prims))
+}
+
+/// Conservative finite-intersection broad phase. Parameter tolerances can put a crossing
+/// just beyond a segment endpoint; large coordinates need additional rounding slack.
+fn intersection_near(segment: &Segment, probe: &Bounds2) -> bool {
+    let bounds = match segment {
+        Segment::Line(l) => Bounds2::new(l.a, l.b),
+        Segment::Arc { arc, .. } => {
+            Bounds2::new(arc.center - Vec2::new(arc.radius.abs(), arc.radius.abs()), arc.center + Vec2::new(arc.radius.abs(), arc.radius.abs()))
+        }
+    };
+    let scale = bounds.min.x.abs().max(bounds.min.y.abs()).max(bounds.max.x.abs()).max(bounds.max.y.abs());
+    let slack = (bounds.width().abs() + bounds.height().abs()) * 2e-9 + scale * f64::EPSILON * 128.0 + 1e-12;
+    if !bounds.min.is_finite() || !bounds.max.is_finite() || !probe.min.is_finite() || !probe.max.is_finite() || !slack.is_finite() {
+        return true;
+    }
+    let expanded = bounds.expand(slack);
+    !expanded.min.is_finite() || !expanded.max.is_finite() || expanded.intersects(probe)
 }
 
 /// Whether a primitive has a meaningful extension (a line, an arc, a circle, an xline or ray).

@@ -577,12 +577,12 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.painter().text(half.center(), egui::Align2::CENTER_CENTER, crate::tl!("All"), crate::theme::small(), t.text);
     ui.painter().text(my.center(), egui::Align2::CENTER_CENTER, crate::tl!("My"), crate::theme::small(), t.text_faint);
     ui.interact(my, ui.id().with("prop_my"), Sense::hover()).on_hover_text(crate::tl!("My properties: not available yet"));
-    let sel = app.session.selection();
+    let sel = app.canvas.selection_snapshot(&app.session);
     let pickadd = app.session.settings.pickadd;
     let Ok(d) = app.session.doc() else { return };
     // Selected handles by type, in first-seen order.
     let mut types: Vec<(&'static str, Vec<String>)> = Vec::new();
-    for h in &sel {
+    for h in sel.iter() {
         if let Some(e) = d.entity(*h) {
             let n = e.kind.type_name();
             match types.iter_mut().find(|(t, _)| *t == n) {
@@ -641,7 +641,7 @@ fn properties_header(app: &mut CadApp, ui: &mut egui::Ui) {
 pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     properties_header(app, ui);
-    let sel = app.session.selection();
+    let sel = app.canvas.selection_snapshot(&app.session);
     let Ok(d) = app.session.doc() else { return };
     ui.add_space(4.0);
     let h = &d.header;

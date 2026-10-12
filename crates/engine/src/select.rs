@@ -6,6 +6,8 @@ use cadcraft_geom::{Bounds2, Line, Vec2, point_in_polygon};
 use crate::spatial::{self, SpatialIndex};
 use crate::{Accept, Prompt};
 
+mod cache;
+
 /// Polylines approximating an entity for hit testing, tessellated at `tol`.
 pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
     match &e.kind {
@@ -86,6 +88,9 @@ fn dist_to_polyline(pts: &[Vec2], p: Vec2) -> f64 {
 
 /// Distance from `p` to the entity (0 inside text boxes and solid fills).
 pub fn entity_distance(d: &Drawing, e: &Entity, p: Vec2, tol: f64) -> f64 {
+    if let Some(distance) = cache::distance(d, e, p, tol) {
+        return distance;
+    }
     let polys = hit_polylines(d, e, tol);
     let mut best = polys.iter().map(|pl| dist_to_polyline(pl, p)).fold(f64::INFINITY, f64::min);
     let filled = matches!(e.kind, EntityKind::Text(_) | EntityKind::MText(_) | EntityKind::AttDef(_) | EntityKind::Solid(_) | EntityKind::Table(_))

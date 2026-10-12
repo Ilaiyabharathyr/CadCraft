@@ -73,7 +73,7 @@ pub fn qselect_dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             .unwrap_or(Value::Null);
         st.info_key = Some(want);
     }
-    let has_sel = !app.session.selection().is_empty();
+    let has_sel = !app.session.selection_ref().is_empty();
     let mut run: Option<Value> = None;
     let mut close = false;
     egui::Window::new(crate::tl!("Quick Select"))
@@ -248,7 +248,7 @@ fn ro_row(ui: &mut egui::Ui, label: &str, v: String) {
 /// The Quick Properties palette, near where the selection was made.
 pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
     let sid = egui::Id::new("qp_state");
-    let sel = app.session.selection();
+    let sel = app.canvas.selection_snapshot(&app.session);
     let active = app.session.settings.qpmode
         && !sel.is_empty()
         && app.session.running.is_none()
@@ -261,13 +261,13 @@ pub fn quick_properties(app: &mut CadApp, ctx: &egui::Context) {
         }
         return;
     }
-    if st.sel != sel || st.at.is_none() {
+    if st.sel.as_slice() != sel.as_slice() || st.at.is_none() {
         let hp = ctx.input(|i| i.pointer.hover_pos());
         let r = app.canvas.rect.unwrap_or(egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
         let p = hp.filter(|p| r.contains(*p)).unwrap_or(r.center()) + vec2(28.0, 28.0);
         // Keep it on the canvas.
         let p = Pos2::new(p.x.min(r.right() - 270.0).max(r.left()), p.y.min(r.bottom() - 200.0).max(r.top()));
-        st.sel = sel.clone();
+        st.sel = sel.as_ref().clone();
         st.at = Some(p);
     }
     let Some(at) = st.at else { return };

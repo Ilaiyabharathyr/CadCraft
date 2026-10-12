@@ -319,10 +319,11 @@ fn main() -> eframe::Result {
             if sample {
                 let _ = app.run("ui.sample", serde_json::json!({}));
             }
+            app.enable_background_open();
             for f in &files {
                 app.open_path(f);
             }
-            if app.session.docs.is_empty() {
+            if app.session.docs.is_empty() && files.is_empty() {
                 app.session.new_drawing(false);
             }
             let ctx = cc.egui_ctx.clone();

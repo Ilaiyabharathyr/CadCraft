@@ -42,6 +42,8 @@ pub mod viewcube;
 pub mod vpscale;
 
 pub mod exchange;
+#[cfg(not(target_arch = "wasm32"))]
+mod opening;
 
 use std::sync::mpsc::Receiver;
 
@@ -216,6 +218,10 @@ pub struct CadApp {
     pub gpu_faults: std::sync::Arc<gpu::GpuFaults>,
     /// The notice shown after one (see [`autosave::gpu_notice`]).
     pub gpu_notice: Option<autosave::GpuNotice>,
+    #[cfg(not(target_arch = "wasm32"))]
+    background_open: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    opening: Option<opening::Worker>,
 }
 
 impl CadApp {
@@ -249,6 +255,10 @@ impl CadApp {
             recovery: autosave::Recovery::default(),
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            background_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            opening: None,
         }
     }
 
@@ -359,6 +369,11 @@ impl CadApp {
     }
 
     pub fn open_path(&mut self, path: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.background_open {
+            self.queue_open(path);
+            return;
+        }
         let r = self.run("open", json!({ "path": path }));
         self.opened(r);
     }
@@ -410,6 +425,8 @@ impl CadApp {
 
     /// Per-frame logic before layout.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.open_tick(ctx);
         // Closing the window (title bar, File ▸ Exit, Cmd+Q) with unsaved changes asks first.
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
