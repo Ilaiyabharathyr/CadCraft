@@ -1,6 +1,6 @@
 //! Tablet controls around the same drawing engine and canvas used on the desktop.
 
-use egui::{Button, vec2};
+use egui::{Button, Modifiers, Pos2, vec2};
 use serde_json::json;
 
 use crate::{
@@ -12,6 +12,7 @@ use crate::{
 /// The Android host opts in; an ordinary desktop session keeps its existing layout.
 pub fn configure(app: &mut CadApp) {
     app.tablet_mode = true;
+    app.ui.system_cursor = true;
     app.ui.show_toolbar = false;
     app.ui.show_toolsets = false;
     app.ui.show_palettes = false;
@@ -20,6 +21,70 @@ pub fn configure(app: &mut CadApp) {
     app.ui.history_lines = 1;
     app.session.settings.pickbox = app.session.settings.pickbox.max(12.0);
     app.session.settings.aperture = app.session.settings.aperture.max(18.0);
+}
+
+/// Delay canvas picks until a tap is known to be single. Cancelling must not first place a
+/// point (which can finish a circle or add a polyline segment).
+#[derive(Default)]
+pub(crate) struct Taps {
+    pending: Option<Tap>,
+}
+
+struct Tap {
+    pos: Pos2,
+    modifiers: Modifiers,
+    time: f64,
+    doc: u64,
+    command: Option<String>,
+}
+
+pub(crate) enum TapAction {
+    None,
+    Pick(Pos2, Modifiers),
+    Cancel,
+}
+
+impl Taps {
+    pub(crate) fn update(
+        &mut self,
+        ctx: &egui::Context,
+        doc: u64,
+        command: Option<&str>,
+        click: Option<(Pos2, Modifiers)>,
+        double: bool,
+        clear: bool,
+    ) -> TapAction {
+        if clear {
+            self.pending = None;
+            return TapAction::None;
+        }
+        if self.pending.as_ref().is_some_and(|p| p.doc != doc || p.command.as_deref() != command) {
+            self.pending = None;
+        }
+        if double {
+            self.pending = None;
+            return TapAction::Cancel;
+        }
+        let time = ctx.input(|i| i.time);
+        if !time.is_finite() {
+            self.pending = None;
+            return TapAction::None;
+        }
+        let delay = ctx.options(|o| o.input_options.max_double_click_delay);
+        let delay = if delay.is_finite() { delay.clamp(0.05, 0.5) } else { 0.3 };
+        let expired = self.pending.as_ref().is_some_and(|p| time - p.time >= delay);
+        let previous = if click.is_some() || expired { self.pending.take() } else { None };
+        if let Some((pos, modifiers)) = click.filter(|(pos, _)| pos.is_finite()) {
+            self.pending = Some(Tap { pos, modifiers, time, doc, command: command.map(str::to_owned) });
+        }
+        if let Some(tap) = &self.pending {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64((delay - (time - tap.time)).clamp(0.0, 0.5)));
+        }
+        match previous {
+            Some(tap) => TapAction::Pick(tap.pos, tap.modifiers),
+            None => TapAction::None,
+        }
+    }
 }
 
 fn button(ui: &mut egui::Ui, text: &str) -> bool {

@@ -101,6 +101,7 @@ impl Shell {
             }
         }
         cadcraft_ui_egui::tablet::configure(&mut cad);
+        cc.egui_ctx.options_mut(|o| o.input_options.max_click_dist = 12.0);
         cadcraft_engine::autosave::set_savetime(1);
         cad.enable_autosave(&dir.join("autosave"));
         if let Some(rs) = &cc.wgpu_render_state {

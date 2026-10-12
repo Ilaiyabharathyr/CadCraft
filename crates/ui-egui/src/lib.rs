@@ -19,6 +19,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod docking;
+pub mod spacemouse;
 // The External References palette.
 pub mod xrefs;
 
@@ -78,6 +79,9 @@ pub struct UiState {
     /// "Drafting" or "Modeling".
     pub toolset_tab: String,
     pub collapsed_groups: Vec<String>,
+    /// Tools the user took out of the Tool Sets palette (command ids); each category's gear
+    /// menu puts them back.
+    pub hidden_tools: Vec<String>,
     pub properties_all: bool,
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
     pub in_window_menu: bool,
@@ -151,6 +155,7 @@ impl Default for UiState {
             system_cursor: std::env::var("CADCRAFT_SYSTEM_CURSOR").is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "off")),
             toolset_tab: "Drafting".into(),
             collapsed_groups: Vec::new(),
+            hidden_tools: Vec::new(),
             properties_all: true,
             in_window_menu: !cfg!(target_os = "macos"),
             start_tab: false,
@@ -182,6 +187,8 @@ pub struct CadApp {
     pub options: options::UiOptions,
     pub services: Services,
     pub canvas: canvas::CanvasState,
+    /// Desktop HID status and navigation preferences; the web host supplies no HID backend.
+    pub spacemouse: spacemouse::State,
     pub cmd: cmdline::CmdLine,
     pub status: Option<(String, f64)>,
     pub integrated_titlebar: bool,
@@ -222,6 +229,7 @@ impl CadApp {
             options: options::UiOptions::default(),
             services,
             canvas: canvas::CanvasState::default(),
+            spacemouse: spacemouse::State::default(),
             cmd: cmdline::CmdLine::default(),
             status: None,
             integrated_titlebar: false,
@@ -311,18 +319,24 @@ impl CadApp {
 
     /// Preferences kept across restarts, as JSON for the host's storage ([`PREFS_KEY`]).
     pub fn prefs_json(&self) -> String {
-        json!({
+        let mut prefs = json!({
             "theme": self.ui.theme.as_str(),
             "interfaceLanguage": self.ui.interface_language.code(),
             "saveFormat": self.ui.save_format.as_str(),
             "saveVersion": self.ui.save_version,
-        })
-        .to_string()
+        });
+        if self.spacemouse.settings != spacemouse::Settings::default() {
+            prefs["spacemouse"] = json!(self.spacemouse.settings);
+        }
+        prefs.to_string()
     }
 
     /// Restore preferences saved by [`Self::prefs_json`]; unknown or malformed values are ignored.
     pub fn load_prefs(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<Value>(json) else { return };
+        if let Some(prefs) = v.get("spacemouse") {
+            let _ = self.spacemouse.load_settings(prefs);
+        }
         if let Some(t) = v.get("theme").and_then(Value::as_str).and_then(theme::ThemePref::parse) {
             self.ui.theme = t;
         }

@@ -24,7 +24,14 @@ mkdir -p "$stage/classes" "$stage/dex" "$stage/res/mipmap-xxxhdpi" "$stage/lib"
 cp -R packaging/android/res/. "$stage/res/"
 cp assets/app-icon/cadcraft-256.png "$stage/res/mipmap-xxxhdpi/cadcraft.png"
 
-cargo ndk --platform 26 --target "$abi" --output-dir "$stage/lib" build --locked --lib -p cadcraft-android --profile android
+# winit 0.30.13 drops Android HOVER_* motion events. Patch its locked source in a
+# disposable build workspace until upstream exposes those events to the tablet UI.
+cargo fetch --locked --target "$target"
+workspace="$(python3 packaging/android/prepare_winit.py "$stage")"
+(
+    cd "$workspace"
+    cargo ndk --platform 26 --target "$abi" --output-dir "$stage/lib" build --locked --lib -p cadcraft-android --profile android
+)
 java --module jdk.compiler/com.sun.tools.javac.Main --release 8 -classpath "$android_jar" -d "$stage/classes" \
     packaging/android/java/io/github/storytold/cadcraft/MainActivity.java
 mapfile -t classes < <(find "$stage/classes" -name '*.class' -print)
