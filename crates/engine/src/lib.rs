@@ -656,6 +656,18 @@ impl Session {
         self.active
     }
 
+    /// Install a drawing decoded by a host's background OPEN worker. Cancel while the old
+    /// drawing is active: an interactive command's rollback belongs to that drawing.
+    pub fn open_prepared(&mut self, state: DocState) -> usize {
+        self.cancel();
+        self.select_mode = None;
+        self.select_single = false;
+        self.tracking.clear();
+        self.docs.push(state);
+        self.active = self.docs.len().saturating_sub(1);
+        self.active
+    }
+
     pub fn state(&self) -> Result<&DocState> {
         self.docs.get(self.active).ok_or(EngineError::NoDocument)
     }
@@ -687,7 +699,11 @@ impl Session {
         self.state().map(|s| s.space.clone()).unwrap_or_default()
     }
     pub fn selection(&self) -> Vec<Handle> {
-        self.state().map(|s| s.selection.clone()).unwrap_or_default()
+        self.selection_ref().to_vec()
+    }
+    /// Read the active selection without allocating a copy.
+    pub fn selection_ref(&self) -> &[Handle] {
+        self.state().map(|s| s.selection.as_slice()).unwrap_or(&[])
     }
     pub fn set_selection(&mut self, sel: Vec<Handle>) {
         if let Ok(st) = self.state_mut() {

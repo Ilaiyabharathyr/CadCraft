@@ -91,8 +91,7 @@ pub fn target(app: &CadApp) -> Option<(Handle, Viewport)> {
     if let Some(a) = st.active_viewport() {
         return Some(a);
     }
-    let sel = app.session.selection();
-    let [h] = sel.as_slice() else { return None };
+    let [h] = app.session.selection_ref() else { return None };
     match &st.doc.space(&st.space)?.get(*h)?.kind {
         EntityKind::Viewport(v) if v.id != 1 => Some((*h, v.clone())),
         _ => None,

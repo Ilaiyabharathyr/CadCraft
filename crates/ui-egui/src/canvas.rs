@@ -8,6 +8,8 @@ use cadcraft_engine::snap::{self, SnapHit};
 use cadcraft_geom::{Bounds2, Vec2};
 use cadcraft_render::{DisplayList, Kind};
 use egui::{Color32, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use crate::CadApp;
 use crate::theme::Tokens;
@@ -38,7 +40,19 @@ impl Xf {
 #[derive(Default)]
 pub struct CanvasState {
     pub list: Option<DisplayList>,
-    key: (u64, u64, i32, i32, bool, usize),
+    key: (u64, u64, i32, i32, bool, usize, u64),
+    space: cadcraft_doc::Space,
+    source: Option<Arc<cadcraft_doc::Drawing>>,
+    render_cache: cadcraft_render::screen::Cache,
+    parts: Vec<cadcraft_render::screen::Part>,
+    scenes: VecDeque<Scene>,
+    part_meshes: HashMap<u64, Arc<crate::gpu::MeshData>>,
+    selection: Selection,
+    pub rebuilt_parts: usize,
+    pub reused_parts: usize,
+    /// CPU mesh bytes rebuilt for the last drawing upload. Previously uploaded parts can also
+    /// remain resident on the GPU when the CPU scene cache has evicted them.
+    pub mesh_bytes: usize,
     /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
     /// rebuilds the list.
     window: Option<Bounds2>,
@@ -107,6 +121,50 @@ pub struct CanvasState {
     pub snap_cycle: Option<SnapCycle>,
 }
 
+struct Scene {
+    key: (u64, u64, i32, i32, bool, usize, u64),
+    space: cadcraft_doc::Space,
+    source: Arc<cadcraft_doc::Drawing>,
+    list: DisplayList,
+    window: Option<Bounds2>,
+    cache: cadcraft_render::screen::Cache,
+    parts: Vec<cadcraft_render::screen::Part>,
+}
+
+impl Scene {
+    fn bytes(&self) -> usize {
+        cadcraft_render::screen::bytes(&self.list).saturating_add(self.cache.bytes())
+    }
+}
+
+#[derive(Default)]
+struct Selection {
+    uid: u64,
+    handles: Arc<Vec<Handle>>,
+    serial: u64,
+}
+
+impl Selection {
+    fn snapshot(&mut self, session: &cadcraft_engine::Session) -> (Arc<Vec<Handle>>, u64) {
+        let uid = session.state().map_or(0, |st| st.uid);
+        let handles = session.selection_ref();
+        // The public engine selection may also be edited directly. Compare it, but allocate
+        // and hash its contents only when they change.
+        if self.uid != uid || self.handles.as_slice() != handles {
+            self.uid = uid;
+            self.handles = Arc::new(handles.to_vec());
+            self.serial = self.serial.wrapping_add(1);
+        }
+        (self.handles.clone(), self.serial)
+    }
+}
+
+impl CanvasState {
+    pub(crate) fn selection_snapshot(&mut self, session: &cadcraft_engine::Session) -> Arc<Vec<Handle>> {
+        self.selection.snapshot(session).0
+    }
+}
+
 /// Tab cycling through the candidate snaps under the cursor: where it started and which
 /// candidate shows. Moving the cursor out of the aperture ends it.
 #[derive(Clone, Copy, Debug)]
@@ -169,7 +227,52 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
     let band = |px: f64| px.max(1e-300).log2().floor() as i32;
     // Hatch level of detail follows the finest view showing the list.
     let lod_band = views.iter().map(|v| band(v.1)).fold(band(px), i32::min);
-    let key = (st.uid, st.revision, band(px), lod_band, app.session.settings.lwdisplay, std::sync::Arc::as_ptr(&st.doc) as usize);
+    let key = (
+        st.uid,
+        st.revision,
+        band(px),
+        lod_band,
+        app.session.settings.lwdisplay,
+        Arc::as_ptr(&st.doc) as usize,
+        cadcraft_render::screen::font_revision(),
+    );
+    app.canvas.scenes.retain(|s| app.session.docs.iter().any(|d| d.uid == s.key.0));
+    if app.canvas.key.0 != st.uid || app.canvas.space != st.space {
+        if let (Some(list), Some(source)) = (app.canvas.list.take(), app.canvas.source.take()) {
+            app.canvas.scenes.push_back(Scene {
+                key: app.canvas.key,
+                space: app.canvas.space.clone(),
+                source,
+                list,
+                window: app.canvas.window,
+                cache: std::mem::take(&mut app.canvas.render_cache),
+                parts: std::mem::take(&mut app.canvas.parts),
+            });
+        }
+        if let Some(at) = app.canvas.scenes.iter().position(|s| s.key.0 == st.uid && s.space == st.space)
+            && let Some(scene) = app.canvas.scenes.remove(at)
+        {
+            app.canvas.key = scene.key;
+            app.canvas.source = Some(scene.source);
+            app.canvas.list = Some(scene.list);
+            app.canvas.window = scene.window;
+            app.canvas.render_cache = scene.cache;
+            app.canvas.parts = scene.parts;
+            app.canvas.rebuilt_parts = 0;
+            app.canvas.reused_parts = app.canvas.parts.len();
+            app.canvas.build_ms = 0.0;
+        }
+        app.canvas.space = st.space.clone();
+        app.canvas.mesh_key = None;
+        app.canvas.hover_at = None;
+        app.canvas.hover = None;
+        app.canvas.prim_index = PrimIndex::default();
+        app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
+        // Retain a few recent tabs, with one total geometry budget rather than one per tab.
+        while app.canvas.scenes.len() > 3 || app.canvas.scenes.iter().map(Scene::bytes).sum::<usize>() > 64 << 20 {
+            app.canvas.scenes.pop_front();
+        }
+    }
     let visible = views.iter().fold(Bounds2::EMPTY, |acc, v| acc.union(&v.0));
     let inside = app.canvas.window.is_none_or(|w| visible.is_empty() || w.contains_box(&visible));
     if app.canvas.list.is_some() && app.canvas.key == key && inside {
@@ -186,10 +289,15 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
         lineweights: app.session.settings.lwdisplay,
         view_height: st.paper_view().height,
         plot_style_table: None,
-        view: build_window(views),
+        view: if inside && app.canvas.list.is_some() { app.canvas.window } else { build_window(views) },
     };
     let space = st.space.clone();
-    app.canvas.list = Some(cadcraft_render::build(&st.doc, &space, &opts));
+    let built = app.canvas.render_cache.build(&st.doc, &space, &opts);
+    app.canvas.rebuilt_parts = built.rebuilt;
+    app.canvas.reused_parts = built.reused;
+    app.canvas.parts = built.parts;
+    app.canvas.list = Some(built.list);
+    app.canvas.source = Some(st.doc.clone());
     app.canvas.key = key;
     app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
@@ -383,6 +491,7 @@ fn draw_highlight_gpu(
     list_gen: u64,
     prim_index: &mut PrimIndex,
     sel: &[Handle],
+    selection_serial: u64,
     color: Color32,
     width: f32,
     hl: (&mut Option<u64>, &crate::gpu::MeshSlot, &mut Vec2, &mut Vec<usize>),
@@ -392,7 +501,7 @@ fn draw_highlight_gpu(
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (list_gen, sel, origin.x.to_bits(), origin.y.to_bits(), color.to_array(), width.to_bits()).hash(&mut h);
+        (list_gen, selection_serial, origin.x.to_bits(), origin.y.to_bits(), color.to_array(), width.to_bits()).hash(&mut h);
         h.finish()
     };
     if *hl_key != Some(key) {
@@ -487,7 +596,10 @@ fn draw_drag_gpu(
 /// the infinite lines, which are clipped to the view on the CPU every frame.
 fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdisplay: bool) {
     let Some(list) = &c.list else { return };
-    let origin = crate::gpu::choose_origin(&list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
+    // A screen window stays fixed through small edits. Using its centre keeps unchanged part
+    // buffers valid even when an edit changes the drawing's extents.
+    let bounds = c.window.as_ref().filter(|_| !c.parts.is_empty()).unwrap_or(&list.bounds);
+    let origin = crate::gpu::choose_origin(bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -496,7 +608,30 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
     };
     if c.mesh_key != Some(key) {
         let t0 = crate::now_ms();
-        let mesh = crate::gpu::build_mesh(list, origin, bg, lwdisplay);
+        let mesh = if c.parts.is_empty() {
+            let mesh = crate::gpu::build_mesh(list, origin, bg, lwdisplay);
+            c.mesh_bytes = mesh.bytes();
+            mesh
+        } else {
+            let mut next = HashMap::new();
+            let mut mesh = crate::gpu::MeshData::default();
+            c.mesh_bytes = 0;
+            for part in &c.parts {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (part.id, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+                let id = h.finish();
+                let data = c.part_meshes.get(&id).cloned().unwrap_or_else(|| {
+                    let data = Arc::new(crate::gpu::build_mesh(&part.list, origin, bg, lwdisplay));
+                    c.mesh_bytes = c.mesh_bytes.saturating_add(data.bytes());
+                    data
+                });
+                next.insert(id, data.clone());
+                mesh.parts.push((id, data));
+            }
+            c.part_meshes = if next.values().map(|m| m.bytes()).sum::<usize>() <= 32 << 20 { next } else { HashMap::new() };
+            mesh
+        };
         if let Ok(mut slot) = c.mesh_slot.lock() {
             *slot = Some(mesh);
         }
@@ -1073,7 +1208,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())
         }
     };
-    let sel = app.session.selection();
+    let (sel, selection_serial) = app.canvas.selection.snapshot(&app.session);
     if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {
@@ -1097,18 +1232,26 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
         if let Ok(st) = app.session.state() {
-            let mut hs = sel.clone();
-            hs.extend(app.canvas.hover.filter(|h| !sel.contains(h)));
-            let ents: Vec<_> = hs.iter().filter_map(|h| st.doc.model.get(*h)).map(|e| e.as_ref()).collect();
-            if !ents.is_empty() {
+            let hover = app.canvas.hover.filter(|h| !sel.contains(h));
+            if !sel.is_empty() || hover.is_some() {
                 let tolerance = viewport_highlight_tolerance(scale);
                 let key = {
                     use std::hash::{Hash, Hasher};
                     let mut h = std::collections::hash_map::DefaultHasher::new();
-                    (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, tolerance.to_bits(), &hs).hash(&mut h);
+                    (
+                        st.uid,
+                        st.revision,
+                        Arc::as_ptr(&st.doc) as usize,
+                        tolerance.to_bits(),
+                        selection_serial,
+                        hover,
+                        cadcraft_render::screen::font_revision(),
+                    )
+                        .hash(&mut h);
                     h.finish()
                 };
                 if app.canvas.vp_hl.as_ref().is_none_or(|(k, _)| *k != key) {
+                    let ents = sel.iter().copied().chain(hover).filter_map(|h| st.doc.model.get(h)).map(|e| e.as_ref());
                     let built = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance, ..Default::default() });
                     app.canvas.vp_hl = Some((key, built));
                 }
@@ -1130,7 +1273,18 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &[h]), t.hover, 2.0, false);
         }
         if gpu.is_some() && !sel.is_empty() {
-            draw_highlight_gpu(&painter, &xf, list, *list_gen, prim_index, &sel, t.selection, 1.5, (hl_key, hl_slot, hl_origin, &mut *hl_infinite));
+            draw_highlight_gpu(
+                &painter,
+                &xf,
+                list,
+                *list_gen,
+                prim_index,
+                &sel,
+                selection_serial,
+                t.selection,
+                1.5,
+                (hl_key, hl_slot, hl_origin, &mut *hl_infinite),
+            );
             draw_highlight(&painter, &xf, list, hl_infinite, t.selection, 1.5, true);
         } else {
             draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &sel), t.selection, 1.5, true);
@@ -1725,7 +1879,7 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
     let hp = hover?;
     let st = app.session.state().ok()?;
     let gs = app.session.settings.gripsize as f32 + 3.0;
-    for h in app.session.selection().iter().take(200) {
+    for h in app.session.selection_ref().iter().take(200) {
         let e = st.doc.entity(*h)?;
         if st.doc.layer(&e.common.layer).is_some_and(|l| l.locked) {
             continue;
