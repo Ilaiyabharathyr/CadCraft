@@ -73,7 +73,7 @@ fn render(app: &mut CadApp, ctx: &egui::Context) -> Result<(TextureHandle, Strin
     Ok((tex, info))
 }
 
-/// The Plot Preview window: the sheet as it plots, with Print and Close.
+/// The Plot Preview window: the sheet as it plots, with Plot and Close.
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let id = egui::Id::new("cc_plot_preview");
     let generation = PREVIEW_GEN.load(Ordering::Relaxed);
@@ -86,7 +86,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             p
         }
     };
-    let (mut close, mut print) = (false, false);
+    let (mut close, mut plot) = (false, false);
     egui::Window::new("Plot Preview").open(open).collapsible(false).resizable(false).show(ctx, |ui| {
         match &preview.shown {
             Ok((tex, info)) => {
@@ -101,20 +101,20 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            print = ui.button("Print...").clicked();
+            plot = ui.button("Plot...").clicked();
             close = ui.button("Close").clicked();
         });
     });
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         close = true;
     }
-    if close || print {
+    if close || plot {
         *open = false;
     }
     if !*open {
         ctx.data_mut(|d| d.remove::<Preview>(id));
     }
-    if print {
+    if plot {
         app.start("plot");
     }
 }
