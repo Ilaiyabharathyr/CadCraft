@@ -497,6 +497,7 @@ impl CadApp {
             }
         });
         dialogs::show(self, ui.ctx());
+        palettes::patterns::prompt_picker(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
