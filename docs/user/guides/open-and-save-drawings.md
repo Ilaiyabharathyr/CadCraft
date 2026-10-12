@@ -19,11 +19,11 @@ CADCraft reads DXF from R12 through 2018, ASCII and binary, and DWG from R13 thr
 
 1. Choose **File ▸ Save** to save over the file you opened. The shortcut is Ctrl+S. A new drawing has no file yet, so this asks where to save.
 2. To save under a new name or in another format, choose **File ▸ Save As...**. The shortcut is Ctrl+Shift+S.
-3. In the dialog, pick the file type: **Drawing (DXF)** or **Drawing (DWG)**. A name ending in `.dwg` or `.dxf` selects that type first.
+3. In the dialog, pick the file type: **Drawing (DXF)** or **Drawing (DWG)**. The dialog also offers **SVG**, **PNG** and **PDF**, which export an image or PDF instead: see [Export a drawing to PDF, SVG or PNG](export-pdf-svg-png.md). A name ending in `.dwg` or `.dxf` selects that type first.
 
 A drawing you opened from a DWG file is saved to a file of the same type by default.
 
-CADCraft 0.5.0 saves DXF and DWG as R2000. DXF files are saved as ASCII.
+CADCraft 0.5.0 saves DXF files as R2000 (ASCII) and DWG files in the AutoCAD 2004 format.
 
 ## Choose the default format for new drawings
 

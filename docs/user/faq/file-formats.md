@@ -7,10 +7,10 @@ verified: 0.5.0
 
 CADCraft opens and saves DXF and DWG. It exports PDF, SVG and PNG.
 
-| Format | Open                               | Save         |
-|--------|------------------------------------|--------------|
-| DXF    | R12 through 2018, ASCII and binary | R2000, ASCII |
-| DWG    | R13 through 2018                   | R2000        |
+| Format | Open                               | Save                  |
+|--------|------------------------------------|-----------------------|
+| DXF    | R12 through 2018, ASCII and binary | R2000, ASCII          |
+| DWG    | R13 through 2018                   | AutoCAD 2004 (AC1018) |
 
 PDF, SVG and PNG are export formats. See [Export a drawing to PDF, SVG or PNG](../guides/export-pdf-svg-png.md).
 
