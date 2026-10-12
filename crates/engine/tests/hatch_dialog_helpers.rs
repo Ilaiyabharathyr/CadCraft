@@ -81,3 +81,57 @@ fn hatch_takes_points_and_objects_in_one_call() {
     let h = handle(&s.execute("hatch", &json!({ "points": [[5, 5]] })).unwrap());
     assert_eq!(hatch(&s, &h).loops.len(), 1);
 }
+
+use cadcraft_engine::doc::color::{Color, Rgb};
+
+#[test]
+fn hatchedit_turns_a_pattern_into_a_gradient_and_back() {
+    let mut s = Session::new();
+    rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    let h = handle(&s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "ANSI31" })).unwrap());
+    let depth = undo_depth(&s);
+    s.execute(
+        "hatchedit",
+        &json!({ "handles": [h], "gradient": { "name": "cylinder", "color1": "red", "color2": "255,128,0", "angle": 30, "centered": false } }),
+    )
+    .unwrap();
+    let x = hatch(&s, &h);
+    let g = x.gradient.clone().unwrap();
+    assert_eq!((g.name.as_str(), g.color1, g.color2, g.centered), ("CYLINDER", Color::Index(1), Color::True(Rgb(255, 128, 0)), false));
+    assert!((g.angle - 30f64.to_radians()).abs() < 1e-12);
+    assert!(x.solid);
+    assert_eq!(x.pattern, "SOLID");
+    assert_eq!(undo_depth(&s), depth + 1, "one undo step");
+    // Only the fields given change.
+    s.execute("hatchedit", &json!({ "handles": [h], "gradient": { "color2": "3" } })).unwrap();
+    let g = hatch(&s, &h).gradient.unwrap();
+    assert_eq!((g.name.as_str(), g.color1, g.color2), ("CYLINDER", Color::Index(1), Color::Index(3)));
+    // A pattern turns it back.
+    s.execute("hatchedit", &json!({ "handles": [h], "pattern": "ANSI31" })).unwrap();
+    let x = hatch(&s, &h);
+    assert!(x.gradient.is_none());
+    assert!(!x.solid);
+    s.undo().unwrap();
+    assert!(hatch(&s, &h).gradient.is_some());
+}
+
+#[test]
+fn hatchedit_refuses_a_bad_gradient_and_changes_nothing() {
+    let mut s = Session::new();
+    rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    let h = handle(&s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "ANSI31" })).unwrap());
+    let before = hatch(&s, &h);
+    for bad in [
+        json!("x"),
+        json!({ "name": "RAINBOW" }),
+        json!({ "name": 5 }),
+        json!({ "color1": "nope" }),
+        json!({ "angle": "x" }),
+        json!({ "centered": 1 }),
+    ] {
+        assert!(s.execute("hatchedit", &json!({ "handles": [h], "gradient": bad })).is_err(), "{bad}");
+        assert_eq!(hatch(&s, &h), before, "{bad}");
+    }
+    assert!(s.execute("hatchedit", &json!({ "handles": [h], "pattern": "ANSI31", "gradient": { "name": "LINEAR" } })).is_err());
+    assert_eq!(hatch(&s, &h), before);
+}
