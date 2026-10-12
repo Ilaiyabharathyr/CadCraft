@@ -455,10 +455,13 @@ fn run_boundary(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("boundary", format!("at most {MAX_BOUNDARY_POINTS} points per call (got {})", raw.len())));
     }
     let pts = points_param(p, "points").ok_or_else(|| bad("boundary", "`points` is required"))?;
+    let before = s.state()?.doc.clone();
     let mut out = Vec::new();
     for q in pts {
         out.extend(boundary_at(s, q)?.into_iter().map(|h| h.hex()));
         if out.len() > MAX_BOUNDARY_OUTPUT {
+            // The refused call leaves no partial result behind.
+            s.state_mut()?.doc = before;
             return Err(bad("boundary", format!("more than {MAX_BOUNDARY_OUTPUT} boundary polylines in one call; split the work")));
         }
     }
