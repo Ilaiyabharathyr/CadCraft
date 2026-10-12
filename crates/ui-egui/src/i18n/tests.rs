@@ -884,3 +884,17 @@ fn default_fonts_cover_swedish_letters_and_quotes() {
         }
     });
 }
+
+/// Thai file names and text read in the interface when the system has a Thai font (none is
+/// bundled), whatever the interface language.
+#[test]
+fn thai_text_shows_with_an_installed_thai_font() {
+    let Some(_) = crate::theme::thai_font() else { return };
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx, "en");
+    // The new fonts take effect when a frame begins.
+    ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+    for font in [crate::theme::body(), crate::theme::mono()] {
+        assert!(ctx.fonts_mut(|f| f.has_glyphs(&font, "แบบบ้าน")), "{font:?}");
+    }
+}
