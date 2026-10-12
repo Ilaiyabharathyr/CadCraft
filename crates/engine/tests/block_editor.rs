@@ -232,3 +232,35 @@ fn a_file_save_writes_the_drawing_outside_the_editor() {
     assert!(!s.state().unwrap().is_dirty());
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn bedit_can_start_a_new_block() {
+    let mut s = Session::new();
+    door(&mut s);
+    // An existing name edits that block.
+    let r = s.execute("bedit", &json!({ "name": "door", "create": true })).unwrap();
+    assert_eq!(r, json!({ "block": "Door", "new": false }));
+    s.execute("bclose", &json!({})).unwrap();
+
+    // A new name starts an empty block; closing without saving creates nothing.
+    let r = s.execute("bedit", &json!({ "name": " Window ", "create": true })).unwrap();
+    assert_eq!(r, json!({ "block": "Window", "new": true }));
+    assert!(s.doc().unwrap().model.is_empty());
+    s.execute("bclose", &json!({ "save": false })).unwrap();
+    assert!(s.doc().unwrap().block("Window").is_none());
+
+    // Saving creates it, base point at the origin.
+    s.execute("bedit", &json!({ "name": "Window", "create": true })).unwrap();
+    line(&mut s, [0.0, 0.0], [3.0, 0.0]);
+    s.execute("bclose", &json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let w = d.block("Window").unwrap();
+    assert_eq!((w.name.as_str(), w.entities.len(), w.base), ("Window", 1, Vec3::new(0.0, 0.0, 0.0)));
+
+    // Without `create` a missing block is an error; invalid new names are refused.
+    assert!(s.execute("bedit", &json!({ "name": "Skylight" })).is_err());
+    for bad in ["", "a*b", "*U9", "x<y"] {
+        assert!(s.execute("bedit", &json!({ "name": bad, "create": true })).is_err(), "{bad}");
+    }
+    assert!(s.state().unwrap().block_editor().is_none());
+}

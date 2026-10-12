@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod autosave;
+pub mod bedit;
 pub mod canvas;
 pub mod chrome;
 pub mod clipboard;
@@ -216,6 +217,8 @@ pub struct CadApp {
     pub gpu_faults: std::sync::Arc<gpu::GpuFaults>,
     /// The notice shown after one (see [`autosave::gpu_notice`]).
     pub gpu_notice: Option<autosave::GpuNotice>,
+    /// The Edit Block Definition dialog ([`bedit`]).
+    pub bedit: bedit::State,
 }
 
 impl CadApp {
@@ -249,6 +252,7 @@ impl CadApp {
             recovery: autosave::Recovery::default(),
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
+            bedit: bedit::State::default(),
         }
     }
 
