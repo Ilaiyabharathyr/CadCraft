@@ -336,10 +336,57 @@ pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
                 }
             }
         }
+        // Thai: file names and drawing text show in any interface language, and the fonts are small.
+        if let Some(bytes) = thai_font().and_then(|p| read_capped(p, MAX_UI_FONT_BYTES)) {
+            fonts.font_data.insert("system-thai".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+            for family in [FontFamily::Proportional, FontFamily::Monospace] {
+                if let Some(f) = fonts.families.get_mut(&family) {
+                    f.push("system-thai".into());
+                }
+            }
+        }
         ctx.set_fonts(fonts);
     }
     #[cfg(target_arch = "wasm32")]
     let _ = (ctx, cjk);
+}
+
+/// An installed font with Thai characters, so Thai file names and text read in the interface;
+/// fonts are never bundled (only looked for where the OS or common packages put them). Checked once.
+pub fn thai_font() -> Option<&'static std::path::Path> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+        FOUND
+            .get_or_init(|| {
+                let candidates: &[&str] = if cfg!(target_os = "macos") {
+                    &[
+                        "/System/Library/Fonts/ThonburiUI.ttc",
+                        "/System/Library/Fonts/Supplemental/Thonburi.ttc",
+                        "/System/Library/Fonts/Supplemental/SukhumvitSet.ttc",
+                        "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
+                    ]
+                } else if cfg!(windows) {
+                    &["C:\\Windows\\Fonts\\LeelawUI.ttf", "C:\\Windows\\Fonts\\leelawad.ttf", "C:\\Windows\\Fonts\\tahoma.ttf"]
+                } else {
+                    &[
+                        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+                        "/usr/share/fonts/noto/NotoSansThai-Regular.ttf",
+                        "/usr/share/fonts/google-noto/NotoSansThai-Regular.ttf",
+                        "/usr/share/fonts/google-noto-vf/NotoSansThai[wght].ttf",
+                        "/usr/local/share/fonts/noto/NotoSansThai-Regular.ttf",
+                        "/usr/share/fonts/truetype/tlwg/Loma.ttf",
+                        "/usr/share/fonts/thai-scalable/Loma.ttf",
+                        "/usr/share/fonts/truetype/tlwg/Garuda.ttf",
+                        "/usr/share/fonts/truetype/thai/Garuda.ttf",
+                    ]
+                };
+                candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
+            })
+            .as_deref()
+    }
+    #[cfg(target_arch = "wasm32")]
+    None
 }
 
 /// Largest interface font file read (CJK collections are 15–60 MB).
