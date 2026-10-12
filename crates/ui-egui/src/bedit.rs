@@ -121,6 +121,8 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .open(open)
         .collapsible(false)
         .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
             ui.label(crate::tl!("Block to create or edit"));
             let edit = ui.add(egui::TextEdit::singleline(&mut app.bedit.name).desired_width(460.0));
@@ -132,22 +134,25 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             }
             ui.add_space(4.0);
             ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
+                egui::Frame::new().fill(t.field).stroke(Stroke::new(1.0, t.border)).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
+                    ui.set_min_size(vec2(222.0, 250.0));
                     egui::ScrollArea::vertical().id_salt("bedit-blocks").max_height(250.0).min_scrolled_height(250.0).show(ui, |ui| {
-                        ui.set_width(230.0);
-                        if names.is_empty() {
-                            ui.label(RichText::new(crate::tl!("No blocks defined in this drawing.")).color(t.text_dim));
-                        }
-                        for n in &names {
-                            let row = ui.selectable_label(existing.as_deref() == Some(n.as_str()), n);
-                            if row.clicked() {
-                                app.bedit.name = n.clone();
-                                app.bedit.error = None;
+                        ui.set_width(222.0);
+                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                            if names.is_empty() {
+                                ui.label(RichText::new(crate::tl!("No blocks defined in this drawing.")).color(t.text_dim));
                             }
-                            if row.double_clicked() {
-                                ok = true;
+                            for n in &names {
+                                let row = ui.selectable_label(existing.as_deref() == Some(n.as_str()), n);
+                                if row.clicked() {
+                                    app.bedit.name = n.clone();
+                                    app.bedit.error = None;
+                                }
+                                if row.double_clicked() {
+                                    ok = true;
+                                }
                             }
-                        }
+                        });
                     });
                 });
                 ui.vertical(|ui| {
