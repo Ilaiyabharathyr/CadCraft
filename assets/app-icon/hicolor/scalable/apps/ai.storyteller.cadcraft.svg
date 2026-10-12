@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <title>CADCraft</title>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#b4dfe8" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#13a3c5"/>
+  <rect x="16" y="16" width="224" height="224" rx="32" fill="url(#grid)"/>
+  <path d="M48 48V210H210Z" fill="#eeeadd"
+        stroke="#111818" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M76 106V190H160Z" fill="#13a3c5" stroke="#111818" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M49 74H55 M49 92H60 M49 110H55 M49 128H60 M49 146H55
+           M49 164H60 M49 182H55 M49 200H60" fill="none" stroke="#111818" stroke-width="3"/>
+  <path d="M150 70A68 68 0 0 1 230 130" fill="none" stroke="#111818" stroke-width="8"/>
+  <circle cx="160" cy="140" r="8" fill="#111818"/>
+  <circle cx="227" cy="141" r="7" fill="#f47c32"/>
+</svg>
