@@ -82,9 +82,11 @@ fn block_of(d: &Drawing, h: Handle) -> Option<String> {
 }
 
 /// Whether block `name` carries dynamic block data from another program (parameters and actions
-/// in its `ACAD_ENHANCEDBLOCK` dictionary), which CADCraft keeps but can't edit yet.
+/// in its `ACAD_ENHANCEDBLOCK` dictionary), which CADCraft keeps but can't edit yet. The dictionary
+/// hangs off the block's BLOCK_RECORD table entry.
 fn has_dynamic_data(d: &Drawing, name: &str) -> bool {
-    let Some(xdict) = d.foreign.records.get(&("BLOCK".to_string(), name.to_ascii_uppercase())).and_then(|x| x.xdict) else { return false };
+    let key = ("BLOCK_RECORD".to_string(), name.to_ascii_uppercase());
+    let Some(xdict) = d.foreign.records.get(&key).and_then(|x| x.xdict) else { return false };
     d.foreign.objects.iter().any(|o| o.handle == xdict && o.tags.iter().any(|t| t.code == 3 && t.value.eq_ignore_ascii_case("ACAD_ENHANCEDBLOCK")))
 }
 

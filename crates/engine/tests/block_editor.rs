@@ -232,3 +232,28 @@ fn a_file_save_writes_the_drawing_outside_the_editor() {
     assert!(!s.state().unwrap().is_dirty());
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn a_dynamic_block_from_another_program_says_its_parameters_are_kept() {
+    use cadcraft_engine::doc::foreign::{Foreign, ForeignExtra, ForeignObject};
+    use cadcraft_engine::doc::{Handle, RawTag};
+    let mut s = Session::new();
+    door(&mut s);
+    // As a DXF from AutoCAD has it: the block record's extension dictionary holds ACAD_ENHANCEDBLOCK.
+    let mut f = Foreign::default();
+    let xdict = Handle(0xF00);
+    f.records.insert(("BLOCK_RECORD".into(), "DOOR".into()), ForeignExtra { xdict: Some(xdict), ..Default::default() });
+    let tag = |code, value: &str| RawTag { code, value: value.into() };
+    f.objects.push(ForeignObject { handle: xdict, kind: "DICTIONARY".into(), tags: vec![tag(3, "ACAD_ENHANCEDBLOCK"), tag(360, "F01")] });
+    let mut d = s.doc().unwrap().clone();
+    d.foreign = std::sync::Arc::new(f);
+    s.open_drawing(d, "dynamic", None);
+    s.execute("bedit", &json!({ "name": "Door" })).unwrap();
+    assert!(s.log.iter().any(|l| l.contains("dynamic block")), "{:?}", s.log);
+    // A plain block says nothing of the kind.
+    s.execute("bclose", &json!({})).unwrap();
+    let mut s = Session::new();
+    door(&mut s);
+    s.execute("bedit", &json!({ "name": "Door" })).unwrap();
+    assert!(!s.log.iter().any(|l| l.contains("dynamic block")), "{:?}", s.log);
+}
