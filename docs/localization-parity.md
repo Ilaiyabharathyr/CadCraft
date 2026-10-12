@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Czech catalog added: reference/literal coverage, Czech plurals and menu headings) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** trivial (Drawing, layer, layout and block names in CJK, Thai, Devanagari, Arabic and Hebrew load their interface font (#658); previously minor: Czech catalog added: reference/literal coverage, Czech plurals and menu headings) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How far CADCraft's interface and drawing text are from AutoCAD's languages. Summarised in
 [ROADMAP.md](../ROADMAP.md#languages); work items in [gaps.md](gaps.md#localization).
@@ -31,7 +31,7 @@ shaping and right-to-left text through TrueType, vertical SHX text styles.
   English. For scale: about 1,160 unique capitalised string literals exist in `crates/engine`
   and `crates/ui-egui` (grep, 2026-10-10).
 - **Drawing text:** TrueType/OpenType/`.ttc` through `skrifa` with per-character font fallback
-  and FONTALT, so CJK characters render (#173). DXF text is written with `\U+` escapes so
+  and FONTALT, so CJK characters render (#173). In the interface, the font a shown name needs (Chinese/Japanese, Korean, Thai, Devanagari, Arabic, Hebrew) is loaded for drawing, layer, layout and block names, so tabs, title bar and save prompt show them (#658). DXF text is written with `\U+` escapes so
   non-ASCII survives in R2000 files (#169). Lines with right-to-left text get the Unicode
   Bidirectional Algorithm and OpenType shaping with `harfrust` (Arabic, Persian and Urdu joining,
   lam-alef, ZWNJ, marks; Hebrew), in TEXT and MTEXT including wrapping (#287). Left-to-right lines
@@ -80,6 +80,7 @@ each language, which needs humans. Translations parallelise fully once the catal
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | trivial | Drawing, layer, layout and block names in CJK, Thai, Devanagari, Arabic and Hebrew load their interface font (#658) |
 | 2026-10-11 | minor | Czech added: 1,202 rows, one/few/other plurals, locale/preferences/menu/font/render tests; independent review pass; native proofreading pending |
 | 2026-10-11 | minor | German catalog landed: `de` preference and catalog, per-language plural rules; non-English languages 1 → 2; total hours 60–100 → 55–95 |
 | 2026-10-10 | minor | Right-to-left drawing text: bidi and Arabic-script shaping in TEXT and MTEXT (#287) |
