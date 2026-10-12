@@ -1,10 +1,9 @@
-# CADCraft Ukrainian interface catalog — original translations by @dmatviichuk.
+# CADCraft Russian interface catalog — original translations by @pechnikov2026-star.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
 # Written from CADCraft's English strings; no proprietary translations were copied.
-# UTF-8: context<TAB>English source<TAB>Ukrainian translation.
+# UTF-8: context<TAB>English source<TAB>Russian translation.
 # Empty context = ordinary label; @plural = one|few|many forms with {n}.
-# Keep command IDs, keywords, technology/product names and user data unchanged.
-# Russian interface catalog.
+# Command IDs, typed keywords, technology/product names and user data stay unchanged.
 	  Cancel  	  Отмена  
 	  OK  	  ОК  
 	 or [	 или [

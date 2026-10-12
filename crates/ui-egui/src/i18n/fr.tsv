@@ -1,10 +1,9 @@
-# CADCraft Ukrainian interface catalog — original translations by @dmatviichuk.
+# CADCraft French interface catalog — original translations by @pechnikov2026-star.
 # License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
 # Written from CADCraft's English strings; no proprietary translations were copied.
-# UTF-8: context<TAB>English source<TAB>Ukrainian translation.
-# Empty context = ordinary label; @plural = one|few|many forms with {n}.
-# Keep command IDs, keywords, technology/product names and user data unchanged.
-# French interface catalog.
+# UTF-8: context<TAB>English source<TAB>French translation.
+# Empty context = ordinary label; @plural = one|other forms with {n}.
+# Command IDs, typed keywords, technology/product names and user data stay unchanged.
 	  Cancel  	  Annuler  
 	  OK  	  OK  
 	 or [	 ou [
@@ -986,8 +985,8 @@
 	−Bin	−Bin
 	−LOC	−LOC
 	⌘↩ to finish	⌘↩ pour terminer
-@plural	{n} commit	{n} révision|{n} révisions|{n} révisions
-@plural	{n} contributor	{n} contributeur|{n} contributeurs|{n} contributeurs
+@plural	{n} commit	{n} révision|{n} révisions
+@plural	{n} contributor	{n} contributeur|{n} contributeurs
 	Drawing as bytes	Dessin sous forme d'octets
 	Services	Services
 	Hide CADCraft	Masquer CADCraft
