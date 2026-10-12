@@ -1233,3 +1233,8 @@
 	Hatch Pattern	Зразок штрихування
 	Search for pattern	Пошук зразка
 	Run Script...	Виконати сценарій...
+# Block Editor (BEDIT).
+	Save Block	Зберегти блок
+	Save Block As	Зберегти блок як
+	Close Block Editor	Закрити редактор блоків
+	Unsaved changes	Незбережені зміни
