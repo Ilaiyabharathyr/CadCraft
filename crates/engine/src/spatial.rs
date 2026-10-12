@@ -352,6 +352,7 @@ mod tests {
                     rows: 1,
                     col_spacing: 0.0,
                     row_spacing: 0.0,
+                    clip: None,
                 }),
                 8 if i % 40 == 8 => EntityKind::XLine(cadcraft_doc::RayLine { base: v3(x, y), dir: v3(r.r(-1.0, 1.0), 1.0) }),
                 8 if i % 40 == 18 => EntityKind::Ray(cadcraft_doc::RayLine { base: v3(x, y), dir: v3(1.0, r.r(-1.0, 1.0)) }),
