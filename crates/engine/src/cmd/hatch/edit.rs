@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::assoc::{detach, same_shape};
 use super::{ORIGIN_KW, OriginMode, closed_loop, island_style};
 use crate::cmd::helpers::lwpoly;
-use crate::cmd::{bad, bool_or, point_param, str_param, targets};
+use crate::cmd::{bad, bool_or, point_param, size_param, str_param, targets};
 use crate::{Accept, Input, Interactive, Picker, Prompt, Result, Session, Step};
 
 /// Upper bound on hatches edited by one call.
@@ -165,7 +165,19 @@ fn properties(h: &mut Hatch, p: &Value) {
     }
 }
 
+/// An explicit `scale` must be positive and an explicit `angle` a number, checked before anything
+/// is edited so a refused request changes nothing (absent and null leave them as they are).
+fn check_numbers(p: &Value) -> Result<()> {
+    size_param("hatchedit", p, "scale", false)?;
+    match p.get("angle") {
+        None | Some(Value::Null) => Ok(()),
+        Some(v) if v.as_f64().is_some_and(f64::is_finite) => Ok(()),
+        Some(_) => Err(bad("hatchedit", "`angle` must be a number of degrees")),
+    }
+}
+
 pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
+    check_numbers(p)?;
     let hs = hatches(s, p)?;
     let style = match str_param(p, "style") {
         Some(t) => Some(island_style(t).ok_or_else(|| bad("hatchedit", "`style` is \"normal\", \"outer\" or \"ignore\""))?),
