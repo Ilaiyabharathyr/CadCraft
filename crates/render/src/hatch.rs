@@ -10,8 +10,8 @@
 
 use super::{Builder, Ctx, Ink, fill, ink, max_scale};
 use cadcraft_color::{Color, Rgb};
-use cadcraft_doc::library::{PatternLine, pattern};
-use cadcraft_doc::{Entity, Gradient, Hatch};
+use cadcraft_doc::library::{PatternLine, pattern_for};
+use cadcraft_doc::{Drawing, Entity, Gradient, Hatch};
 use cadcraft_geom::{Bounds2, Polyline, Vec2, point_in_polygon};
 
 /// Draw a hatch entity: `rgb` is its resolved colour, `tol` the chord tolerance.
@@ -24,7 +24,7 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
     // that show apart in any direction are never merged); 0 = full detail.
     let stretch = max_scale(&ctx.xf);
     let px = if stretch > 1e-12 { b.opts.min_dash / 2.0 / stretch } else { 0.0 };
-    let dense = b.opts.fill && reads_solid(h, px);
+    let dense = b.opts.fill && reads_solid(ctx.d, h, px);
     if h.solid || h.pattern.eq_ignore_ascii_case("SOLID") || h.gradient.is_some() || dense {
         if b.opts.fill {
             let tris = fill::triangulate_evenodd(&loops);
@@ -45,7 +45,7 @@ pub(super) fn draw(b: &mut Builder, ctx: &Ctx, e: &Entity, h: &Hatch, rgb: Ink, 
         let inv = ctx.xf.inverse()?;
         Some(Bounds2::from_points(v.corners().iter().map(|p| inv.apply(*p))))
     });
-    for seg in pattern_lines(h, &loops, px, view.as_ref()) {
+    for seg in pattern_lines(ctx.d, h, &loops, px, view.as_ref()) {
         if seg.len() == 1 {
             if let Some(p) = seg.first() {
                 b.point(ctx, rgb, *p);
@@ -224,10 +224,10 @@ impl Field {
 
 /// Upper bound on the line families drawn from a pattern definition read from a file.
 const MAX_PATTERN_LINES: usize = 1024;
-/// Upper bound on the runs of one hatch, checked after each line family (a hostile or
-/// mis-scaled pattern can't exhaust memory). A view-limited build makes at most the runs of a
-/// full build, so it never leaves out a family that a full build draws.
-const MAX_RUNS: usize = 500_000;
+/// Upper bound on the runs of one hatch (AutoCAD's HPMAXLINES default), checked as runs are made
+/// (a hostile or mis-scaled pattern can't exhaust memory). A view-limited build makes at most the
+/// runs of a full build, so it never leaves out runs that a full build draws.
+const MAX_RUNS: usize = 1_000_000;
 /// Upper bound on the lines one family sweeps over the whole hatch; past it the family is left
 /// out (a full-detail build of a pattern far too fine for its area).
 const MAX_FAMILY_LINES: i64 = 20_000;
@@ -241,13 +241,13 @@ pub const SOLID_SPACING_PX: f64 = 1.0;
 /// e^-2 ≈ 14% of the pixels empty there).
 pub const SOLID_COVERAGE: f64 = 2.0;
 
-/// The line families a hatch draws with: a pattern the library doesn't define draws with the
-/// lines its file defined, else as ANSI31.
-fn lines_of(h: &Hatch) -> Vec<PatternLine> {
-    match pattern(&h.pattern) {
-        Some(p) => p.lines,
-        None if !h.pattern_lines.is_empty() => h.pattern_lines.iter().take(MAX_PATTERN_LINES).cloned().collect(),
-        None => pattern("ANSI31").map(|p| p.lines).unwrap_or_default(),
+/// The line families a hatch draws with: the lines its file defined (as its author's CAD drew
+/// them), else the library's pattern of that name as drawn in `d`, else ANSI31.
+fn lines_of(d: &Drawing, h: &Hatch) -> Vec<PatternLine> {
+    if h.pattern_lines.is_empty() {
+        pattern_for(d, &h.pattern).or_else(|| pattern_for(d, "ANSI31")).map(|p| p.lines).unwrap_or_default()
+    } else {
+        h.pattern_lines.iter().take(MAX_PATTERN_LINES).cloned().collect()
     }
 }
 
@@ -265,13 +265,13 @@ fn scale_of(h: &Hatch) -> f64 {
 ///   (dense dot or dash patterns made of several families).
 ///
 /// A sparse dot or dash pattern keeps its look. `px <= 0` (full detail) is never solid.
-pub fn reads_solid(h: &Hatch, px: f64) -> bool {
+pub fn reads_solid(d: &Drawing, h: &Hatch, px: f64) -> bool {
     if !(px.is_finite() && px > 0.0) {
         return false;
     }
     let scale = scale_of(h);
     let mut coverage = 0.0;
-    for f in lines_of(h) {
+    for f in lines_of(d, h) {
         let spacing = (f.delta.1 * scale).abs();
         if !(spacing.is_finite() && spacing > 0.0) {
             continue;
@@ -300,8 +300,8 @@ pub fn reads_solid(h: &Hatch, px: f64) -> bool {
 /// `px`: a pixel in the hatch's units for the level of detail (a dash or dot repeat under two
 /// pixels is one continuous run); 0 = full detail, as plots, exports and picks use. `view`: only
 /// the part of the hatch inside it is generated; `None` = all of it.
-pub fn pattern_lines(h: &Hatch, loops: &[Vec<Vec2>], px: f64, view: Option<&Bounds2>) -> Vec<Vec<Vec2>> {
-    let lines = lines_of(h);
+pub fn pattern_lines(d: &Drawing, h: &Hatch, loops: &[Vec<Vec2>], px: f64, view: Option<&Bounds2>) -> Vec<Vec<Vec2>> {
+    let lines = lines_of(d, h);
     let scale = scale_of(h);
     let px = if px.is_finite() && px > 0.0 { px } else { 0.0 };
     let mut out = Vec::new();
@@ -315,7 +315,7 @@ pub fn pattern_lines(h: &Hatch, loops: &[Vec<Vec2>], px: f64, view: Option<&Boun
         }
         let dashes: Vec<f64> = fam.dashes.iter().map(|d| d * scale).collect();
         Family { origin, ang, delta, spacing, dashes: &dashes }.sweep(loops, px, view, &mut out);
-        if out.len() > MAX_RUNS {
+        if out.len() >= MAX_RUNS {
             break;
         }
     }
@@ -371,6 +371,9 @@ impl Family<'_> {
         let draws = self.dashes.iter().any(|d| *d >= 0.0);
         let solid_line = self.dashes.is_empty() || pat_len < 1e-12 || (px > 0.0 && pat_len < 2.0 * px && draws);
         for k in k0..=k1 {
+            if out.len() >= MAX_RUNS {
+                return;
+            }
             let y = k as f64 * self.spacing;
             let mut xs: Vec<f64> = Vec::new();
             for l in &local {
@@ -407,7 +410,7 @@ impl Family<'_> {
         'outer: while x < x1 {
             for d in self.dashes {
                 guard += 1;
-                if guard > 100_000 {
+                if guard > 100_000 || out.len() >= MAX_RUNS {
                     break 'outer;
                 }
                 let len = d.abs();

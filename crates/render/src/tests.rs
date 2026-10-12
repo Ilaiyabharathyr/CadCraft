@@ -438,16 +438,16 @@ fn sparse_dots_keep_their_look_when_lines_are_close() {
     // Dot rows half a pixel apart but dots five pixels apart along them: not solid colour.
     let fam = |dashes: &[f64]| cadcraft_doc::library::PatternLine { angle: 0.0, origin: (0.0, 0.0), delta: (0.0, 0.5), dashes: dashes.to_vec() };
     let sparse = Hatch { pattern_lines: vec![fam(&[0.0, -5.0])], ..pattern_hatch("MYDOTS", 1.0, (0.0, 0.0, 40.0, 40.0)) };
-    assert!(!crate::hatch::reads_solid(&sparse, 1.0));
+    assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &sparse, 1.0));
     // Dots closer than a pixel along rows closer than a pixel: solid.
     let dense = Hatch { pattern_lines: vec![fam(&[0.0, -0.5])], ..sparse.clone() };
-    assert!(crate::hatch::reads_solid(&dense, 1.0));
+    assert!(crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &dense, 1.0));
     // A family with only gaps draws nothing, so it never reads as solid.
     let blank = Hatch { pattern_lines: vec![fam(&[-0.5])], ..sparse.clone() };
-    assert!(!crate::hatch::reads_solid(&blank, 1.0));
-    assert!(crate::hatch::pattern_lines(&blank, &loops_of(&blank), 1.0, None).is_empty());
+    assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &blank, 1.0));
+    assert!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &blank, &loops_of(&blank), 1.0, None).is_empty());
     // Full detail is never solid.
-    assert!(!crate::hatch::reads_solid(&dense, 0.0));
+    assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &dense, 0.0));
 }
 
 #[test]
@@ -455,8 +455,8 @@ fn scattered_dot_pattern_reads_solid_once_dots_fill_the_pixels() {
     // AR-SAND at scale 3: three dot families, no single one dense enough on its own at 0.5 per
     // pixel, but together about four dots on every pixel. Zoomed in 4x the dots stand apart.
     let h = pattern_hatch("AR-SAND", 3.0, (0.0, 0.0, 100.0, 100.0));
-    assert!(crate::hatch::reads_solid(&h, 0.5));
-    assert!(!crate::hatch::reads_solid(&h, 0.125));
+    assert!(crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, 0.5));
+    assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, 0.125));
 }
 
 #[test]
@@ -465,13 +465,13 @@ fn normal_zoom_pattern_is_unchanged() {
     for (pattern, px) in [("ANSI31", 0.05), ("ANSI33", 0.05), ("AR-CONC", 0.02), ("AR-SAND", 0.01), ("DOTS", 0.01)] {
         let h = pattern_hatch(pattern, 1.0, (0.0, 0.0, 6.0, 4.0));
         let loops = loops_of(&h);
-        let full = crate::hatch::pattern_lines(&h, &loops, 0.0, None);
+        let full = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, 0.0, None);
         assert!(!full.is_empty(), "{pattern}");
-        assert!(!crate::hatch::reads_solid(&h, px), "{pattern}");
-        assert_eq!(crate::hatch::pattern_lines(&h, &loops, px, None), full, "{pattern}");
+        assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, px), "{pattern}");
+        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, None), full, "{pattern}");
         // A view covering the whole hatch changes nothing either.
         let all = Bounds2::new(Vec2::new(-1.0, -1.0), Vec2::new(7.0, 5.0));
-        assert_eq!(crate::hatch::pattern_lines(&h, &loops, px, Some(&all)), full, "{pattern}");
+        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, Some(&all)), full, "{pattern}");
     }
 }
 
@@ -481,8 +481,8 @@ fn dash_repeat_under_two_pixels_is_one_run() {
     // drawn as one run per span covering the same length as the full-detail span.
     let h = pattern_hatch("ANSI33", 1.0, (0.0, 0.0, 6.0, 4.0));
     let loops = loops_of(&h);
-    let full = crate::hatch::pattern_lines(&h, &loops, 0.0, None);
-    let lod = crate::hatch::pattern_lines(&h, &loops, 0.1, None);
+    let full = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, 0.0, None);
+    let lod = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, 0.1, None);
     assert!(lod.len() < full.len(), "{} vs {}", lod.len(), full.len());
     assert!(lod.iter().all(|r| r.len() == 2));
     // The continuous family: identical runs in both.
