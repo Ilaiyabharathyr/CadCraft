@@ -35,11 +35,11 @@ fn catalog_is_valid_and_preserves_placeholders_and_ellipses() {
     assert_eq!(tr("unknown", "Open"), "Open");
 }
 
-/// Ukrainian and Czech must cover everything. Other languages fall back
+/// Ukrainian is the reference translation and must cover everything. Other languages fall back
 /// to English for what they don't cover yet; their gaps are reported, not enforced, so adding a
 /// command doesn't require a row in every language.
-const REQUIRED: &[&str] = &["uk", "cs"];
-const REPORTED: &[&str] = &["pt-BR", "de", "es"];
+const REQUIRED: &[&str] = &["uk"];
+const REPORTED: &[&str] = &["pt-BR", "de", "es", "cs"];
 
 fn check(language: &str, what: &str, missing: Vec<String>) {
     if REQUIRED.contains(&language) {

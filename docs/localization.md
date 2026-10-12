@@ -29,7 +29,7 @@ selection. Resetting palettes keeps the language choice.
 The catalogs cover command and menu labels, tool groups and tooltips, the Start page,
 file and model-space tabs, status controls, object snaps, drafting prompts, property labels,
 dialogs, and the About window's controls. The command reference can be searched by English
-command ID, English label, or translated label. Ukrainian and Czech have enforced coverage;
+command ID, English label, or translated label. Ukrainian has enforced coverage;
 missing entries in the other catalogs are reported by tests and fall back to English.
 
 Czech has 1,202 catalog rows, covering the reference catalog and every marked UI
@@ -72,8 +72,9 @@ The implementation follows the display-time catalog pattern used by
 - Windows retain explicit IDs based on their English source, and tool groups retain their
   source names as keys, so switching languages preserves their state.
 - Add a translation attribution row in `ATTRIBUTION.md`, update the language lists, and add
-  locale, plural, font-glyph and live-switch tests. Add a complete catalog to `REQUIRED` in
-  `i18n/tests.rs`; use `REPORTED` for partial catalogs.
+  locale, plural, font-glyph and live-switch tests. Add the catalog to `REPORTED` in
+  `i18n/tests.rs`: only Ukrainian, the reference translation, is in `REQUIRED`, so adding a
+  command needs a row in one language, not in all of them.
 - Catalogs are embedded and parsed once. Missing or malformed rows cannot crash the app;
   tests reject invalid rows, duplicate keys, changed placeholders, and mismatched ellipses.
 - `cargo test -p cadcraft-ui-egui i18n` checks menu/command/tool/snap coverage, every marked
