@@ -432,6 +432,7 @@ impl CadApp {
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
         self.gpu_fault_tick(ctx);
+        managers::plot_window_resume(self, ctx);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
@@ -497,6 +498,7 @@ impl CadApp {
             }
         });
         dialogs::show(self, ui.ctx());
+        palettes::patterns::prompt_picker(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
