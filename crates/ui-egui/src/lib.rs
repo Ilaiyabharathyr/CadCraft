@@ -195,8 +195,12 @@ pub struct CadApp {
     /// Caps the frame rate when presenting without vsync (see [`gpu::FrameCap`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub frame_cap: Option<gpu::FrameCap>,
-    /// Interface fonts installed, and whether with a CJK font (`None` until the first frame).
-    fonts_cjk: Option<bool>,
+    /// The scripts the installed interface fonts cover, and the font loads they include (`None`
+    /// until the first frame). Fonts for a script load while the interface language or a name the
+    /// interface shows (drawing, layer, layout, block) needs it.
+    fonts_shown: Option<(theme::Scripts, u64)>,
+    /// The names last scanned for [`Self::fonts_shown`] (a fingerprint), and their scripts.
+    font_names: Option<(u64, theme::Scripts)>,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
@@ -238,7 +242,8 @@ impl CadApp {
             synthetic: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             frame_cap: None,
-            fonts_cjk: None,
+            fonts_shown: None,
+            font_names: None,
             shown_theme: None,
             shown_follows_system: false,
             frame_ms: 0.0,
@@ -257,6 +262,34 @@ impl CadApp {
     pub fn language(&self) -> &'static str {
         let l = self.ui.interface_language.resolve(&self.system_languages);
         if theme::can_show(l) { l } else { "en" }
+    }
+
+    /// The scripts the interface fonts must cover: the interface language's, and those of the
+    /// names it shows (drawings, layers, layouts, blocks). The names are scanned again only when a
+    /// drawing changes, opens or closes.
+    fn interface_scripts(&mut self) -> theme::Scripts {
+        use std::hash::{Hash, Hasher};
+        let language = self.language();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        language.hash(&mut h);
+        for d in &self.session.docs {
+            (d.uid, std::sync::Arc::as_ptr(&d.doc) as usize, &d.title).hash(&mut h);
+        }
+        let key = h.finish();
+        if let Some((k, s)) = self.font_names
+            && k == key
+        {
+            return s;
+        }
+        let mut s = if language.starts_with("zh") { theme::Scripts::CJK } else { theme::Scripts::NONE };
+        for d in &self.session.docs {
+            s |= theme::Scripts::of(&d.title);
+            for name in d.doc.layers.iter().map(|l| &l.name).chain(d.doc.layouts.iter().map(|l| &l.name)).chain(d.doc.blocks.keys()) {
+                s |= theme::Scripts::of(name);
+            }
+        }
+        self.font_names = Some((key, s));
+        s
     }
 
     /// Draw the canvas on the GPU with the app's wgpu render state (eframe's
@@ -414,10 +447,10 @@ impl CadApp {
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        let cjk = self.language().starts_with("zh");
-        if self.fonts_cjk != Some(cjk) {
-            theme::install_fonts(ctx, cjk);
-            self.fonts_cjk = Some(cjk);
+        let fonts = (self.interface_scripts(), theme::fonts_generation());
+        if self.fonts_shown != Some(fonts) {
+            theme::install_fonts(ctx, fonts.0);
+            self.fonts_shown = Some(fonts);
         }
         // Resolved every frame, so a System choice follows the OS appearance live (winit and the
         // browser report changes as input); the saved choice itself never changes here.
@@ -610,6 +643,71 @@ mod tests {
         let raw = egui::RawInput { system_theme: system, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| app.logic(ui.ctx()));
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn cjk_drawing_names_load_the_cjk_font() {
+        assert!(theme::needs_cjk("图纸A图纸_t3.dwg"));
+        assert!(theme::needs_cjk("図面.dxf"));
+        assert!(theme::needs_cjk("도면.dwg"));
+        assert!(!theme::needs_cjk("Drawing1"));
+        assert!(!theme::needs_cjk("Ünterlage_é.dwg"));
+        let mut a = app();
+        a.session.new_drawing(false);
+        let ctx = egui::Context::default();
+        frame(&mut a, &ctx, None);
+        assert_eq!(a.fonts_shown.map(|f| f.0), Some(theme::Scripts::NONE), "English interface, Latin name");
+        frame(&mut a, &ctx, None);
+        assert!(!ctx.fonts_mut(|f| f.has_glyphs(&theme::body(), "图纸")), "no CJK glyphs before a name needs them");
+        if let Some(d) = a.session.docs.first_mut() {
+            d.title = "图纸A图纸_t3.dwg".into();
+        }
+        frame(&mut a, &ctx, None);
+        assert_eq!(a.fonts_shown.map(|f| f.0), Some(theme::Scripts::CJK), "a Chinese drawing name needs the CJK font");
+        if cadcraft_fonts::ttf::fallback_for('中').is_some() {
+            assert!(fonts_show(&mut a, &ctx, "图纸"), "the tab shows the characters, not boxes");
+        }
+        if let Some(d) = a.session.docs.first_mut() {
+            d.title = "Drawing1".into();
+        }
+        frame(&mut a, &ctx, None);
+        assert_eq!(a.fonts_shown.map(|f| f.0), Some(theme::Scripts::NONE));
+        frame(&mut a, &ctx, None);
+        assert!(!ctx.fonts_mut(|f| f.has_glyphs(&theme::body(), "图纸")), "dropped when no name needs it");
+    }
+
+    /// Frames until the interface fonts have every glyph of `text` (fonts load off the UI thread),
+    /// at most about five seconds.
+    fn fonts_show(a: &mut CadApp, ctx: &egui::Context, text: &str) -> bool {
+        for _ in 0..500 {
+            frame(a, ctx, None);
+            if ctx.fonts_mut(|f| f.has_glyphs(&theme::body(), text)) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn layer_names_and_korean_load_their_fonts() {
+        let mut a = app();
+        a.session.new_drawing(false);
+        let ctx = egui::Context::default();
+        frame(&mut a, &ctx, None);
+        // A Latin-named drawing whose layer is named in Korean: the Layers palette needs Hangul.
+        if let Some(d) = a.session.docs.first_mut() {
+            let mut doc = (*d.doc).clone();
+            if let Some(l) = doc.layers.first_mut() {
+                l.name = "도면 레이어".into();
+            }
+            d.doc = std::sync::Arc::new(doc);
+        }
+        frame(&mut a, &ctx, None);
+        assert_eq!(a.fonts_shown.map(|f| f.0), Some(theme::Scripts::HANGUL));
+        if cadcraft_fonts::ttf::fallback_for('한').is_some() {
+            assert!(fonts_show(&mut a, &ctx, "도면"), "Hangul draws from an installed font");
+        }
     }
 
     #[test]

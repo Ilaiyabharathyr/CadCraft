@@ -8,6 +8,7 @@
 //! [`CadApp::logic`](crate::CadApp::logic) resolves once per frame from the user's [`ThemePref`].
 
 use std::cell::Cell;
+use std::sync::Arc;
 
 use egui::{Color32, FontFamily, FontId, Theme, Visuals};
 use serde::{Deserialize, Serialize};
@@ -301,45 +302,243 @@ pub fn mono() -> FontId {
     FontId::new(12.0, FontFamily::Monospace)
 }
 
-/// Load a system UI font at run time when one is installed (not bundled), else keep egui's.
-pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
+/// Scripts interface text may need a font for beyond the UI font (a set).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Scripts(u8);
+
+impl Scripts {
+    pub const NONE: Scripts = Scripts(0);
+    /// Chinese characters, Japanese kana, bopomofo, CJK punctuation and full-width forms.
+    pub const CJK: Scripts = Scripts(1);
+    pub const HANGUL: Scripts = Scripts(1 << 1);
+    pub const THAI: Scripts = Scripts(1 << 2);
+    pub const DEVANAGARI: Scripts = Scripts(1 << 3);
+    pub const ARABIC: Scripts = Scripts(1 << 4);
+    pub const HEBREW: Scripts = Scripts(1 << 5);
+    /// Each script with a character a font must have to show it.
+    const SAMPLES: [(Scripts, char); 6] = [
+        (Scripts::CJK, '中'),
+        (Scripts::HANGUL, '한'),
+        (Scripts::THAI, 'ก'),
+        (Scripts::DEVANAGARI, 'क'),
+        (Scripts::ARABIC, 'ع'),
+        (Scripts::HEBREW, 'א'),
+    ];
+
+    /// The script of `c`, if it is one of these.
+    pub fn of_char(c: char) -> Scripts {
+        match u32::from(c) {
+            0..=0x058F => Scripts::NONE,
+            0x0590..=0x05FF | 0xFB1D..=0xFB4F => Scripts::HEBREW,
+            0x0600..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF => Scripts::ARABIC,
+            0x0900..=0x097F | 0xA8E0..=0xA8FF => Scripts::DEVANAGARI,
+            0x0E00..=0x0E7F => Scripts::THAI,
+            0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF => Scripts::HANGUL,
+            0x2E80..=0x2FDF
+            | 0x3000..=0x312F
+            | 0x3190..=0x31FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0xFF00..=0xFFEF
+            | 0x20000..=0x3FFFF => Scripts::CJK,
+            _ => Scripts::NONE,
+        }
+    }
+
+    /// The scripts of `text`'s characters.
+    pub fn of(text: &str) -> Scripts {
+        text.chars().fold(Scripts::NONE, |s, c| s | Scripts::of_char(c))
+    }
+
+    pub fn contains(self, other: Scripts) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    pub fn intersects(self, other: Scripts) -> bool {
+        self.0 & other.0 != 0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    fn without(self, other: Scripts) -> Scripts {
+        Scripts(self.0 & !other.0)
+    }
+}
+
+impl std::ops::BitOr for Scripts {
+    type Output = Scripts;
+    fn bitor(self, rhs: Scripts) -> Scripts {
+        Scripts(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for Scripts {
+    fn bitor_assign(&mut self, rhs: Scripts) {
+        self.0 |= rhs.0;
+    }
+}
+
+/// Interface fonts read so far. They stay for the process, so showing a script again never
+/// re-reads a file, and egui shares these `Arc`s on every install instead of copying the bytes.
+#[derive(Default)]
+struct FontCache {
+    /// The UI font (`None` until first read; `Some(None)`: none installed).
+    primary: Option<Option<Arc<egui::FontData>>>,
+    /// Loaded fallback faces, each once.
+    faces: Vec<Arc<egui::FontData>>,
+    /// Scripts looked for, with the face that shows them (`None`: the UI font has them, or no
+    /// installed font does).
+    resolved: Vec<(Scripts, Option<usize>)>,
+    /// Scripts being looked for off the UI thread.
+    loading: Scripts,
+}
+
+fn font_cache() -> std::sync::MutexGuard<'static, FontCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<FontCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Bumped each time fonts finish loading off the UI thread, so the caller installs them.
+static FONTS_LOADED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Changes when fallback fonts finished loading since the last [`install_fonts`].
+pub fn fonts_generation() -> u64 {
+    FONTS_LOADED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Install the interface fonts: a system UI font when one is installed (not bundled), else egui's,
+/// then fallback faces for the `scripts` interface text needs (issue #658: a Chinese file name on
+/// a tab). Chinese takes [`cjk_font`] first; other scripts, and Chinese without it, take an
+/// installed font found the way drawing text finds one ([`cadcraft_fonts::ttf::fallback_for`]).
+/// Faces not read yet are looked for off the UI thread; [`fonts_generation`] changes when they are
+/// ready, and installing again shows them.
+pub fn install_fonts(ctx: &egui::Context, scripts: Scripts) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let candidates: &[&str] = if cfg!(target_os = "macos") {
-            &["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/Helvetica.ttc", "/Library/Fonts/Arial.ttf"]
-        } else if cfg!(windows) {
-            &["C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf"]
-        } else {
-            &[
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/TTF/DejaVuSans.ttf",
-                "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            ]
-        };
-        let mut fonts = egui::FontDefinitions::default();
-        for path in candidates {
-            if let Ok(bytes) = std::fs::read(path) {
-                fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+        let (fonts, missing, primary) = {
+            let mut c = font_cache();
+            let primary = c.primary.get_or_insert_with(read_ui_font).clone();
+            let mut fonts = egui::FontDefinitions::default();
+            if let Some(data) = &primary {
+                fonts.font_data.insert("system-ui".into(), data.clone());
                 if let Some(f) = fonts.families.get_mut(&FontFamily::Proportional) {
                     f.insert(0, "system-ui".into());
                 }
-                break;
             }
-        }
-        // Chinese: an installed CJK font after the Latin ones, so Latin text keeps its look.
-        if let Some(bytes) = cjk.then(cjk_font).flatten().and_then(|p| read_capped(p, MAX_UI_FONT_BYTES)) {
-            fonts.font_data.insert("system-cjk".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-            for family in [FontFamily::Proportional, FontFamily::Monospace] {
-                if let Some(f) = fonts.families.get_mut(&family) {
-                    f.push("system-cjk".into());
+            let mut missing = Scripts::NONE;
+            let mut shown: Vec<usize> = Vec::new();
+            for (s, _) in Scripts::SAMPLES {
+                if !scripts.contains(s) {
+                    continue;
+                }
+                match c.resolved.iter().find(|(k, _)| *k == s) {
+                    Some((_, Some(i))) if !shown.contains(i) => shown.push(*i),
+                    Some(_) => {}
+                    None => missing |= s,
                 }
             }
-        }
+            // After the Latin fonts, so Latin text keeps its look.
+            for i in shown {
+                if let Some(data) = c.faces.get(i) {
+                    let name = format!("system-fallback-{i}");
+                    fonts.font_data.insert(name.clone(), data.clone());
+                    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+                        if let Some(f) = fonts.families.get_mut(&family) {
+                            f.push(name.clone());
+                        }
+                    }
+                }
+            }
+            let missing = missing.without(c.loading);
+            c.loading |= missing;
+            (fonts, missing, primary)
+        };
         ctx.set_fonts(fonts);
+        if !missing.is_empty() {
+            let ctx = ctx.clone();
+            let spawned = std::thread::Builder::new().name("ui-fonts".into()).spawn(move || {
+                load_fallback_faces(missing, primary.as_deref());
+                ctx.request_repaint();
+            });
+            if let Err(e) = spawned {
+                log::warn!("interface fonts for other scripts not loaded: {e}");
+                font_cache().loading = Scripts::NONE;
+            }
+        }
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = (ctx, cjk);
+    let _ = (ctx, scripts);
+}
+
+/// The system UI font, if one is installed.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_ui_font() -> Option<Arc<egui::FontData>> {
+    let candidates: &[&str] = if cfg!(target_os = "macos") {
+        &["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/Helvetica.ttc", "/Library/Fonts/Arial.ttf"]
+    } else if cfg!(windows) {
+        &["C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf"]
+    } else {
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        ]
+    };
+    candidates.iter().find_map(|p| read_capped(std::path::Path::new(p), MAX_UI_FONT_BYTES)).map(|b| Arc::new(egui::FontData::from_owned(b)))
+}
+
+/// Look for faces for `missing` (off the UI thread) and record them in the font cache.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_fallback_faces(missing: Scripts, primary: Option<&egui::FontData>) {
+    use cadcraft_fonts::ttf::{Face, fallback_for};
+    let primary = primary.and_then(|d| Face::new(Arc::new(d.font.to_vec()), d.index));
+    let mut found: Vec<(Scripts, Option<Face>)> = Vec::new();
+    for (s, sample) in Scripts::SAMPLES {
+        if !missing.contains(s) {
+            continue;
+        }
+        let face = if primary.as_ref().is_some_and(|p| p.has_glyph(sample)) {
+            None
+        } else if let Some(f) = found.iter().filter_map(|(_, f)| f.as_ref()).find(|f| f.has_glyph(sample)) {
+            Some(f.clone())
+        } else {
+            let preferred = (s == Scripts::CJK)
+                .then(cjk_font)
+                .flatten()
+                .and_then(|p| read_capped(p, MAX_UI_FONT_BYTES))
+                .and_then(|b| Face::new(Arc::new(b), 0))
+                .filter(|f| f.has_glyph(sample));
+            preferred.or_else(|| fallback_for(sample))
+        };
+        found.push((s, face));
+    }
+    let mut c = font_cache();
+    let mut ids: Vec<(Face, usize)> = Vec::new();
+    for (s, face) in found {
+        let i = face.map(|f| match ids.iter().find(|(g, _)| *g == f) {
+            Some((_, i)) => *i,
+            None => {
+                let (bytes, index) = f.data();
+                // A file read here has no other owner, so its bytes move to egui; one from the font
+                // table (shared with drawing text) is copied.
+                let font = Arc::try_unwrap(bytes.clone()).unwrap_or_else(|shared| shared.to_vec());
+                let mut data = egui::FontData::from_owned(font);
+                data.index = index;
+                c.faces.push(Arc::new(data));
+                let i = c.faces.len() - 1;
+                ids.push((f, i));
+                i
+            }
+        });
+        c.resolved.push((s, i));
+    }
+    c.loading = c.loading.without(missing);
+    drop(c);
+    FONTS_LOADED.fetch_add(1, std::sync::atomic::Ordering::Release);
 }
 
 /// Largest interface font file read (CJK collections are 15–60 MB).
@@ -386,6 +585,11 @@ pub fn cjk_font() -> Option<&'static std::path::Path> {
     }
     #[cfg(target_arch = "wasm32")]
     None
+}
+
+/// Whether `text` has Chinese, Japanese or Korean characters that only a CJK font can show.
+pub fn needs_cjk(text: &str) -> bool {
+    Scripts::of(text).intersects(Scripts::CJK | Scripts::HANGUL)
 }
 
 /// Whether the interface can show `language`: Chinese needs an installed CJK font.
@@ -443,4 +647,23 @@ pub fn apply(ctx: &egui::Context, theme: Theme, follow_system: bool) {
         s.text_styles.insert(egui::TextStyle::Small, small());
         s.text_styles.insert(egui::TextStyle::Monospace, mono());
     });
+}
+
+#[cfg(test)]
+mod script_tests {
+    use super::Scripts;
+
+    #[test]
+    fn scripts_of_interface_text() {
+        assert_eq!(Scripts::of("Drawing1 Ünterlage_é.dwg"), Scripts::NONE);
+        assert_eq!(Scripts::of("图纸A_t3.dwg"), Scripts::CJK);
+        assert_eq!(Scripts::of("図面カタカナ"), Scripts::CJK);
+        assert_eq!(Scripts::of("도면"), Scripts::HANGUL);
+        assert_eq!(Scripts::of("แบบ"), Scripts::THAI);
+        assert_eq!(Scripts::of("नक्शा"), Scripts::DEVANAGARI);
+        assert_eq!(Scripts::of("خريطة"), Scripts::ARABIC);
+        assert_eq!(Scripts::of("שרטוט"), Scripts::HEBREW);
+        let mixed = Scripts::of("图纸 도면");
+        assert!(mixed.contains(Scripts::CJK | Scripts::HANGUL) && !mixed.intersects(Scripts::THAI));
+    }
 }
