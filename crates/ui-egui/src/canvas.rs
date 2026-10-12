@@ -898,6 +898,17 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
 
+    // Double-click a hatch (no command running) to edit it in the Hatch Edit dialog.
+    if inside
+        && dbl_primary
+        && app.session.running.is_none()
+        && let Some(hp) = hover_pos
+        && let Some(h) = hatch_at(app, xf.to_world(hp), scale)
+    {
+        app.session.set_selection(vec![h]);
+        crate::hatchdlg::open_edit(app);
+    }
+
     let raw_world = hover_pos.filter(|_| inside).map(|p| xf.to_world(p));
     let dyn_frame = crate::cmdline::dyn_frame(app);
     if let Some(w) = raw_world {
@@ -1318,6 +1329,15 @@ fn tooltip(p: &egui::Painter, at: Pos2, text: &str) {
     let r = Rect::from_min_size(at, galley.size() + vec2(8.0, 4.0));
     p.rect_filled(r, 2.0, Color32::from_rgb(0xf4, 0xf4, 0xf4));
     p.galley(r.min + vec2(4.0, 2.0), galley, Color32::BLACK);
+}
+
+/// The hatch under world point `w` within the pick aperture (PICKBOX × 1.5 pixels at `scale`
+/// pixels per unit), if any.
+fn hatch_at(app: &CadApp, w: Vec2, scale: f64) -> Option<Handle> {
+    let st = app.session.state().ok()?;
+    let aperture = app.session.settings.pickbox.max(1.0) * 1.5 / scale.max(1e-12);
+    let h = cadcraft_engine::select::pick(&st.doc, &st.edit_space(), w, aperture)?;
+    matches!(st.doc.entity(h)?.kind, cadcraft_doc::EntityKind::Hatch(_)).then_some(h)
 }
 
 /// Half the side of the pick box: the pick aperture (PICKBOX × 1.5 pixels, as `select::pick` is
@@ -1824,3 +1844,23 @@ mod tests {
 
 /// The COMPARE overlay.
 mod compare;
+
+#[cfg(test)]
+mod hatch_pick_tests {
+    use cadcraft_engine::Session;
+    use cadcraft_geom::Vec2;
+    use serde_json::json;
+
+    use crate::{CadApp, Services};
+
+    #[test]
+    fn hatch_at_finds_a_hatch_under_the_cursor_only() {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.session.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        let hx = app.session.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "SOLID" })).unwrap()["handle"].as_str().unwrap().to_string();
+        app.session.execute("line", &json!({ "points": [[20, 0], [30, 0]] })).unwrap();
+        assert_eq!(super::hatch_at(&app, Vec2::new(5.0, 5.0), 10.0).map(|h| h.hex()), Some(hx));
+        assert_eq!(super::hatch_at(&app, Vec2::new(25.0, 0.0), 10.0), None, "a line is not a hatch");
+        assert_eq!(super::hatch_at(&app, Vec2::new(60.0, 60.0), 10.0), None);
+    }
+}

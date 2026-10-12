@@ -238,3 +238,12 @@ fn hatchpick_json_form_validates_like_the_prompts() {
         assert!(s.hatch_picks.is_none(), "{bad}");
     }
 }
+
+#[test]
+fn hpdlgmode_defaults_to_1_and_takes_0_or_1() {
+    let mut s = Session::new();
+    assert_eq!(cadcraft_engine::sysvars::get(&s, "HPDLGMODE"), Some(json!(1)));
+    s.execute("setvar", &json!({ "name": "HPDLGMODE", "value": 0 })).unwrap();
+    assert_eq!(cadcraft_engine::sysvars::get(&s, "HPDLGMODE"), Some(json!(0)));
+    assert!(s.execute("setvar", &json!({ "name": "HPDLGMODE", "value": 2 })).is_err());
+}

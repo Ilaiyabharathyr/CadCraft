@@ -253,6 +253,35 @@ pub fn merge_picks(st: &mut HatchDlgState, picks: HatchPicks) {
     st.error = None;
 }
 
+/// Whether typed or menu HATCH and GRADIENT open the dialog (HPDLGMODE, default 1).
+pub fn dialog_on(app: &CadApp) -> bool {
+    app.session.doc().is_ok_and(|d| d.header.i64("HPDLGMODE", 1) != 0)
+}
+
+/// Create mode (HATCH, GRADIENT): the dialog from the drawing's hatch settings.
+pub fn open_create(app: &mut CadApp, gradient: bool) {
+    let Ok(st) = app.session.state() else { return };
+    app.hatch_dlg = Some(create_state(&st.doc, st.uid, gradient));
+    app.ui.dialog = Some("hatch".into());
+}
+
+/// Edit mode (HATCHEDIT, right-click, double-click) on the selected hatches; with none selected,
+/// pick a hatch first.
+pub fn open_edit(app: &mut CadApp) {
+    let Ok(st) = app.session.state() else { return };
+    let (edit, create) = (edit_state(&st.doc, st.uid, st.selection.clone()), create_state(&st.doc, st.uid, false));
+    match edit {
+        Some(e) => {
+            app.hatch_dlg = Some(e);
+            app.ui.dialog = Some("hatch".into());
+        }
+        None => {
+            app.hatch_dlg = Some(create);
+            start_pick(app, PickMode::Hatch);
+        }
+    }
+}
+
 /// Hide the dialog and run HATCHPICK in `mode`; [`resume`] brings the dialog back.
 pub fn start_pick(app: &mut CadApp, mode: PickMode) {
     let Some(st) = app.hatch_dlg.as_mut() else { return };
@@ -544,16 +573,10 @@ mod tests {
         (CadApp::new(s, Services::default()), r)
     }
 
-    fn open_create(app: &mut CadApp) {
-        let st = app.session.state().unwrap();
-        app.hatch_dlg = Some(create_state(&st.doc, st.uid, false));
-        app.ui.dialog = Some("hatch".into());
-    }
-
     #[test]
     fn pick_points_hides_the_dialog_and_brings_it_back_with_the_points() {
         let (mut app, _) = app_with_rect();
-        open_create(&mut app);
+        open_create(&mut app, false);
         start_pick(&mut app, PickMode::Points);
         assert_eq!(app.ui.dialog, None, "hidden while picking");
         assert!(app.session.prompt_text().contains("Pick internal point"));
@@ -570,7 +593,7 @@ mod tests {
     #[test]
     fn escape_brings_the_dialog_back_unchanged() {
         let (mut app, r) = app_with_rect();
-        open_create(&mut app);
+        open_create(&mut app, false);
         if let Some(st) = app.hatch_dlg.as_mut() {
             st.handles.push(r);
         }
@@ -586,7 +609,7 @@ mod tests {
     #[test]
     fn switching_drawings_drops_the_dialog() {
         let (mut app, _) = app_with_rect();
-        open_create(&mut app);
+        open_create(&mut app, false);
         start_pick(&mut app, PickMode::Points);
         app.session.input(cadcraft_engine::Input::Point(Vec2::new(5.0, 5.0))).unwrap();
         app.session.input(cadcraft_engine::Input::Enter).unwrap();
@@ -600,7 +623,7 @@ mod tests {
     fn hatch_pick_opens_edit_mode_or_nothing() {
         let (mut app, _) = app_with_rect();
         let hx = app.session.execute("hatch", &json!({ "points": [[5, 5]] })).unwrap()["handle"].as_str().unwrap().to_string();
-        open_create(&mut app);
+        open_create(&mut app, false);
         start_pick(&mut app, PickMode::Hatch);
         app.session.input(cadcraft_engine::Input::Pick(vec![Handle::parse_hex(&hx).unwrap()])).unwrap();
         resume(&mut app);
@@ -769,7 +792,7 @@ mod tests {
     #[test]
     fn ok_makes_the_hatch_and_closes() {
         let (mut app, _) = app_with_rect();
-        open_create(&mut app);
+        open_create(&mut app, false);
         if let Some(st) = app.hatch_dlg.as_mut() {
             st.points.push([5.0, 5.0]);
         }
@@ -781,7 +804,7 @@ mod tests {
     #[test]
     fn a_failed_ok_keeps_the_dialog_open_with_the_error() {
         let (mut app, r) = app_with_rect();
-        open_create(&mut app);
+        open_create(&mut app, false);
         if let Some(st) = app.hatch_dlg.as_mut() {
             st.handles.push(r);
         }
@@ -792,5 +815,73 @@ mod tests {
         let st = app.hatch_dlg.clone().unwrap();
         assert!(st.error.is_some_and(|e| !e.is_empty()));
         assert_eq!(app.session.doc().unwrap().model.len(), n, "drawing unchanged");
+    }
+
+    #[test]
+    fn typed_and_menu_hatch_open_the_dialog_but_dash_and_json_do_not() {
+        let (mut app, _) = app_with_rect();
+        app.cmdline("hatch");
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        assert!(app.session.running.is_none());
+        assert!(!app.hatch_dlg.clone().unwrap().fill.gradient);
+        for (typed, gradient) in [("h", false), ("bh", false), ("gradient", true), ("gd", true)] {
+            app.ui.dialog = None;
+            app.cmdline(typed);
+            assert_eq!(app.ui.dialog.as_deref(), Some("hatch"), "{typed}");
+            assert_eq!(app.hatch_dlg.clone().unwrap().fill.gradient, gradient, "{typed}");
+        }
+        app.ui.dialog = None;
+        app.start("hatch");
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"), "menu");
+        // -HATCH: the command line.
+        app.ui.dialog = None;
+        app.cmdline("-hatch");
+        assert_eq!(app.ui.dialog, None);
+        assert!(app.session.prompt_text().contains("Pick internal point"), "{}", app.session.prompt_text());
+        app.session.cancel();
+        // JSON: runs, never opens.
+        app.run("hatch", json!({ "points": [[5, 5]] })).unwrap();
+        assert_eq!(app.ui.dialog, None);
+        app.cmdline("hatch {\"points\": [[5, 5]]}");
+        assert_eq!(app.ui.dialog, None);
+        // HPDLGMODE 0: the command line.
+        app.run("setvar", json!({ "name": "HPDLGMODE", "value": 0 })).unwrap();
+        app.cmdline("hatch");
+        assert_eq!(app.ui.dialog, None);
+        assert!(app.session.running.is_some());
+    }
+
+    #[test]
+    fn hatchedit_opens_edit_mode_on_the_selection_or_asks_for_a_hatch() {
+        let (mut app, _) = app_with_rect();
+        let hx = app.session.execute("hatch", &json!({ "points": [[5, 5]] })).unwrap()["handle"].as_str().unwrap().to_string();
+        let h = Handle::parse_hex(&hx).unwrap();
+        // Nothing selected: pick one first.
+        app.cmdline("hatchedit");
+        assert_eq!(app.ui.dialog, None);
+        assert!(app.session.prompt_text().contains("Select hatch object"), "{}", app.session.prompt_text());
+        app.session.input(cadcraft_engine::Input::Pick(vec![h])).unwrap();
+        resume(&mut app);
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        assert_eq!(app.hatch_dlg.clone().unwrap().edit, vec![h]);
+        // Selected (right-click Hatch Edit, typed HE), also with HPDLGMODE 0.
+        app.ui.dialog = None;
+        app.hatch_dlg = None;
+        app.run("setvar", json!({ "name": "HPDLGMODE", "value": 0 })).unwrap();
+        app.session.set_selection(vec![h]);
+        app.start("he");
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        // OK applies the change.
+        if let Some(st) = app.hatch_dlg.as_mut() {
+            st.fill.pattern = "BRICK".into();
+        }
+        assert!(ok(&mut app));
+        let d = app.session.doc().unwrap();
+        assert!(matches!(&d.entity(h).unwrap().kind, cadcraft_doc::EntityKind::Hatch(x) if x.pattern == "BRICK"));
+        // -HATCHEDIT: the command line (the window, not `ok`, closes the dialog).
+        app.ui.dialog = None;
+        app.cmdline("-hatchedit");
+        assert_eq!(app.ui.dialog, None);
+        assert!(app.session.running.is_some());
     }
 }
