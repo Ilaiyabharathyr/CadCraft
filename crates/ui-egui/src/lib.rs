@@ -19,6 +19,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod docking;
+mod mtext_editor;
 pub mod spacemouse;
 // The External References palette.
 pub mod xrefs;

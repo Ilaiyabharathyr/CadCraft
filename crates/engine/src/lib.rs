@@ -16,6 +16,7 @@ mod finite;
 pub mod grip_dims;
 pub mod grips;
 mod guard;
+pub mod mtext_edit;
 pub mod pointmod;
 pub mod prompt;
 mod recent;
@@ -1152,6 +1153,12 @@ impl Session {
             self.pending_window = None;
             self.set_selection(Vec::new());
         }
+    }
+
+    /// The multiline text the running command is collecting, for the in-place editor
+    /// ([`Interactive::editing_mtext`]).
+    pub fn editing_mtext(&self) -> Option<cadcraft_doc::MText> {
+        self.running.as_ref().and_then(|r| r.machine.editing_mtext())
     }
 
     pub fn current_prompt(&self) -> Option<Prompt> {
