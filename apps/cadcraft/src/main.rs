@@ -21,6 +21,7 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod spacemouse;
 mod workspace;
 
 use cadcraft_engine::Session;
@@ -28,6 +29,7 @@ use cadcraft_ui_egui::{CadApp, Services, i18n};
 
 struct App {
     cad: CadApp,
+    spacemouse: spacemouse::SpaceMouse,
     /// The desktop's light/dark choice where winit reports none (Linux, the BSDs).
     desktop_theme: desktop_theme::DesktopTheme,
     workspace: workspace::Workspace,
@@ -71,6 +73,7 @@ impl eframe::App for App {
             }
         }
         self.cad.logic(ctx);
+        self.spacemouse.poll(&mut self.cad, ctx);
         self.persist_workspace(false);
         if std::mem::take(&mut self.cad.quit_requested) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -119,6 +122,7 @@ fn services() -> Services {
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter(i18n::t("Drawings (DWG, DXF)"), &["dwg", "dxf", "dwt"])
+                .add_filter(i18n::t("SVG drawings (SVG, SVGZ)"), &["svg", "svgz"])
                 .add_filter(i18n::t("All files"), &["*"])
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
@@ -252,6 +256,17 @@ fn main() -> eframe::Result {
     // Before eframe creates the wgpu instance: default Windows to DirectX 12 with FXC (see graphics.rs).
     #[cfg(target_os = "windows")]
     graphics::configure(&mut options, eframe::wgpu::Backends::from_env(), eframe::wgpu::Dx12Compiler::from_env());
+    // Command previews (COPY, MOVE...) of large selections are tessellated by egui, whose index
+    // buffer outgrew wgpu's default 256 MiB cap; the validation error is fatal. Ask for what the
+    // adapter actually supports.
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
+        let base = std::sync::Arc::clone(&create.device_descriptor);
+        create.device_descriptor = std::sync::Arc::new(move |adapter| {
+            let mut d = base(adapter);
+            d.required_limits.max_buffer_size = d.required_limits.max_buffer_size.max(adapter.limits().max_buffer_size);
+            d
+        });
+    }
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
     // manager showed a "no" cursor. Run through XWayland when it's there; CADCRAFT_WAYLAND=1
     // keeps the native Wayland backend.
@@ -315,6 +330,7 @@ fn main() -> eframe::Result {
             Ok(Box::new(App {
                 desktop_theme,
                 cad: app,
+                spacemouse: spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
                 workspace,
                 workspace_error,
                 #[cfg(target_os = "macos")]
