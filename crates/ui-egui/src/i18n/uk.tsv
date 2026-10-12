@@ -144,6 +144,7 @@
 	Closed	Замкнений
 	Close Comparison	Закрити порівняння
 	Coincident	Збіг
+	Collapse Palettes	Згорнути палітри
 	Collapse Tool Sets	Згорнути набори інструментів
 	Collinear	Колінеарність
 	Color	Колір
@@ -252,6 +253,7 @@
 	Drawing Template (DWT)	Шаблон креслення (DWT)
 	Drawing Utilities	Утиліти креслення
 	Drawings (DWG, DXF)	Креслення (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	Креслення SVG (SVG, SVGZ)
 	Dynamic	Динамічно
 	Dynamic Dimensions	Динамічні розміри
 	Dynamic Input	Динамічне введення
@@ -839,6 +841,8 @@
 	Show All	Показати всі
 	Show All Constraint Bars	Показати всі панелі обмежень
 	Show All Dynamic Dimensions	Показати всі динамічні розміри
+	Show and hide the tools of this category	Показати й сховати інструменти цієї категорії
+	Show in Tool Sets	Показувати в наборах інструментів
 	Show command prompting near the crosshairs	Показувати запити команд біля перехрестя
 	Show Layer List	Показати список шарів
 	Show/Hide Lineweight	Показати/приховати товщину ліній
@@ -1217,3 +1221,11 @@
 	Calibrate	Калібрувати
 	Move sideways to pan; push/pull or twist to zoom.	Рухайте вбік для панорамування; натискайте, тягніть або обертайте для масштабування.
 	Left device button: zoom extents. Right device button: calibrate.	Ліва кнопка пристрою: масштабування до меж. Права кнопка: калібрування.
+	More toolbar commands	Інші команди панелі інструментів
+	Default save version	Типова версія збереження
+	Automatic save every	Автозбереження кожні
+	min	хв
+	Automatic save file location	Папка файлів автозбереження
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Креслення, що ще не мають файлу, зберігаються в типовій версії. 0 хвилин вимикає автозбереження.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Клік правою кнопкою з урахуванням часу: швидкий клік — Enter, утримання відкриває меню
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Якщо вимкнено, клік правою кнопкою під час команди завжди відкриває контекстне меню.

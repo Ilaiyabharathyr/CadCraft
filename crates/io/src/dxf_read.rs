@@ -742,9 +742,10 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
     }
     let solid = solid || pattern.eq_ignore_ascii_case("SOLID");
     let (scale, angle) = (t.fd(41, 1.0), t.fd(52, 0.0).to_radians());
-    // Definition lines matter only for a pattern the library doesn't define.
-    let pattern_lines =
-        if solid || cadcraft_doc::library::pattern(&pattern).is_some() { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
+    // Keep the file's definition lines even for a name the library knows: the library's versions
+    // of some patterns (AR-CONC) only approximate AutoCAD's, and drawing them at the file's scale
+    // could be hundreds of times denser than the hatch the author saw.
+    let pattern_lines = if solid { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
     Some(EntityKind::Hatch(Hatch {
         pattern: pattern.to_ascii_uppercase(),
         solid,
@@ -1843,6 +1844,9 @@ impl Objects {
     }
 
     fn apply(self, d: &mut Drawing, rx: &Rx) {
+        if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
+            d.header.set_str("CMLEADERSTYLE", &style);
+        }
         // Table styles (named by their ACAD_TABLESTYLE dictionary entries).
         for (h, tags) in &self.table_styles {
             let Some(name) = self.names.get(h).filter(|n| !n.is_empty()) else { continue };
