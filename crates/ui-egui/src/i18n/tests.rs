@@ -543,3 +543,8 @@ fn chinese_needs_an_installed_cjk_font() {
         assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("No Chinese font")));
     }
 }
+
+#[test]
+fn hatch_dialog_extents_label_says_extents_in_ukrainian() {
+    assert_eq!(tr("uk", "Default to boundary extents"), "Типово за габаритами контуру");
+}

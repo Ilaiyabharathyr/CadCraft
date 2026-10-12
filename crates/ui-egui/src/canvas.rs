@@ -898,7 +898,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
 
-    // Double-click a hatch (no command running) to edit it in the Hatch Edit dialog.
+    // Double-click a hatch (no command running) to edit it in the Hatch Edit dialog. The click is
+    // used up: it must not also start a grip edit on the hatch's centre grip below.
+    let mut hatch_dialog = false;
     if inside
         && dbl_primary
         && app.session.running.is_none()
@@ -907,6 +909,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     {
         app.session.set_selection(vec![h]);
         crate::hatchdlg::open_edit(app);
+        hatch_dialog = true;
     }
 
     let raw_world = hover_pos.filter(|_| inside).map(|p| xf.to_world(p));
@@ -960,7 +963,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             None => app.cmd.options = None,
         }
     }
-    let pressed_primary = pressed_primary && !picked;
+    let pressed_primary = pressed_primary && !picked && !hatch_dialog;
     // Clicks.
     if inside
         && pressed_primary
@@ -1888,5 +1891,7 @@ mod hatch_pick_tests {
         frame(&mut app, Vec::new(), 0.4);
         assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
         assert_eq!(app.hatch_dlg.as_ref().map(|s| s.edit.iter().map(|h| h.hex()).collect::<Vec<_>>()), Some(vec![hx]));
+        // The double-click (at the hatch's centre grip) only opens the dialog: no grip edit.
+        assert!(app.session.running.is_none(), "{:?}", app.session.running.as_ref().map(|r| r.machine.name()));
     }
 }

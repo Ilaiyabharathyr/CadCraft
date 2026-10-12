@@ -3,7 +3,7 @@
 //! picks go through HATCHPICK, and OK runs one HATCH, GRADIENT or HATCHEDIT call.
 
 use cadcraft_color::Color;
-use cadcraft_doc::{Drawing, EntityKind, Handle};
+use cadcraft_doc::{Drawing, EntityKind, Handle, Space};
 use cadcraft_engine::{HatchPicks, PickMode};
 use serde_json::{Value, json};
 
@@ -61,6 +61,9 @@ pub struct HatchDlgState {
     pub error: Option<String>,
     /// The drawing the dialog belongs to (`DocState::uid`).
     pub uid: u64,
+    /// The space its picks were made in (`DocState::edit_space`, where HATCH adds the hatch): a
+    /// switch to another layout drops the dialog.
+    pub space: Space,
 }
 
 /// Create mode, from the drawing's HATCH settings (HPNAME, HPSCALE, HPANG, HPASSOC, HPSEPARATE,
@@ -81,7 +84,8 @@ pub fn create_state(d: &Drawing, uid: u64, gradient: bool) -> HatchDlgState {
         color1: Color::Index(5),
         color2: Color::Index(7),
         centered: true,
-        specified: mode != 0,
+        // As HATCH reads HPORIGINMODE: 1–5 a corner or the centre, anything else the current origin.
+        specified: (1..=5).contains(&mode),
         origin: None,
         origin_mode: origin_mode.into(),
         associative: h.i64("HPASSOC", 1) != 0,
@@ -97,6 +101,7 @@ pub fn create_state(d: &Drawing, uid: u64, gradient: bool) -> HatchDlgState {
         picking: None,
         error: None,
         uid,
+        space: Space::Model,
     }
 }
 
@@ -109,7 +114,10 @@ pub fn edit_state(d: &Drawing, uid: u64, handles: Vec<Handle>) -> Option<HatchDl
     })?;
     let mut st = create_state(d, uid, first.gradient.is_some());
     let f = &mut st.fill;
-    f.pattern = first.pattern.clone();
+    // A gradient's own pattern is SOLID; its Pattern tab offers the current pattern (HPNAME).
+    if first.gradient.is_none() {
+        f.pattern = first.pattern.clone();
+    }
     f.scale = if first.scale.is_finite() && first.scale > 0.0 { first.scale } else { 1.0 };
     f.angle = Some(first.angle.to_degrees()).filter(|a| a.is_finite()).unwrap_or(0.0);
     f.associative = first.associative;
@@ -261,7 +269,9 @@ pub fn dialog_on(app: &CadApp) -> bool {
 /// Create mode (HATCH, GRADIENT): the dialog from the drawing's hatch settings.
 pub fn open_create(app: &mut CadApp, gradient: bool) {
     let Ok(st) = app.session.state() else { return };
-    app.hatch_dlg = Some(create_state(&st.doc, st.uid, gradient));
+    let mut dlg = create_state(&st.doc, st.uid, gradient);
+    dlg.space = st.edit_space();
+    app.hatch_dlg = Some(dlg);
     app.ui.dialog = Some("hatch".into());
 }
 
@@ -269,7 +279,11 @@ pub fn open_create(app: &mut CadApp, gradient: bool) {
 /// pick a hatch first.
 pub fn open_edit(app: &mut CadApp) {
     let Ok(st) = app.session.state() else { return };
-    let (edit, create) = (edit_state(&st.doc, st.uid, st.selection.clone()), create_state(&st.doc, st.uid, false));
+    let (mut edit, mut create) = (edit_state(&st.doc, st.uid, st.selection.clone()), create_state(&st.doc, st.uid, false));
+    create.space = st.edit_space();
+    if let Some(e) = edit.as_mut() {
+        e.space = st.edit_space();
+    }
     match edit {
         Some(e) => {
             app.hatch_dlg = Some(e);
@@ -312,15 +326,16 @@ pub fn resume(app: &mut CadApp) {
         return;
     }
     let picks = app.session.hatch_picks.take();
-    let uid = app.session.state().ok().map(|s| s.uid);
+    let here = app.session.state().ok().map(|s| (s.uid, s.edit_space()));
     let Some(mut st) = app.hatch_dlg.take() else { return };
-    if uid != Some(st.uid) {
+    if here != Some((st.uid, st.space.clone())) {
         return;
     }
     st.picking = None;
     if mode == PickMode::Hatch {
         let next = picks.and_then(|p| app.session.doc().ok().and_then(|d| edit_state(d, st.uid, p.handles)));
-        let Some(next) = next else { return };
+        let Some(mut next) = next else { return };
+        next.space = st.space.clone();
         st = next;
     } else if let Some(p) = picks {
         merge_picks(&mut st, p);
@@ -385,15 +400,13 @@ fn num(v: f64) -> String {
 
 /// The Hatch and Gradient / Hatch Edit window (`app.ui.dialog == "hatch"`).
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
-    let uid = app.session.state().ok().map(|s| s.uid);
+    let here = app.session.state().ok().map(|s| (s.uid, s.edit_space()));
     // Opened by name (control channel) with no state: create mode from the header.
-    if app.hatch_dlg.is_none()
-        && let Ok(st) = app.session.state()
-    {
-        app.hatch_dlg = Some(create_state(&st.doc, st.uid, false));
+    if app.hatch_dlg.is_none() {
+        open_create(app, false);
     }
-    // No drawing, or another drawing than the one the dialog was opened on: close.
-    let Some(mut st) = app.hatch_dlg.take().filter(|s| Some(s.uid) == uid) else {
+    // No drawing, or another drawing or layout than the one the dialog was opened on: close.
+    let Some(mut st) = app.hatch_dlg.take().filter(|s| here.as_ref() == Some(&(s.uid, s.space.clone()))) else {
         *open = false;
         return;
     };
@@ -479,7 +492,7 @@ fn fill_ui(ui: &mut egui::Ui, f: &mut Fill, action: &mut Action) {
             ui.checkbox(&mut f.centered, crate::tl!("Centered"));
             ui.end_row();
             ui.label(crate::tl!("Angle"));
-            ui.add(egui::DragValue::new(&mut f.angle).speed(1.0).range(-360.0..=360.0).suffix("°"));
+            ui.add(egui::DragValue::new(&mut f.angle).speed(1.0).range(-360.0..=360.0).clamp_existing_to_range(false).suffix("°"));
             ui.end_row();
         });
     } else {
@@ -490,10 +503,10 @@ fn fill_ui(ui: &mut egui::Ui, f: &mut Fill, action: &mut Action) {
         });
         egui::Grid::new("hatch_pattern").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
             ui.label(crate::tl!("Angle"));
-            ui.add(egui::DragValue::new(&mut f.angle).speed(1.0).range(-360.0..=360.0).suffix("°"));
+            ui.add(egui::DragValue::new(&mut f.angle).speed(1.0).range(-360.0..=360.0).clamp_existing_to_range(false).suffix("°"));
             ui.end_row();
             ui.label(crate::tl!("Scale"));
-            ui.add(egui::DragValue::new(&mut f.scale).speed(0.05).range(0.0001..=1.0e6));
+            ui.add(egui::DragValue::new(&mut f.scale).speed(0.05).range(0.0001..=1.0e6).clamp_existing_to_range(false));
             ui.end_row();
         });
     }
@@ -657,14 +670,18 @@ mod tests {
         h.set_i64("HPORIGINMODE", i64::MIN);
         h.set_i64("HPISLANDDETECTION", -5);
         let st = create_state(s.doc().unwrap(), 7, true);
-        assert_eq!((st.fill.scale, st.fill.angle, st.fill.style, st.fill.specified), (1.0, 0.0, 0, true));
+        // An HPORIGINMODE out of 0–5 is "use current", as HATCH reads it.
+        assert_eq!((st.fill.scale, st.fill.angle, st.fill.style, st.fill.specified), (1.0, 0.0, 0, false));
         assert!(ORIGIN_MODES.contains(&st.fill.origin_mode.as_str()));
         assert!(st.fill.gradient);
         s.doc_mut().unwrap().header.set_f64("HPSCALE", 0.0);
         s.doc_mut().unwrap().header.set_i64("HPORIGINMODE", 99);
         let st = create_state(s.doc().unwrap(), 7, false);
-        assert_eq!(st.fill.scale, 1.0);
+        assert_eq!((st.fill.scale, st.fill.specified), (1.0, false));
         assert!(ORIGIN_MODES.contains(&st.fill.origin_mode.as_str()));
+        s.doc_mut().unwrap().header.set_i64("HPORIGINMODE", 3);
+        let st = create_state(s.doc().unwrap(), 7, false);
+        assert_eq!((st.fill.specified, st.fill.origin_mode.as_str()), (true, "topRight"));
     }
 
     #[test]
@@ -899,5 +916,53 @@ mod tests {
         app.cmdline("-hatchedit");
         assert_eq!(app.ui.dialog, None);
         assert!(app.session.running.is_some());
+    }
+
+    #[test]
+    fn edit_mode_on_an_out_of_range_hatch_changes_nothing_by_itself() {
+        let (mut app, _) = app_with_rect();
+        let hx = app.session.execute("hatch", &json!({ "points": [[5, 5]], "scale": 5.0e6, "angle": 400 })).unwrap()["handle"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.session.set_selection(vec![Handle::parse_hex(&hx).unwrap()]);
+        open_edit(&mut app);
+        frames(&mut app);
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        assert_eq!(app.hatch_dlg.as_ref().and_then(ok_call), None, "the widgets must not clamp the hatch's own values");
+    }
+
+    #[test]
+    fn switching_to_a_layout_drops_the_picks() {
+        let (mut app, r) = app_with_rect();
+        open_create(&mut app, false);
+        start_pick(&mut app, PickMode::Objects);
+        app.session.input(cadcraft_engine::Input::Pick(vec![r])).unwrap();
+        app.session.input(cadcraft_engine::Input::Enter).unwrap();
+        app.run("layout", json!({ "option": "set", "name": "Layout1" })).unwrap();
+        resume(&mut app);
+        assert_eq!((app.ui.dialog.clone(), app.hatch_dlg.clone()), (None, None), "model-space picks never hatch a layout");
+        // An open dialog closes too.
+        app.run("layout", json!({ "option": "set", "name": "Model" })).unwrap();
+        open_create(&mut app, false);
+        app.run("layout", json!({ "option": "set", "name": "Layout1" })).unwrap();
+        frames(&mut app);
+        assert_eq!(app.hatch_dlg, None);
+    }
+
+    #[test]
+    fn a_gradient_hatch_offers_the_current_pattern_on_the_pattern_tab() {
+        let (mut s, _) = session_with_rect();
+        let h = s.execute("gradient", &json!({ "points": [[5, 5]] })).unwrap()["handle"].as_str().unwrap().to_string();
+        let h = Handle::parse_hex(&h).unwrap();
+        let mut st = edit_state(s.doc().unwrap(), 1, vec![h]).unwrap();
+        assert_eq!(st.fill.pattern, "ANSI31", "HPNAME, not the gradient's SOLID");
+        st.fill.gradient = false;
+        let (cmd, p) = ok_call(&st).unwrap();
+        s.execute(cmd, &p).unwrap();
+        match &s.doc().unwrap().entity(h).unwrap().kind {
+            cadcraft_doc::EntityKind::Hatch(x) => assert!(x.gradient.is_none() && x.pattern == "ANSI31"),
+            k => panic!("{k:?}"),
+        }
     }
 }
