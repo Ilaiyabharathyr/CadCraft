@@ -405,7 +405,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 ui.set_width(340.0);
                 fill_ui(ui, &mut st.fill, &mut action);
             });
-            ui.separator();
+            // Space, not a vertical separator: a separator takes the height available, and the
+            // window grew by it every frame until the buttons left the screen.
+            ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.set_width(230.0);
                 options_ui(ui, &mut st, &mut action);
@@ -758,14 +760,28 @@ mod tests {
         assert_eq!((st.fill.specified, st.fill.origin), (true, Some([1.0, 2.0])));
     }
 
-    fn frames(app: &mut CadApp) {
+    fn frames(app: &mut CadApp) -> egui::Context {
         let ctx = egui::Context::default();
         app.logic(&ctx);
         let input =
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };
-        for _ in 0..2 {
+        // Enough frames for a window that grows each frame to show it.
+        for _ in 0..30 {
             let mut output = ctx.run_ui(input.clone(), |ui| app.ui(ui));
             output.textures_delta.clear();
+        }
+        ctx
+    }
+
+    #[test]
+    fn the_dialog_fits_on_screen_with_its_buttons() {
+        for gradient in [false, true] {
+            let (mut app, _) = app_with_rect();
+            open_create(&mut app, gradient);
+            let ctx = frames(&mut app);
+            let r = ctx.memory(|m| m.area_rect(egui::Id::new("hatch_dialog"))).unwrap();
+            // The screen is 1000 points high: the window keeps to its content.
+            assert!(r.height() < 700.0, "gradient {gradient}: {r:?}");
         }
     }
 
