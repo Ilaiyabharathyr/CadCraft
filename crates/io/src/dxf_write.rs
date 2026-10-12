@@ -1,6 +1,7 @@
 //! Drawing → DXF (AC1015 / R2000 structure, readable by every DXF consumer since 2000). Later
 //! versions keep that structure (the groups they add are optional, DXF Reference) and differ in
-//! `$ACADVER` and, from 2007, in UTF-8 text; the caller picks the text encoding.
+//! `$ACADVER`, from 2004 in the newer DIMSTYLE groups, and from 2007 in UTF-8 text (the caller
+//! picks the text encoding) and MULTILEADER entities (older files get LEADER + MTEXT).
 
 use std::collections::HashMap;
 
@@ -121,9 +122,17 @@ struct Ctx {
     block_records: HashMap<String, String>,
     /// Raster images' IMAGEDEF, IMAGEDEF_REACTOR and dictionary handles.
     images: crate::dxf_image::Plan,
+    /// The version the file ends up in (the DWG version for a DWG save): it decides which
+    /// entity types exist (MULTILEADER from 2007).
+    target: Version,
 }
 
 impl Ctx {
+    /// Whether multileaders are written as MULTILEADER (AutoCAD 2007 / AC1021 and later);
+    /// older files get LEADER + MTEXT/INSERT.
+    fn native_mleader(&self) -> bool {
+        self.target >= Version::R2007
+    }
     fn style(&self, name: &str) -> Option<String> {
         self.styles.get(&name.to_ascii_uppercase()).cloned()
     }
@@ -211,6 +220,8 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("INSBASE", -3),
     ("LIMMIN", -2),
     ("LIMMAX", -2),
+    ("SNAPUNIT", -2),
+    ("GRIDUNIT", -2),
     ("ORTHOMODE", 70),
     ("FILLMODE", 70),
     ("MIRRTEXT", 70),
@@ -254,6 +265,11 @@ fn header_vars(w: &mut W, d: &Drawing) {
         let Some(v) = d.header.get(name) else { continue };
         match (*code, v) {
             (-2 | -3, HVal::Point(p)) => {
+                let p = match *name {
+                    "SNAPUNIT" => d.header.snap_unit().to3(0.0),
+                    "GRIDUNIT" => d.header.grid_unit().to3(0.0),
+                    _ => *p,
+                };
                 w.s(9, format!("${name}"));
                 w.f(10, p.x);
                 w.f(20, p.y);
@@ -826,6 +842,7 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.s(1000, c);
             }
         }
+        EntityKind::MLeader(m) if !cx.native_mleader() => mleader_fallback(w, d, e, m, owner, paper, cx),
         EntityKind::MLeader(m) => {
             w.s(0, "MULTILEADER");
             common(w, e, owner, paper, "AcDbMLeader");
@@ -907,9 +924,12 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                 w.f(52, h.angle.to_degrees());
                 w.f(41, h.scale);
                 w.i(77, 0);
-                let pat = cadcraft_doc::library::pattern(&h.pattern);
-                // A pattern the library doesn't define keeps the lines read from its file.
-                let lines = pat.map(|p| p.lines).unwrap_or_else(|| h.pattern_lines.clone());
+                // The lines read from the file, else the library's pattern of that name.
+                let lines = if h.pattern_lines.is_empty() {
+                    cadcraft_doc::library::pattern_for(d, &h.pattern).map(|p| p.lines).unwrap_or_default()
+                } else {
+                    h.pattern_lines.clone()
+                };
                 w.i(78, lines.len() as i64);
                 for pl in lines {
                     let ang = pl.angle.to_radians() + h.angle;
@@ -1006,6 +1026,36 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
         }
         // Entity types CADCraft doesn't model aren't written; the save command reports them.
         EntityKind::Unknown(_) => {}
+    }
+}
+
+/// `$DWGCODEPAGE`: before 2007 the code page read from the file when CADCraft knows it (the text
+/// is ASCII with `\U+XXXX` escapes, right in any code page, but the file keeps its declared one);
+/// otherwise, and from 2007 (UTF-8 text), `ANSI_1252`.
+fn code_page(d: &Drawing, version: Version) -> String {
+    let read = d.header.get("DWGCODEPAGE").and_then(HVal::as_str).map(str::trim).unwrap_or_default();
+    let known = read.is_ascii() && read.len() <= 32 && cadcraft_dxf::decode_code_page(b"", read).is_some();
+    if version < Version::R2007 && known { read.to_string() } else { "ANSI_1252".into() }
+}
+
+/// A multileader for a file older than 2007 (no MULTILEADER): a LEADER per leader line, ending
+/// at the landing, plus its MTEXT or its block's INSERT, with the multileader's properties.
+fn mleader_fallback(w: &mut W, d: &Drawing, e: &Entity, m: &MLeader, owner: &str, paper: bool, cx: &Ctx) {
+    let part = |w: &mut W, kind: EntityKind| Entity { handle: Handle::parse_hex(&w.h()).unwrap_or(Handle(0)), common: e.common.clone(), kind };
+    let style = d.header.str("DIMSTYLE", "Standard");
+    for arm in m.leaders.iter().take(64) {
+        let mut vertices = arm.clone();
+        vertices.push(m.landing);
+        let le = part(w, EntityKind::Leader(Leader { vertices, arrow: true, spline: m.spline, style: style.clone() }));
+        entity(w, d, &le, owner, paper, cx);
+    }
+    if let Some(t) = &m.text {
+        let te = part(w, EntityKind::MText(t.clone()));
+        entity(w, d, &te, owner, paper, cx);
+    }
+    if let Some(ins) = &m.block {
+        let ie = part(w, EntityKind::Insert(ins.clone()));
+        entity(w, d, &ie, owner, paper, cx);
     }
 }
 
@@ -1358,8 +1408,8 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
         w.p2(12, finite(t.center, Vec2::ZERO));
         // Snap grid origin and rotation (SNAPBASE, SNAPANG in degrees): R13+ files keep them here.
         w.p2(13, d.header.point("SNAPBASE").map(|p| p.xy()).filter(|p| p.is_finite()).unwrap_or(Vec2::ZERO));
-        w.p2(14, Vec2::new(0.5, 0.5));
-        w.p2(15, Vec2::new(0.5, 0.5));
+        w.p2(14, d.header.snap_unit());
+        w.p2(15, d.header.grid_unit());
         w.p(16, Vec3::Z);
         w.p(17, Vec3::ZERO);
         w.f(40, if t.height.is_finite() && t.height > 0.0 { t.height } else { 1.0 });
@@ -1399,6 +1449,18 @@ pub fn write(d: &Drawing) -> String {
 
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`.
 pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
+    tags_for(d, version, version)
+}
+
+/// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
+/// version's (MULTILEADER from 2007).
+pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
+    cadcraft_dxf::write_ascii(&tags_for(d, Version::R2000, dwg))
+}
+
+/// The drawing's DXF tags, declaring `version` in `$ACADVER`, with what `target` (the version the
+/// file ends up in: `version`, or the DWG version the bridge writes) has.
+fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // Structural handles start above every entity handle.
     let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new() };
     // Pre-allocate handles for block records.
@@ -1423,7 +1485,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         .collect();
     user_blocks.iter_mut().for_each(|b| b.1 = format!("{:X}", 0));
     let user_blocks: Vec<(String, String, &Block)> = user_blocks.into_iter().map(|(n, _, b)| (n, w.h(), b)).collect();
-    let mut cx = Ctx { paper_views: paper_views(d), ..Ctx::default() };
+    let mut cx = Ctx { paper_views: paper_views(d), target, ..Ctx::default() };
     cx.block_records = user_blocks.iter().map(|(n, h, _)| (n.to_ascii_uppercase(), h.clone())).collect();
     // Dimension blocks.
     let mut dim_defs: Vec<(String, String, Vec<Entity>)> = Vec::new(); // filled below
@@ -1548,6 +1610,9 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     // The drawing's own next handle: table records and objects are numbered above it, so
     // reading it back (instead of $HANDSEED) keeps their handles across saves (#495).
     xrecords.push((dxf_ext::HANDSEED_KEY, w.h(), vec![format!("{:X}", d.handseed)]));
+    if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
+        xrecords.push((dxf_ext::MLEADER_STYLE_KEY, w.h(), vec![name.to_string()]));
+    }
     if let Some(chunks) = dxf_ext::constraint_chunks(&d.constraints, &d.parametric) {
         xrecords.push((dxf_ext::CONSTRAINTS_KEY, w.h(), chunks));
     }
@@ -1585,7 +1650,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     w.s(9, "$ACADVER");
     w.s(1, version.code());
     w.s(9, "$DWGCODEPAGE");
-    w.s(3, "ANSI_1252");
+    w.s(3, code_page(d, version));
     let ext = d.extents(&Space::Model);
     if !ext.is_empty() {
         w.s(9, "$EXTMIN");
@@ -1594,11 +1659,6 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         w.p(10, ext.max.to3(0.0));
     }
     header_vars(&mut w, d);
-    // The current multileader style (an R2007 variable; older readers skip it).
-    if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
-        w.s(9, "$CMLEADERSTYLE");
-        w.s(2, name);
-    }
     let seed_pos = w.t.len();
     w.s(9, "$HANDSEED");
     w.s(5, "0");
@@ -1622,7 +1682,7 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     if !cx.assoc.is_empty() {
         classes.push(("DIMASSOC", "AcDbDimAssoc", 0, false));
     }
-    if every.iter().any(|e| matches!(e.kind, EntityKind::MLeader(_))) {
+    if cx.native_mleader() && every.iter().any(|e| matches!(e.kind, EntityKind::MLeader(_))) {
         classes.push(("MULTILEADER", "AcDbMLeader", 1025, true));
     }
     if every.iter().any(|e| matches!(e.kind, EntityKind::Wipeout(_))) {
@@ -1859,6 +1919,11 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             if !dxf_ext::NEWER_CODES.contains(code) {
+                w.dimval(*code, enc, false);
+                continue;
+            }
+            // Table groups where the file version has them, else xdata.
+            if version >= dxf_ext::NEWER_SINCE {
                 w.dimval(*code, enc, false);
             } else if v.get(*field) != defaults.get(*field) {
                 newer.i(1070, i64::from(*code));
@@ -2248,8 +2313,43 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
         *t = Tag::s(5, seed);
     }
     crate::dxf_raw::finish(&mut w.t, d);
+    add_class_instance_counts(&mut w.t);
     mark_xrefs(&mut w.t, d);
     w.t
+}
+
+/// Write DXF Reference group 91 on every CLASS record. Count records after `dxf_raw::finish`
+/// restores foreign classes and objects so every class gets its actual instance count.
+fn add_class_instance_counts(tags: &mut Vec<Tag>) {
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    for t in tags.iter().filter(|t| t.code == 0) {
+        let kind = t.str();
+        if kind != "CLASS" {
+            *counts.entry(kind.to_ascii_uppercase()).or_default() += 1;
+        }
+    }
+
+    let mut start = 0;
+    while start < tags.len() {
+        if tags.get(start).is_none_or(|t| t.code != 0 || t.str() != "CLASS") {
+            start += 1;
+            continue;
+        }
+        let end = tags[start + 1..].iter().position(|t| t.code == 0).map_or(tags.len(), |i| start + 1 + i);
+        let name = tags[start + 1..end].iter().find(|t| t.code == 1).map(Tag::str).unwrap_or_default().to_ascii_uppercase();
+        let count = counts.get(&name).copied().unwrap_or(0);
+        let inserted = if let Some(i) = tags[start + 1..end].iter().position(|t| t.code == 91) {
+            tags[start + 1 + i] = Tag::i(91, count);
+            false
+        } else if let Some(i) = tags[start + 1..end].iter().position(|t| t.code == 90) {
+            tags.insert(start + 2 + i, Tag::i(91, count));
+            true
+        } else {
+            false
+        };
+        // Inserting the group shifts the next record's start by one.
+        start = end + usize::from(inserted);
+    }
 }
 
 /// Xref blocks (DXF Reference, BLOCK): bit 4 of group 70 and the external drawing's path in

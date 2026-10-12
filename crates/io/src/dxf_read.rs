@@ -742,9 +742,10 @@ fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {
     }
     let solid = solid || pattern.eq_ignore_ascii_case("SOLID");
     let (scale, angle) = (t.fd(41, 1.0), t.fd(52, 0.0).to_radians());
-    // Definition lines matter only for a pattern the library doesn't define.
-    let pattern_lines =
-        if solid || cadcraft_doc::library::pattern(&pattern).is_some() { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
+    // Keep the file's definition lines even for a name the library knows: the library's versions
+    // of some patterns (AR-CONC) only approximate AutoCAD's, and drawing them at the file's scale
+    // could be hundreds of times denser than the hatch the author saw.
+    let pattern_lines = if solid { Vec::new() } else { pattern_definition(tags, scale, angle, origin) };
     Some(EntityKind::Hatch(Hatch {
         pattern: pattern.to_ascii_uppercase(),
         solid,
@@ -1218,6 +1219,15 @@ fn header(tags: &[Tag], d: &mut Drawing) {
                 vals.push(v);
                 i += 1;
             }
+            // Legacy files keep spacing in HEADER; modern *ACTIVE VPORT entries override it.
+            if matches!(name.as_str(), "SNAPUNIT" | "GRIDUNIT") {
+                let (Some(x), Some(y)) = (vals.iter().find(|t| t.code == 10), vals.iter().find(|t| t.code == 20)) else { continue };
+                let p = Vec2::new(x.f64(), y.f64());
+                if p.is_finite() && if name == "GRIDUNIT" { p.x >= 0.0 && p.y >= 0.0 } else { p.x > 0.0 && p.y > 0.0 } {
+                    d.header.set(&name, HVal::Point(p.to3(0.0)));
+                }
+                continue;
+            }
             let hv = match vals.as_slice() {
                 [x, y, z] if x.code == 10 => HVal::Point(Vec3::new(x.f64(), y.f64(), z.f64())),
                 [x, y] if x.code == 10 => HVal::Point(Vec3::new(x.f64(), y.f64(), 0.0)),
@@ -1374,10 +1384,18 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     None => d.text_styles.push(st),
                 }
             }
-            // The first *ACTIVE viewport holds the snap grid's origin and rotation (degrees).
+            // The first *ACTIVE viewport holds the current snap/grid settings.
             "VPORT" if !active_vport && t.s(2).is_some_and(|n| n.trim().eq_ignore_ascii_case("*ACTIVE")) => {
                 active_vport = true;
                 vport_record(d, &t);
+                for (name, code) in [("SNAPUNIT", 14), ("GRIDUNIT", 15)] {
+                    if let (Some(x), Some(y)) = (t.f(code), t.f(code + 10)) {
+                        let p = Vec2::new(x, y);
+                        if p.is_finite() && if name == "GRIDUNIT" { p.x >= 0.0 && p.y >= 0.0 } else { p.x > 0.0 && p.y > 0.0 } {
+                            d.header.set(name, HVal::Point(p.to3(0.0)));
+                        }
+                    }
+                }
                 if let (Some(x), Some(y)) = (t.f(13), t.f(23))
                     && x.is_finite()
                     && y.is_finite()
@@ -1826,6 +1844,9 @@ impl Objects {
     }
 
     fn apply(self, d: &mut Drawing, rx: &Rx) {
+        if let Some(style) = self.xrecord_text(crate::dxf_ext::MLEADER_STYLE_KEY).filter(|s| !s.trim().is_empty()) {
+            d.header.set_str("CMLEADERSTYLE", &style);
+        }
         // Table styles (named by their ACAD_TABLESTYLE dictionary entries).
         for (h, tags) in &self.table_styles {
             let Some(name) = self.names.get(h).filter(|n| !n.is_empty()) else { continue };

@@ -38,7 +38,7 @@ pub use cadcraft_doc as doc;
 pub use cadcraft_geom as geom;
 pub use cadcraft_render as render;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
-pub use prompt::{Accept, Input, Interactive, Prompt, Step};
+pub use prompt::{Accept, Drag, Input, Interactive, Prompt, Step};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -303,7 +303,8 @@ impl DocState {
     }
 }
 
-/// Session-level drafting settings (the AutoCAD system variables stored in the registry/profile).
+/// Session-level drafting settings. [`Session::drafting_settings`] supplies the active drawing's
+/// snap/grid spacing in the corresponding fields for UI and JSON consumers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -314,9 +315,11 @@ pub struct Settings {
     pub polarang: f64,
     pub gridmode: bool,
     pub snapmode: bool,
+    /// SNAPUNIT in a drafting settings snapshot; stored in the drawing header.
     pub snapunit: Vec2,
     /// OSNAPHATCH: object snaps find hatch objects (off by default, as in AutoCAD).
     pub osnaphatch: bool,
+    /// GRIDUNIT in a drafting settings snapshot; zero components follow SNAPUNIT.
     pub gridunit: Vec2,
     /// Major grid line every N minor lines (GRIDMAJOR).
     pub gridmajor: u32,
@@ -658,6 +661,15 @@ impl Session {
     /// Copy-on-write access to the drawing.
     pub fn doc_mut(&mut self) -> Result<&mut Drawing> {
         Ok(Arc::make_mut(&mut self.state_mut()?.doc))
+    }
+    /// Settings for the active drawing, without caching drawing variables in the profile.
+    pub fn drafting_settings(&self) -> Settings {
+        let mut settings = self.settings.clone();
+        if let Ok(d) = self.doc() {
+            settings.snapunit = d.header.snap_unit();
+            settings.gridunit = d.header.grid_unit();
+        }
+        settings
     }
     /// The space commands act on (model space while working inside a layout viewport).
     pub fn space(&self) -> Space {
@@ -1171,6 +1183,16 @@ impl Session {
         r.machine.preview(self, cursor).into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
     }
 
+    /// The active command's preview as a transform of existing objects (see
+    /// [`Interactive::drag`]), with its extra rubber-band geometry as entities.
+    pub fn drag(&self, cursor: Vec2) -> Option<(Drag, Vec<Entity>)> {
+        let r = self.running.as_ref()?;
+        let d = r.machine.drag(self, cursor)?;
+        let common = self.current_common();
+        let extra = d.extra.iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k.clone() }).collect();
+        Some((d, extra))
+    }
+
     /// Process one line typed at the command line (Enter pressed). Spaces separate inputs as in a
     /// script line (see [`Session::script`]), so `MOVE L  0,0 5,5` ends the selection with the
     /// second space and `ERASE L ` with the trailing one. Input after the command ends is ignored.
@@ -1275,7 +1297,7 @@ impl Session {
             {
                 let mut c = self.cursor;
                 if self.settings.orthomode {
-                    c = snap::iso::constrain(&self.settings, base, c);
+                    c = snap::iso::constrain(&self.drafting_settings(), base, c);
                 }
                 let dir = (c - base).normalized();
                 let dir = if dir == Vec2::ZERO { Vec2::X } else { dir };
@@ -1445,7 +1467,7 @@ impl Session {
             "prompt": self.prompt_text(),
             "running": self.running.as_ref().map(|r| r.id.clone()),
             "selection": self.selection().iter().map(|h| h.hex()).collect::<Vec<_>>(),
-            "settings": self.settings,
+            "settings": self.drafting_settings(),
         })
     }
 }
