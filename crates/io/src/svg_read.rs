@@ -17,9 +17,9 @@ use std::collections::HashSet;
 use cadcraft_color::Color;
 use cadcraft_doc::*;
 use cadcraft_geom::{Mat3, PolyVertex, Spline, Vec2, Vec3};
+use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::Reader;
 
 use crate::{IoError, Result};
 
@@ -181,11 +181,7 @@ impl Parser {
             self.skip = 1;
             return Ok(());
         }
-        if CONTAINERS.contains(&name) {
-            self.enter_group(name, e)
-        } else {
-            self.on_element(name, e)
-        }
+        if CONTAINERS.contains(&name) { self.enter_group(name, e) } else { self.on_element(name, e) }
     }
 
     fn on_element(&mut self, name: &[u8], e: &BytesStart) -> Result<()> {
@@ -391,8 +387,8 @@ impl Parser {
         let ex = m.apply_vec(Vec2::new(1.0, 0.0));
         let ey = m.apply_vec(Vec2::new(0.0, 1.0));
         let mag = (ex.x * ex.x + ex.y * ex.y + ey.x * ey.x + ey.y * ey.y).max(1.0);
-        let uniform = (ex.x * ex.x + ex.y * ex.y - (ey.x * ey.x + ey.y * ey.y)).abs() <= 1e-9 * mag
-            && (ex.x * ey.x + ex.y * ey.y).abs() <= 1e-9 * mag;
+        let uniform =
+            (ex.x * ex.x + ex.y * ex.y - (ey.x * ey.x + ey.y * ey.y)).abs() <= 1e-9 * mag && (ex.x * ey.x + ex.y * ey.y).abs() <= 1e-9 * mag;
         let scale = det.abs().sqrt();
 
         let mut run: Vec<PolyVertex> = Vec::new();
@@ -583,12 +579,8 @@ fn parse_transform(s: &str) -> Option<Mat3> {
 }
 
 fn sanitize_layer(raw: &str) -> String {
-    let cleaned: String = raw
-        .trim()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '$') { c } else { '_' })
-        .take(128)
-        .collect();
+    let cleaned: String =
+        raw.trim().chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '$') { c } else { '_' }).take(128).collect();
     let cleaned = cleaned.trim_matches('_').to_string();
     if cleaned.is_empty() { "SVG".into() } else { cleaned }
 }
@@ -831,14 +823,7 @@ fn parse_path(d: &str) -> Result<Vec<Subpath>> {
             }
             b'A' => {
                 let end = point(args[5], args[6]);
-                segs.push(Seg::Arc {
-                    rx: args[0].abs(),
-                    ry: args[1].abs(),
-                    rot: args[2],
-                    large: args[3] != 0.0,
-                    sweep: args[4] != 0.0,
-                    end,
-                });
+                segs.push(Seg::Arc { rx: args[0].abs(), ry: args[1].abs(), rot: args[2], large: args[3] != 0.0, sweep: args[4] != 0.0, end });
                 cur = end;
                 prev_cubic = None;
                 prev_quad = None;
@@ -889,11 +874,7 @@ fn pick_sweep(ccw: f64, large: bool, sweep: bool) -> f64 {
     let tau = std::f64::consts::TAU;
     let eps = f64::EPSILON;
     if sweep {
-        if ccw <= eps {
-            if large { tau } else { eps }
-        } else {
-            ccw
-        }
+        if ccw <= eps { if large { tau } else { eps } } else { ccw }
     } else if ccw >= tau - eps {
         if large { -tau } else { -eps }
     } else {
