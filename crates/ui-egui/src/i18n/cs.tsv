@@ -1208,3 +1208,8 @@ menu	Dimension	Kótování
 menu	Modify	Modifikace
 	Hatch Pattern	Vzor šrafy
 	Search for pattern	Hledat vzor
+	Add to Working Set	Přidat do pracovní sady
+	Edit Reference In-Place	Upravit referenci na místě
+	Save Reference Edits	Uložit úpravy reference
+	Working Set	Pracovní sada
+	Xref and Block In-place Editing	Úpravy xref a bloků na místě
