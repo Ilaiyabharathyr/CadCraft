@@ -14,6 +14,7 @@ mod gdt;
 mod header;
 pub mod library;
 mod plotstyle;
+mod plotter;
 mod store;
 mod tables;
 
@@ -28,8 +29,12 @@ pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
 pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;
+pub use plotter::*;
 pub use store::EntityStore;
 pub use tables::*;
+
+/// File data CADCraft doesn't model, kept for saving (#528).
+pub mod foreign;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {
@@ -57,6 +62,8 @@ pub enum Space {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drawing {
     pub header: Header,
+    /// File data CADCraft does not model, written back on save.
+    pub foreign: std::sync::Arc<foreign::Foreign>,
     pub layers: Vec<Layer>,
     pub linetypes: Vec<Linetype>,
     pub text_styles: Vec<TextStyle>,
@@ -115,6 +122,7 @@ impl Drawing {
     fn bare() -> Self {
         Drawing {
             header: Header::default(),
+            foreign: std::sync::Arc::default(),
             layers: vec![Layer::default(), Layer { name: "Defpoints".into(), plot: false, ..Layer::default() }],
             linetypes: vec![
                 Linetype { name: "ByBlock".into(), description: String::new(), pattern: Vec::new() },

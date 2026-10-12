@@ -2,12 +2,18 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// What a DXF file holds that CADCraft doesn't model, kept and written back (#528).
+mod dxf_raw;
+
 mod dxf_ext;
 mod dxf_image;
 mod dxf_mleader;
 mod dxf_read;
+mod dxf_table;
 mod dxf_write;
+mod dxf_xref;
 pub mod pdf;
+pub mod plotter;
 pub mod svg;
 mod svg_read;
 
@@ -89,7 +95,7 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         // gradients, so a drawing from an R2000 DXF doesn't lose them by default.
         "dwg" if !opts.binary => {
             let version = opts.version.unwrap_or_else(|| version.max(Version::R2004));
-            cadcraft_dwg::dxf_to_dwg_as(dxf_write::write(d).as_bytes(), version.code()).map_err(IoError::Format)
+            cadcraft_dwg::dxf_to_dwg_as(dxf_write::dwg_bridge(d, version).as_bytes(), version.code()).map_err(IoError::Format)
         }
         e if opts.binary => Err(IoError::Format(format!("binary output is for DXF files, not `{e}`"))),
         _ => write_framed(d, name, None),
@@ -101,6 +107,10 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
 /// extents. Formats that are not images (DXF, DWG) ignore the window. The window is checked with
 /// [`check_window`].
 pub fn write_framed(d: &Drawing, name: &str, window: Option<Bounds2>) -> Result<Vec<u8>> {
+    // A drawing template (.dwt) is DWG content.
+    if ext(name) == "dwt" {
+        return write_framed(d, &format!("{name}.dwg"), None);
+    }
     if let Some(w) = &window
         && is_image(name)
     {
@@ -172,6 +182,9 @@ pub fn read_dxf(bytes: &[u8]) -> Result<Drawing> {
 pub fn write_dxf(d: &Drawing) -> String {
     dxf_write::write(d)
 }
+
+/// Regions, written as closed polylines.
+mod dxf_region;
 
 #[cfg(test)]
 mod tests;

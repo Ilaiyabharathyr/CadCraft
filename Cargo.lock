@@ -554,6 +554,7 @@ dependencies = [
  "sys-locale",
  "winit",
  "winresource",
+ "zbus",
 ]
 
 [[package]]
@@ -621,6 +622,7 @@ dependencies = [
  "cadcraft-dxf",
  "cadcraft-fonts",
  "cadcraft-geom",
+ "cadcraft-io",
  "cadcraft-render",
  "log",
  "rstar",
@@ -654,6 +656,7 @@ dependencies = [
  "cadcraft-doc",
  "cadcraft-dwg",
  "cadcraft-dxf",
+ "cadcraft-fonts",
  "cadcraft-geom",
  "cadcraft-render",
  "miniz_oxide 0.8.9",

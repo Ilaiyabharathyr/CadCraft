@@ -1,5 +1,8 @@
 //! HATCH, GRADIENT, BOUNDARY, REGION: boundaries from pick points or selected closed objects.
 
+mod patfile;
+pub(super) use patfile::{lines_for, run_patterns};
+
 use cadcraft_color::Color;
 use cadcraft_doc::{Drawing, Entity, EntityKind, Gradient, Handle, Hatch, HatchLoop, Space, entity_bounds};
 use cadcraft_geom::{Bounds2, PolyVertex, Polyline, Vec2, point_in_polygon};
@@ -314,7 +317,7 @@ impl HatchSettings {
             elevation: 0.0,
             gradient: self.gradient.clone(),
             background: None,
-            pattern_lines: Vec::new(),
+            pattern_lines: patfile::lines_for(&self.pattern),
         })
     }
 }
@@ -369,6 +372,7 @@ fn add_hatches(s: &mut Session, st: &HatchSettings, groups: Vec<Vec<HatchLoop>>)
 }
 
 fn run_hatch(s: &mut Session, p: &Value) -> Result<Value> {
+    patfile::load_param(p)?;
     make(s, p, false)
 }
 fn run_gradient(s: &mut Session, p: &Value) -> Result<Value> {
@@ -393,7 +397,7 @@ fn run_boundary(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "handles": out, "message": format!("BOUNDARY created {} polyline(s)", out.len()) }))
 }
 
-/// REGION: closed objects become closed polylines (our region representation for now).
+/// REGION: each closed object becomes a region bounded by it (and replaces it).
 fn run_region(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let mut n = 0;
@@ -405,7 +409,7 @@ fn run_region(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some((vs, common)) = vs {
             let d = s.doc_mut()?;
             d.modify_entity(h, |e| {
-                e.kind = lwpoly(vs, true);
+                e.kind = EntityKind::Region(cadcraft_doc::Region::from_loop(vs));
                 e.common = common;
             })?;
             n += 1;
@@ -467,15 +471,16 @@ impl HatchM {
     fn answer(&mut self, s: &mut Session, a: HatchAsk, t: &str) -> Result<()> {
         match a {
             HatchAsk::Pattern => {
-                let up = t.trim().to_ascii_uppercase();
-                if cadcraft_doc::library::pattern(&up).is_some() {
+                let up = match patfile::typed_file(s, t.trim()) {
+                    Some(n) if n.is_empty() => return Ok(()),
+                    Some(n) => n,
+                    None => t.trim().to_ascii_uppercase(),
+                };
+                if cadcraft_doc::library::pattern(&up).is_some() || patfile::user_pattern(&up).is_some() {
                     self.settings.pattern = up.clone();
                     s.doc_mut()?.header.set_str("HPNAME", &up);
                 } else {
-                    s.echo(format!(
-                        "Unknown pattern {up}. Available: {}",
-                        cadcraft_doc::library::standard_patterns().iter().map(|p| p.name).collect::<Vec<_>>().join(", ")
-                    ));
+                    s.echo(format!("Unknown pattern {up}. Available: {}", patfile::names().join(", ")));
                 }
             }
             HatchAsk::Scale => {

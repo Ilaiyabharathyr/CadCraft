@@ -97,7 +97,7 @@ Where line and arc are supported the results are exact.
 | Closest point: line, arc, circle, polyline | exact | exact |
 | Closest point: ellipse, spline | exact to tolerance | **sampled** (`curve.rs:264`, `curves.rs:637`) |
 | Tangent points, common tangents | every curve | circles and arcs only (`curve.rs:170-183`) |
-| AREA: circle, ellipse | exact | exact area (ellipse perimeter by Ramanujan, not exact) |
+| AREA: circle, ellipse | exact | exact area (ellipse perimeter by Ramanujan, not exact); an open elliptical arc has no area, like an arc |
 | AREA: polyline with arcs | exact (bulge segments) | **tessellated at 1e-4** (`curve.rs:491`) |
 | MASSPROP (regions: area, perimeter, centroid, moments) | exact on regions and solids | shoelace over a tessellated circle, polyline or first hatch loop (`utility.rs:310-352`); no regions |
 | LIST/DIST/ID precision | full double | full double |
@@ -116,13 +116,13 @@ lines are scanline families clipped against the tessellated loops (`render/src/h
 
 | Item | AutoCAD | CADCraft (`crates/constraints`) |
 |---|---|---|
-| Geometric constraints (12) | coincident, collinear, concentric, fix, parallel, perpendicular, horizontal, vertical, tangent, smooth (G2), symmetric, equal | all 12; **Smooth solved as tangency, not G2** |
+| Geometric constraints (12) | coincident, collinear, concentric, fix, parallel, perpendicular, horizontal, vertical, tangent, smooth (G2), symmetric, equal | all 12; Smooth is G2 (common point, tangent and curvature, `curves.rs`) between a spline and a line, arc, elliptical arc, polyline segment or spline; between two non-spline curves it stays tangency |
 | Dimensional constraints | linear, horizontal, vertical, aligned, angular, radial, diameter; dynamic and annotational; reference | distance (aligned/horizontal/vertical), angular, radius, diameter; parameters and expressions (`expr.rs`) |
-| Geometry | lines, arcs, circles, polylines, ellipses, splines, blocks | line, circle, arc, polyline, point (`model.rs:42`); **no ellipse, spline or block** |
-| Algorithm | proprietary | damped Gauss–Newton / Levenberg–Marquardt, numeric Jacobian, per connected component; MAX_ITER 200, MAX_ROWS 800 |
-| Over-constraint | refused with a message | redundancy by Jacobian rank, conflicts by removal probing (up to 48 probes) |
-| Degrees of freedom, fully constrained state | shown (constraint bars, status) | **not reported** |
-| Inference while drawing (CONSTRAINTINFER) | yes | no |
+| Geometry | lines, arcs, circles, polylines, ellipses, splines, blocks | line, circle, arc, polyline, point; ellipse and elliptical arc (centre, axis ends and arc ends as points; tangent, coincident, concentric, horizontal/vertical on the major axis); spline (fit or control points as points; tangent and smooth at its ends; open clamped or fit splines); block reference (insertion point, and the block's own points riding rigidly with position and rotation) (`model.rs`) |
+| Algorithm | proprietary | damped Gauss–Newton / Levenberg–Marquardt, numeric Jacobian, per connected component; MAX_ITER 200, MAX_ROWS 800; curve–curve tangency with an ellipse through auxiliary contact parameters |
+| Over-constraint | refused with a message | redundancy by Jacobian rank (Householder QR with column pivoting, rows and columns balanced), including Fix; the message names the constraints the new one duplicates; conflicts by removal probing (up to 48 probes) |
+| Degrees of freedom, fully constrained state | shown (constraint bars, status) | `constraints.dof` and `constraints.inspect`: free parameters minus Jacobian rank per component, per-object DOF from the null space, under/fully/over-constrained status (`dof.rs`); a status strip on each constraint bar and the drawing's state on the canvas |
+| Inference while drawing (CONSTRAINTINFER) | yes | CONSTRAINTINFER (variable and command): after a drawing or editing command, what it placed exactly onto existing geometry (snaps, ortho, polar) gets Coincident (end, mid, centre, on object), Tangent, Perpendicular, Parallel and Horizontal/Vertical, filtered by the AutoConstrain types (`auto.rs` `infer_placed`) |
 
 ## Tests
 

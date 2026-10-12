@@ -6,13 +6,14 @@
 //!
 //! CADCraft's own data lives under the registered application `CADCRAFT` (xdata) and the
 //! named-object-dictionary entries `CADCRAFT_CONSTRAINTS`, `CADCRAFT_LAYERSTATES`,
-//! `CADCRAFT_PLOTSTYLES` and `CADCRAFT_HANDSEED` (XRECORDs). Other readers keep or ignore them.
+//! `CADCRAFT_PLOTSTYLES`, `CADCRAFT_HANDSEED` and `CADCRAFT_MLEADERSTYLE` (XRECORDs). Other
+//! readers keep or ignore them.
 
 use std::collections::HashMap;
 
 use cadcraft_color::Color;
 use cadcraft_doc::{ArrayParams, AssocSnap, Constraint, DimAssoc, DimStyle, Handle, LayerState, Parametric, PlotStyleTable};
-use cadcraft_dxf::Tag;
+use cadcraft_dxf::{Tag, Version};
 use cadcraft_render::Arrowhead;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -32,6 +33,8 @@ pub(crate) const ANNOTATION_KEY: &str = "CADCRAFT_ANNOTATION";
 pub(crate) const PLOT_STYLE_NAMES_KEY: &str = "ACAD_PLOTSTYLENAME";
 /// Named-object-dictionary key of the XRECORD holding the drawing's next entity handle (hex).
 pub(crate) const HANDSEED_KEY: &str = "CADCRAFT_HANDSEED";
+/// Named-object-dictionary key of the XRECORD holding the current multileader style.
+pub(crate) const MLEADER_STYLE_KEY: &str = "CADCRAFT_MLEADERSTYLE";
 /// Most plot style tables and plot style names read from a file.
 pub(crate) const MAX_PLOT_STYLE_TABLES: usize = 1000;
 pub(crate) const MAX_PLOT_STYLE_NAMES: usize = 100_000;
@@ -138,11 +141,14 @@ pub(crate) const DIM_CODES: &[(&str, i32, K)] = &[
 /// DIMSAH: separate arrow blocks in use.
 pub(crate) const DIMSAH: i32 = 173;
 
-/// Variables newer than the DXF version written (R2000): DIMFXL, DIMJOGANG, DIMARCSYM,
-/// DIMFXLON, DIMLTYPE, DIMLTEX1, DIMLTEX2. The writer puts them in a style's `CADCRAFT`
-/// "DIMVARS" xdata (`1070 <code>` then the value, like DSTYLE) instead of DIMSTYLE groups that
-/// an R2000 reader doesn't expect; the reader takes both.
+/// Variables newer than R2000: DIMFXL, DIMJOGANG, DIMARCSYM, DIMFXLON, DIMLTYPE, DIMLTEX1,
+/// DIMLTEX2. Files of [`NEWER_SINCE`] or later get them as DIMSTYLE groups; R2000 files get them
+/// in a style's `CADCRAFT` "DIMVARS" xdata (`1070 <code>` then the value, like DSTYLE) instead of
+/// groups an R2000 reader doesn't expect. The reader takes both.
 pub(crate) const NEWER_CODES: &[i32] = &[49, 50, 90, 290, 345, 346, 347];
+/// The first version with [`NEWER_CODES`] as DIMSTYLE groups: all came with AutoCAD 2006, whose
+/// files are the 2004 format (AC1018).
+pub(crate) const NEWER_SINCE: Version = Version::R2004;
 /// Xdata list name of [`NEWER_CODES`] values.
 pub(crate) const DIMVARS_LIST: &str = "DIMVARS";
 
@@ -451,6 +457,78 @@ pub(crate) fn assoc_xdata(assoc: &[DimAssoc]) -> Vec<Tag> {
 /// (DXF has no arc-length DIMENSION type), so other programs still read it.
 pub(crate) fn arclen_xdata(center: cadcraft_geom::Vec3) -> Vec<Tag> {
     vec![Tag::s(1000, "ARCLEN"), Tag::s(1002, "{"), Tag::f(1010, center.x), Tag::f(1020, center.y), Tag::f(1030, center.z), Tag::s(1002, "}")]
+}
+
+/// Dimension marks as CADCraft xdata (`1000 MARKS`, `1002 {`, items, `1002 }`): `1000 JOGLINE`
+/// and a point; `1000 JOGGED`, the centre and the jog point; `1000 BREAK`, a point, `1040` size
+/// and `1070` auto; `1000 INSPECT`, `1070` shape, `1000` label and `1000` rate. Points are
+/// `1010/1020/1030`. The oblique angle is the standard group 52 instead.
+pub(crate) fn marks_xdata(m: &cadcraft_doc::DimMarks) -> Vec<Tag> {
+    let pt = |v: &mut Vec<Tag>, p: cadcraft_geom::Vec3| v.extend([Tag::f(1010, p.x), Tag::f(1020, p.y), Tag::f(1030, p.z)]);
+    let mut v = Vec::new();
+    if let Some(j) = m.jog_line {
+        v.push(Tag::s(1000, "JOGLINE"));
+        pt(&mut v, j);
+    }
+    if let Some(j) = &m.jogged {
+        v.push(Tag::s(1000, "JOGGED"));
+        pt(&mut v, j.center);
+        pt(&mut v, j.jog);
+    }
+    for b in m.breaks.iter().take(MAX_XDATA_ITEMS / 8) {
+        v.push(Tag::s(1000, "BREAK"));
+        pt(&mut v, b.at);
+        v.extend([Tag::f(1040, b.size), Tag::i(1070, i64::from(b.auto))]);
+    }
+    if let Some(i) = &m.inspect {
+        v.extend([Tag::s(1000, "INSPECT"), Tag::i(1070, i64::from(i.shape)), Tag::s(1000, i.label.clone()), Tag::s(1000, i.rate.clone())]);
+    }
+    if v.is_empty() {
+        return v;
+    }
+    let mut out = vec![Tag::s(1000, "MARKS"), Tag::s(1002, "{")];
+    out.extend(v);
+    out.push(Tag::s(1002, "}"));
+    out
+}
+
+/// The marks written by [`marks_xdata`] (no oblique angle); empty for other writers. Damaged
+/// items are skipped.
+pub(crate) fn read_marks(tags: &[Tag]) -> cadcraft_doc::DimMarks {
+    let list = xdata_list(xdata(tags, APP), "MARKS");
+    let list = list.get(..list.len().min(MAX_XDATA_ITEMS)).unwrap_or(&[]);
+    let mut m = cadcraft_doc::DimMarks::default();
+    let num = |i: usize, code: i32| list.get(i).filter(|t| t.code == code).map(Tag::f64).filter(|x| x.is_finite());
+    let point = |i: usize| Some(cadcraft_geom::Vec3::new(num(i, 1010)?, num(i + 1, 1020)?, num(i + 2, 1030)?));
+    let text = |i: usize| list.get(i).filter(|t| t.code == 1000).map(Tag::str);
+    for (i, t) in list.iter().enumerate() {
+        if t.code != 1000 {
+            continue;
+        }
+        match t.str().as_str() {
+            "JOGLINE" => m.jog_line = point(i + 1).or(m.jog_line),
+            "JOGGED" => {
+                if let (Some(center), Some(jog)) = (point(i + 1), point(i + 4)) {
+                    m.jogged = Some(cadcraft_doc::JoggedRadius { center, jog });
+                }
+            }
+            "BREAK" => {
+                let size = list.get(i + 4).filter(|t| t.code == 1040).map(Tag::f64).filter(|x| x.is_finite() && *x > 0.0);
+                let auto = list.get(i + 5).filter(|t| t.code == 1070).is_some_and(|t| t.i64() != 0);
+                if let (Some(at), Some(size)) = (point(i + 1), size) {
+                    m.breaks.push(cadcraft_doc::DimBreak { at, size, auto });
+                }
+            }
+            "INSPECT" => {
+                let shape = list.get(i + 1).filter(|t| t.code == 1070).and_then(|t| u8::try_from(t.i64()).ok()).filter(|s| *s <= 2);
+                if let (Some(shape), Some(label), Some(rate)) = (shape, text(i + 2), text(i + 3)) {
+                    m.inspect = Some(cadcraft_doc::Inspection { shape, label, rate });
+                }
+            }
+            _ => {}
+        }
+    }
+    m
 }
 
 /// The arc centre written by [`arclen_xdata`]; None for other dimensions and other writers.

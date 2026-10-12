@@ -19,18 +19,23 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod docking;
+// The External References palette.
+pub mod xrefs;
 
 pub mod dyninput;
 pub mod gpu;
+pub mod grip_dyn;
 pub mod i18n;
 pub mod icons;
 pub mod layers;
 pub mod managers;
 pub mod menus;
+pub mod options;
 pub mod palettes;
 pub mod parametric;
 pub mod plotstyles;
 pub mod quick;
+pub mod shortcut_menus;
 pub mod theme;
 pub mod viewcube;
 pub mod vpscale;
@@ -72,6 +77,9 @@ pub struct UiState {
     /// "Drafting" or "Modeling".
     pub toolset_tab: String,
     pub collapsed_groups: Vec<String>,
+    /// Tools the user took out of the Tool Sets palette (command ids); each category's gear
+    /// menu puts them back.
+    pub hidden_tools: Vec<String>,
     pub properties_all: bool,
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
     pub in_window_menu: bool,
@@ -145,6 +153,7 @@ impl Default for UiState {
             system_cursor: std::env::var("CADCRAFT_SYSTEM_CURSOR").is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "off")),
             toolset_tab: "Drafting".into(),
             collapsed_groups: Vec::new(),
+            hidden_tools: Vec::new(),
             properties_all: true,
             in_window_menu: !cfg!(target_os = "macos"),
             start_tab: false,
@@ -168,6 +177,8 @@ pub struct CadApp {
     pub system_languages: Vec<String>,
     pub session: Session,
     pub ui: UiState,
+    /// The interface's own preferences from the Options dialog ([`options`]).
+    pub options: options::UiOptions,
     pub services: Services,
     pub canvas: canvas::CanvasState,
     pub cmd: cmdline::CmdLine,
@@ -205,6 +216,7 @@ impl CadApp {
             system_languages: Vec::new(),
             session,
             ui: UiState::default(),
+            options: options::UiOptions::default(),
             services,
             canvas: canvas::CanvasState::default(),
             cmd: cmdline::CmdLine::default(),
@@ -390,6 +402,7 @@ impl CadApp {
         // browser report changes as input); the saved choice itself never changes here.
         let shown = self.ui.theme.resolve(ctx.system_theme());
         theme::set_active(shown);
+        theme::set_canvas(self.options.canvas());
         let follows_system = self.ui.theme == theme::ThemePref::System;
         if self.shown_theme != Some(shown) || self.shown_follows_system != follows_system {
             theme::apply(ctx, shown, follows_system);
