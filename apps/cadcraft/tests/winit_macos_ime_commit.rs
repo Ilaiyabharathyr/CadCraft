@@ -20,9 +20,18 @@ fn winit_commits_macos_compositions_that_end_without_marked_text() {
     );
     assert!(view.contains("self.ivars().in_key_down.get()"), "the commit path does not distinguish keyDown from external insertion");
     assert!(view.contains("self.ivars().pending_commit.set(false);"), "consumed or disabled composition state is not cleared");
+    let (_, key_down) = view.split_once("fn key_down(").expect("WinitView::key_down");
+    let (key_down, _) = key_down.split_once("fn key_up(").expect("end of keyDown method");
+    let set_in_key_down = key_down.find("self.ivars().in_key_down.set(true);").expect("keyDown start marker");
+    let interpretation_calls: Vec<_> =
+        key_down.match_indices("unsafe { self.interpretKeyEvents(&events_for_nsview) }").map(|(position, _)| position).collect();
+    let clear_in_key_down = key_down.find("self.ivars().in_key_down.set(false);").expect("keyDown end marker");
     assert!(
-        view.contains("self.ivars().in_key_down.set(true);\n                unsafe { self.interpretKeyEvents(&events_for_nsview) };\n                self.ivars().in_key_down.set(false);"),
-        "keyDown does not bound the in_key_down state around interpretKeyEvents"
+        interpretation_calls.len() == 2
+            && set_in_key_down < interpretation_calls[0]
+            && interpretation_calls[0] < interpretation_calls[1]
+            && interpretation_calls[1] < clear_in_key_down,
+        "in_key_down does not cover the initial interpretation and optional single retry"
     );
     assert!(
         view.contains("NSString::from_str(\"NSUnderline\")") && view.contains("NSString::from_str(\"NSMarkedClauseSegment\")"),
