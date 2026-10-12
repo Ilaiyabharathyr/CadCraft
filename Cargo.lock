@@ -572,7 +572,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cadcraft"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-engine",
  "cadcraft-io",
@@ -592,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-android"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "android_logger",
  "cadcraft-engine",
@@ -609,7 +609,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-cli"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-engine",
  "cadcraft-io",
@@ -620,14 +620,14 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-color"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "cadcraft-constraints"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-doc",
  "cadcraft-geom",
@@ -637,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-doc"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-color",
  "cadcraft-geom",
@@ -648,14 +648,14 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-dwg"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "acadrust",
 ]
 
 [[package]]
 name = "cadcraft-dxf"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "encoding_rs",
  "log",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-engine"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-color",
  "cadcraft-constraints",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-fonts"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-geom",
  "harfrust",
@@ -693,14 +693,14 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-geom"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "cadcraft-io"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-color",
  "cadcraft-doc",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-mcp"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-engine",
  "cadcraft-io",
@@ -729,19 +729,21 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-render"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-color",
  "cadcraft-doc",
  "cadcraft-fonts",
  "cadcraft-geom",
+ "lyon_tessellation",
+ "rayon",
  "serde_json",
  "tiny-skia",
 ]
 
 [[package]]
 name = "cadcraft-ui-egui"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-color",
  "cadcraft-doc",
@@ -762,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "cadcraft-web"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "cadcraft-engine",
  "cadcraft-io",
@@ -1457,6 +1459,12 @@ dependencies = [
  "miniz_oxide 0.9.1",
  "zlib-rs",
 ]
+
+[[package]]
+name = "float_next_after"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
 
 [[package]]
 name = "foldhash"
@@ -2217,6 +2225,38 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "lyon_geom"
+version = "1.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4336502e29e32af93cf2dad2214ed6003c17ceb5bd499df77b1de663b9042b92"
+dependencies = [
+ "arrayvec",
+ "euclid",
+ "num-traits",
+]
+
+[[package]]
+name = "lyon_path"
+version = "1.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c463f9c428b7fc5ec885dcd39ce4aa61e29111d0e33483f6f98c74e89d8621e"
+dependencies = [
+ "lyon_geom",
+ "num-traits",
+]
+
+[[package]]
+name = "lyon_tessellation"
+version = "1.0.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43b8dcf906637ecef61b3c0740c7a4e7f27caeb31257cfac0cc579ce15be6005"
+dependencies = [
+ "float_next_after",
+ "lyon_path",
+ "num-traits",
+]
 
 [[package]]
 name = "memchr"
@@ -4912,7 +4952,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.5.0"
+version = "0.6.2"
 dependencies = [
  "serde_json",
 ]

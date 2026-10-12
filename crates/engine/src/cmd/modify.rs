@@ -126,13 +126,9 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
 
 fn erase(s: &mut Session, hs: &[Handle]) -> Result<usize> {
     let d = s.doc_mut()?;
-    let mut n = 0;
-    for h in hs {
-        let locked = d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked);
-        if !locked && d.remove_entity(*h).is_some() {
-            n += 1;
-        }
-    }
+    let editable: Vec<Handle> =
+        hs.iter().copied().filter(|h| !d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked)).collect();
+    let n = d.remove_entities(&editable);
     s.set_selection(Vec::new());
     Ok(n)
 }
@@ -1712,6 +1708,26 @@ impl SelectThen {
     }
 }
 
+/// Objects whose text MIRROR keeps readable instead of mirroring it with the geometry.
+fn keeps_reading_when_mirrored(k: &EntityKind) -> bool {
+    match k {
+        EntityKind::Insert(i) => !i.attribs.is_empty(),
+        k => matches!(
+            k,
+            EntityKind::Text(_)
+                | EntityKind::AttDef(_)
+                | EntityKind::MText(_)
+                | EntityKind::Dimension(_)
+                | EntityKind::MLeader(_)
+                | EntityKind::Table(_)
+                | EntityKind::Tolerance(_)
+        ),
+    }
+}
+
+/// Text objects transformed for each frame of a MIRROR preview (on the CPU); more are not drawn.
+const MAX_MIRROR_TEXT_PREVIEW: usize = 1000;
+
 /// A finite length greater than zero (rejects 0, negatives, NaN and infinity).
 fn positive_length(v: Option<f64>) -> Option<f64> {
     v.filter(|f| f.is_finite() && *f > 1e-12)
@@ -1927,8 +1943,7 @@ impl Interactive for SelectThen {
         out.push(line(base, c));
         out
     }
-    fn drag(&self, _s: &Session, c: Vec2) -> Option<crate::prompt::Drag> {
-        // Mirror stays on `preview`: MIRRTEXT keeps text readable, which a plain matrix can't.
+    fn drag(&self, s: &Session, c: Vec2) -> Option<crate::prompt::Drag> {
         if (self.op == Op::Rotate && self.reference) || !self.sel.done {
             return None;
         }
@@ -1938,9 +1953,30 @@ impl Interactive for SelectThen {
             Op::Rotate => Mat3::rotate_about(base, base.angle_to(c)),
             Op::Scale if !self.reference => Mat3::scale_about(base, base.dist(c).max(1e-9)),
             Op::Scale => Mat3::scale_about(base, self.ref_len.and_then(|r| positive_length(Some(base.dist(c) / r)))?),
+            Op::Mirror if !self.ask_erase => Mat3::mirror(base, c),
             _ => return None,
         };
-        Some(crate::prompt::Drag { handles: self.objs.clone(), matrix, extra: vec![line(base, c)] })
+        let mut extra = vec![line(base, c)];
+        if self.op != Op::Mirror {
+            return Some(crate::prompt::Drag { handles: self.objs.clone(), matrix, extra, clipboard: false });
+        }
+        // Mirrored text keeps reading left to right (MIRRTEXT 0), which the matrix alone can't
+        // draw: those objects are transformed one by one, the rest is mirrored on the GPU.
+        let d = s.doc().ok()?;
+        let mut handles = Vec::with_capacity(self.objs.len());
+        let mut texts = 0;
+        for h in &self.objs {
+            let Some(e) = d.entity(*h) else { continue };
+            if !keeps_reading_when_mirrored(&e.kind) {
+                handles.push(*h);
+            } else if texts < MAX_MIRROR_TEXT_PREVIEW {
+                texts += 1;
+                let mut k = e.kind.clone();
+                k.transform(&matrix);
+                extra.push(k);
+            }
+        }
+        Some(crate::prompt::Drag { handles, matrix, extra, clipboard: false })
     }
 }
 

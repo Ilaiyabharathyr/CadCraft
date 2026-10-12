@@ -113,6 +113,7 @@ impl Shell {
         if cad.session.docs.is_empty() {
             cad.session.new_drawing(false);
         }
+        cad.enable_background_open();
         Ok(Self {
             cad,
             dir,

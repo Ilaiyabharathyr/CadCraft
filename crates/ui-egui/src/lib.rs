@@ -43,6 +43,8 @@ pub mod viewcube;
 pub mod vpscale;
 
 pub mod exchange;
+#[cfg(not(target_arch = "wasm32"))]
+mod opening;
 
 use std::sync::mpsc::Receiver;
 
@@ -200,7 +202,8 @@ pub struct CadApp {
     /// Caps the frame rate when presenting without vsync (see [`gpu::FrameCap`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub frame_cap: Option<gpu::FrameCap>,
-    styled: bool,
+    /// Interface fonts installed, and whether with a CJK font (`None` until the first frame).
+    fonts_cjk: Option<bool>,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
@@ -216,6 +219,14 @@ pub struct CadApp {
     pub autosave: Option<cadcraft_engine::autosave::Autosaver>,
     /// Drawing Recovery: autosave files a crashed app left behind.
     pub recovery: autosave::Recovery,
+    /// GPU errors and device loss reported by wgpu ([`gpu::GpuFaults`]).
+    pub gpu_faults: std::sync::Arc<gpu::GpuFaults>,
+    /// The notice shown after one (see [`autosave::gpu_notice`]).
+    pub gpu_notice: Option<autosave::GpuNotice>,
+    #[cfg(not(target_arch = "wasm32"))]
+    background_open: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    opening: Option<opening::Worker>,
 }
 
 impl CadApp {
@@ -240,7 +251,7 @@ impl CadApp {
             synthetic: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             frame_cap: None,
-            styled: false,
+            fonts_cjk: None,
             shown_theme: None,
             shown_follows_system: false,
             frame_ms: 0.0,
@@ -249,17 +260,26 @@ impl CadApp {
             closing: None,
             autosave: None,
             recovery: autosave::Recovery::default(),
+            gpu_faults: std::sync::Arc::default(),
+            gpu_notice: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            background_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            opening: None,
         }
     }
 
+    /// The interface language shown: the chosen one, or English when this computer has no font
+    /// for it (Chinese without an installed CJK font would be boxes).
     pub fn language(&self) -> &'static str {
-        self.ui.interface_language.resolve(&self.system_languages)
+        let l = self.ui.interface_language.resolve(&self.system_languages);
+        if theme::can_show(l) { l } else { "en" }
     }
 
     /// Draw the canvas on the GPU with the app's wgpu render state (eframe's
     /// `CreationContext::wgpu_render_state`). Without it the canvas draws on the CPU.
     pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState) {
-        self.canvas.gpu = Some(gpu::install(rs));
+        self.canvas.gpu = Some(gpu::install(rs, &self.gpu_faults));
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -356,6 +376,11 @@ impl CadApp {
     }
 
     pub fn open_path(&mut self, path: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.background_open {
+            self.queue_open(path);
+            return;
+        }
         let r = self.run("open", json!({ "path": path }));
         self.opened(r);
     }
@@ -407,13 +432,16 @@ impl CadApp {
 
     /// Per-frame logic before layout.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.open_tick(ctx);
         // Closing the window (title bar, File ▸ Exit, Cmd+Q) with unsaved changes asks first.
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        if !self.styled {
-            theme::install_fonts(ctx);
-            self.styled = true;
+        let cjk = self.language().starts_with("zh");
+        if self.fonts_cjk != Some(cjk) {
+            theme::install_fonts(ctx, cjk);
+            self.fonts_cjk = Some(cjk);
         }
         // Resolved every frame, so a System choice follows the OS appearance live (winit and the
         // browser report changes as input); the saved choice itself never changes here.
@@ -438,6 +466,8 @@ impl CadApp {
         }
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        self.gpu_fault_tick(ctx);
+        managers::plot_window_resume(self, ctx);
         self.autosave_tick(ctx);
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
@@ -507,8 +537,10 @@ impl CadApp {
             }
         });
         dialogs::show(self, ui.ctx());
+        palettes::patterns::prompt_picker(self, ui.ctx());
         closing::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
+        autosave::gpu_notice(self, ui.ctx());
         self.frame_ms = now_ms() - t0;
     }
 

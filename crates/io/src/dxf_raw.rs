@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use cadcraft_doc::foreign::{Foreign, ForeignExtra, ForeignKey, ForeignObject};
 use cadcraft_doc::{Drawing, Entity, EntityKind, Handle, RawTag, Unknown};
-use cadcraft_dxf::{Section, Tag};
+use cadcraft_dxf::{SectionView, Tag};
 
 /// Named object dictionary entries CADCraft writes itself from its model (plus every key that
 /// starts with `CADCRAFT`): they are read into the model, not kept raw. A change that starts
@@ -302,8 +302,8 @@ fn all_entities(d: &Drawing) -> impl Iterator<Item = &Entity> {
 }
 
 /// Keep what `secs` holds that the reader did not model in `d.foreign`.
-pub(crate) fn read(secs: &[Section], d: &mut Drawing) {
-    let get = |name: &str| secs.iter().find(|s| s.name == name).map(|s| split(&s.tags)).unwrap_or_default();
+pub(crate) fn read<S: SectionView>(secs: &[S], d: &mut Drawing) {
+    let get = |name: &str| secs.iter().find(|s| s.name() == name).map(|s| split(s.tags())).unwrap_or_default();
     let (classes, tables, blocks, entities, objects) = (get("CLASSES"), get("TABLES"), get("BLOCKS"), get("ENTITIES"), get("OBJECTS"));
     // The drawing's entities by handle: whether each is of a type CADCraft doesn't model.
     let mut ents: HashMap<String, bool> = HashMap::new();
@@ -598,6 +598,19 @@ impl Map<'_> {
         while let Some(r) = o.tags.get(i) {
             i += 1;
             if r.code == 102 && r.value.trim().starts_with('{') {
+                // A `{NAME` group is a handle list (`{ACAD_REACTORS 330 … }`) only when every
+                // group inside it is a reference. Application data groups also use 102 brackets
+                // with mixed values and their own closing form — the AcDs thumbnail schema's
+                // `{ATTRRECORD 341 h 2 name 280 1 291 1 ATTRRECORD}` — and collapsing those into
+                // a handle list rewrote the handle under the LAST code read (291, a bool) and
+                // dropped the rest, which strict DXF readers reject. Those are written as read,
+                // references remapped, by the plain path below.
+                let end = (i..o.tags.len()).find(|&k| o.tags[k].code == 102).unwrap_or(o.tags.len());
+                let inner = &o.tags[i..end];
+                if !inner.is_empty() && !inner.iter().all(|n| is_pointer(n.code)) {
+                    out.push(tag(r));
+                    continue;
+                }
                 let name = r.value.trim().trim_start_matches('{').to_string();
                 let mut hs = Vec::new();
                 let mut code = 330;

@@ -104,6 +104,9 @@ pub struct MeshData {
     /// Draw-order breaks, one before each wipeout mask: the fill vertices, line vertices and
     /// quad instances drawn before it. Each group is drawn fills, lines, quads in turn.
     pub breaks: Vec<[usize; 3]>,
+    /// Unchanged chunks keep their own vertex buffers. Their lanes are concatenated in list
+    /// order; masks still split the complete scene, rather than drawing one chunk at a time.
+    pub parts: Vec<(u64, std::sync::Arc<MeshData>)>,
 }
 
 impl MeshData {
@@ -115,6 +118,9 @@ impl MeshData {
     }
     pub fn quad_instances(&self) -> usize {
         self.quads.len() / INSTANCE_SIZE
+    }
+    pub fn bytes(&self) -> usize {
+        self.lines.len().saturating_add(self.tris.len()).saturating_add(self.quads.len())
     }
 }
 
@@ -153,6 +159,7 @@ pub fn build_mesh(list: &DisplayList, origin: Vec2, bg: Rgb, lwdisplay: bool) ->
         tris: Vec::with_capacity(list.tris.len().saturating_mul(VERTEX_SIZE)),
         quads: Vec::new(),
         breaks: Vec::new(),
+        parts: Vec::new(),
     };
     for prim in &list.prims {
         let c = prim.display_rgb(bg);
@@ -293,6 +300,7 @@ pub const LAYER_DRAG: usize = 1;
 pub const LAYER_HIGHLIGHT: usize = 2;
 pub const IDENTITY_XFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
+#[derive(Clone)]
 struct Batch {
     buffer: wgpu::Buffer,
     count: u32,
@@ -307,6 +315,71 @@ struct Layer {
     tris: Vec<Batch>,
     quads: Vec<Batch>,
     breaks: Vec<[usize; 3]>,
+    parts: std::collections::VecDeque<(u64, std::sync::Arc<Uploaded>)>,
+    part_bytes: usize,
+}
+
+struct Uploaded {
+    lines: Vec<Batch>,
+    tris: Vec<Batch>,
+    quads: Vec<Batch>,
+    breaks: Vec<[usize; 3]>,
+    bytes: usize,
+}
+
+impl Uploaded {
+    fn new(device: &wgpu::Device, m: &MeshData) -> Self {
+        let usage = wgpu::BufferUsages::VERTEX;
+        Self {
+            lines: upload(device, "cad_lines", &m.lines, VERTEX_SIZE, usage),
+            tris: upload(device, "cad_fills", &m.tris, VERTEX_SIZE, usage),
+            quads: upload(device, "cad_quads", &m.quads, INSTANCE_SIZE, usage),
+            breaks: m.breaks.clone(),
+            bytes: m.bytes(),
+        }
+    }
+}
+
+impl Layer {
+    fn load(&mut self, device: &wgpu::Device, mesh: MeshData) {
+        if mesh.parts.is_empty() {
+            let data = Uploaded::new(device, &mesh);
+            self.lines = data.lines;
+            self.tris = data.tris;
+            self.quads = data.quads;
+            self.breaks = data.breaks;
+            return;
+        }
+        self.lines.clear();
+        self.tris.clear();
+        self.quads.clear();
+        self.breaks.clear();
+        let mut offset = [0usize; 3];
+        for (id, m) in mesh.parts {
+            let existing = self.parts.iter().position(|(key, _)| *key == id).and_then(|i| self.parts.remove(i));
+            let data = if let Some((_, data)) = existing {
+                self.part_bytes = self.part_bytes.saturating_sub(data.bytes);
+                data
+            } else {
+                std::sync::Arc::new(Uploaded::new(device, &m))
+            };
+            self.breaks.extend(data.breaks.iter().map(|b| [offset[0] + b[0], offset[1] + b[1], offset[2] + b[2]]));
+            offset[0] += data.tris.iter().map(|b| b.count as usize).sum::<usize>();
+            offset[1] += data.lines.iter().map(|b| b.count as usize).sum::<usize>();
+            offset[2] += data.quads.iter().map(|b| b.count as usize).sum::<usize>();
+            self.lines.extend_from_slice(&data.lines);
+            self.tris.extend_from_slice(&data.tris);
+            self.quads.extend_from_slice(&data.quads);
+            if data.bytes <= 64 << 20 {
+                self.part_bytes = self.part_bytes.saturating_add(data.bytes);
+                self.parts.push_back((id, data));
+            }
+            while self.part_bytes > 64 << 20 || self.parts.len() > 4096 {
+                let Some((_, old)) = self.parts.pop_front() else { break };
+                self.part_bytes = self.part_bytes.saturating_sub(old.bytes);
+            }
+        }
+    }
 }
 
 struct Resources {
@@ -444,7 +517,17 @@ impl Resources {
                 layout: &bgl,
                 entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
             });
-            Layer { uniform, bind_group, key: None, lines: Vec::new(), tris: Vec::new(), quads: Vec::new(), breaks: Vec::new() }
+            Layer {
+                uniform,
+                bind_group,
+                key: None,
+                lines: Vec::new(),
+                tris: Vec::new(),
+                quads: Vec::new(),
+                breaks: Vec::new(),
+                parts: std::collections::VecDeque::new(),
+                part_bytes: 0,
+            }
         };
         let pipeline = |label: &str, vs: &str, topology: wgpu::PrimitiveTopology, buffer: wgpu::VertexBufferLayout<'static>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -494,9 +577,79 @@ fn upload(device: &wgpu::Device, label: &str, bytes: &[u8], stride: usize, usage
         .collect()
 }
 
-/// Create the canvas pipelines in the renderer's callback resources. Call once with the app's
-/// render state (eframe `CreationContext::wgpu_render_state`).
-pub fn install(rs: &egui_wgpu::RenderState) -> GpuTarget {
+/// GPU trouble wgpu reported: uncaptured errors (validation, out of memory) and the device being
+/// lost (a driver reset or a hung GPU). wgpu's default handler panics on the first uncaptured
+/// error, closing the app with any unsaved work (#602); the handlers [`install`] registers record
+/// them here instead, and the app autosaves and tells the user (see `CadApp::gpu_fault_tick`).
+#[derive(Debug, Default)]
+pub struct GpuFaults {
+    state: Mutex<FaultState>,
+}
+
+#[derive(Debug, Default)]
+struct FaultState {
+    errors: u64,
+    errors_seen: u64,
+    lost: bool,
+    lost_seen: bool,
+    last: String,
+}
+
+/// What [`GpuFaults::take`] reports.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GpuFault {
+    /// Uncaptured errors so far (an invalid resource can fail again every frame).
+    pub errors: u64,
+    /// The device was lost: nothing more can be drawn until the app restarts.
+    pub lost: bool,
+    /// The latest error or device-lost message.
+    pub message: String,
+}
+
+impl GpuFaults {
+    /// Errors logged in full before only every 1000th is (a repeating error would flood the log).
+    const LOGGED: u64 = 10;
+
+    pub fn error(&self, message: String) {
+        let Ok(mut s) = self.state.lock() else { return };
+        s.errors += 1;
+        if s.errors <= Self::LOGGED || s.errors % 1000 == 0 {
+            log::error!("wgpu error #{}: {message}", s.errors);
+        }
+        s.last = message;
+    }
+
+    pub fn device_lost(&self, reason: wgpu::DeviceLostReason, message: String) {
+        // `Destroyed` is the device being dropped on purpose (the app closing), not a failure.
+        if reason == wgpu::DeviceLostReason::Destroyed {
+            return;
+        }
+        log::error!("wgpu device lost ({reason:?}): {message}");
+        let Ok(mut s) = self.state.lock() else { return };
+        s.lost = true;
+        s.last = message;
+    }
+
+    /// Faults reported since the last call, if any.
+    pub fn take(&self) -> Option<GpuFault> {
+        let Ok(mut s) = self.state.lock() else { return None };
+        if s.errors == s.errors_seen && s.lost == s.lost_seen {
+            return None;
+        }
+        s.errors_seen = s.errors;
+        s.lost_seen = s.lost;
+        Some(GpuFault { errors: s.errors, lost: s.lost, message: s.last.clone() })
+    }
+}
+
+/// Create the canvas pipelines in the renderer's callback resources, and report wgpu errors and
+/// device loss to `faults` instead of panicking. Call once with the app's render state (eframe
+/// `CreationContext::wgpu_render_state`).
+pub fn install(rs: &egui_wgpu::RenderState, faults: &Arc<GpuFaults>) -> GpuTarget {
+    let f = Arc::clone(faults);
+    rs.device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| f.error(e.to_string())));
+    let f = Arc::clone(faults);
+    rs.device.set_device_lost_callback(move |reason, message| f.device_lost(reason, message));
     let target = GpuTarget { format: rs.target_format };
     let res = Resources::new(&rs.device, target);
     rs.renderer.write().callback_resources.insert(res);
@@ -519,11 +672,7 @@ impl egui_wgpu::CallbackTrait for CanvasCallback {
         if res.key != Some(self.key) {
             let pending = self.slot.lock().ok().and_then(|mut s| s.take());
             if let Some(m) = pending {
-                let usage = wgpu::BufferUsages::VERTEX;
-                res.lines = upload(device, "cad_lines", &m.lines, VERTEX_SIZE, usage);
-                res.tris = upload(device, "cad_fills", &m.tris, VERTEX_SIZE, usage);
-                res.quads = upload(device, "cad_quads", &m.quads, INSTANCE_SIZE, usage);
-                res.breaks = m.breaks;
+                res.load(device, m);
                 res.key = Some(self.key);
             }
         }

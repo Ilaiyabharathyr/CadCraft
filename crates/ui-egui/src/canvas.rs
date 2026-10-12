@@ -8,6 +8,8 @@ use cadcraft_engine::snap::{self, SnapHit};
 use cadcraft_geom::{Bounds2, Vec2};
 use cadcraft_render::{DisplayList, Kind};
 use egui::{Color32, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use crate::CadApp;
 use crate::theme::Tokens;
@@ -38,7 +40,19 @@ impl Xf {
 #[derive(Default)]
 pub struct CanvasState {
     pub list: Option<DisplayList>,
-    key: (u64, u64, i32, i32, bool, usize),
+    key: (u64, u64, i32, i32, bool, usize, u64),
+    space: cadcraft_doc::Space,
+    source: Option<Arc<cadcraft_doc::Drawing>>,
+    render_cache: cadcraft_render::screen::Cache,
+    parts: Vec<cadcraft_render::screen::Part>,
+    scenes: VecDeque<Scene>,
+    part_meshes: HashMap<u64, Arc<crate::gpu::MeshData>>,
+    selection: Selection,
+    pub rebuilt_parts: usize,
+    pub reused_parts: usize,
+    /// CPU mesh bytes rebuilt for the last drawing upload. Previously uploaded parts can also
+    /// remain resident on the GPU when the CPU scene cache has evicted them.
+    pub mesh_bytes: usize,
     /// The area `list` was built for (hatch patterns exist only inside it); a view leaving it
     /// rebuilds the list.
     window: Option<Bounds2>,
@@ -62,6 +76,9 @@ pub struct CanvasState {
     hl_origin: Vec2,
     /// Selected infinite lines (clipped and drawn on the CPU each frame).
     hl_infinite: Vec<usize>,
+    /// The highlight geometry of the active viewport's model space, with the key it was built for
+    /// (see [`viewport_highlight_tolerance`]).
+    vp_hl: Option<(u64, DisplayList)>,
     /// Indices of infinite-line primitives in `list` (drawn on the CPU in GPU mode).
     infinite: Vec<usize>,
     /// Milliseconds spent converting the display list to vertex data (last rebuild).
@@ -107,6 +124,50 @@ pub struct CanvasState {
     pub snap_cycle: Option<SnapCycle>,
     /// Stay in navigation mode until every finger of a pinch/pan has lifted.
     touch_navigation: bool,
+}
+
+struct Scene {
+    key: (u64, u64, i32, i32, bool, usize, u64),
+    space: cadcraft_doc::Space,
+    source: Arc<cadcraft_doc::Drawing>,
+    list: DisplayList,
+    window: Option<Bounds2>,
+    cache: cadcraft_render::screen::Cache,
+    parts: Vec<cadcraft_render::screen::Part>,
+}
+
+impl Scene {
+    fn bytes(&self) -> usize {
+        cadcraft_render::screen::bytes(&self.list).saturating_add(self.cache.bytes())
+    }
+}
+
+#[derive(Default)]
+struct Selection {
+    uid: u64,
+    handles: Arc<Vec<Handle>>,
+    serial: u64,
+}
+
+impl Selection {
+    fn snapshot(&mut self, session: &cadcraft_engine::Session) -> (Arc<Vec<Handle>>, u64) {
+        let uid = session.state().map_or(0, |st| st.uid);
+        let handles = session.selection_ref();
+        // The public engine selection may also be edited directly. Compare it, but allocate
+        // and hash its contents only when they change.
+        if self.uid != uid || self.handles.as_slice() != handles {
+            self.uid = uid;
+            self.handles = Arc::new(handles.to_vec());
+            self.serial = self.serial.wrapping_add(1);
+        }
+        (self.handles.clone(), self.serial)
+    }
+}
+
+impl CanvasState {
+    pub(crate) fn selection_snapshot(&mut self, session: &cadcraft_engine::Session) -> Arc<Vec<Handle>> {
+        self.selection.snapshot(session).0
+    }
 }
 
 /// Tab cycling through the candidate snaps under the cursor: where it started and which
@@ -171,7 +232,52 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
     let band = |px: f64| px.max(1e-300).log2().floor() as i32;
     // Hatch level of detail follows the finest view showing the list.
     let lod_band = views.iter().map(|v| band(v.1)).fold(band(px), i32::min);
-    let key = (st.uid, st.revision, band(px), lod_band, app.session.settings.lwdisplay, std::sync::Arc::as_ptr(&st.doc) as usize);
+    let key = (
+        st.uid,
+        st.revision,
+        band(px),
+        lod_band,
+        app.session.settings.lwdisplay,
+        Arc::as_ptr(&st.doc) as usize,
+        cadcraft_render::screen::font_revision(),
+    );
+    app.canvas.scenes.retain(|s| app.session.docs.iter().any(|d| d.uid == s.key.0));
+    if app.canvas.key.0 != st.uid || app.canvas.space != st.space {
+        if let (Some(list), Some(source)) = (app.canvas.list.take(), app.canvas.source.take()) {
+            app.canvas.scenes.push_back(Scene {
+                key: app.canvas.key,
+                space: app.canvas.space.clone(),
+                source,
+                list,
+                window: app.canvas.window,
+                cache: std::mem::take(&mut app.canvas.render_cache),
+                parts: std::mem::take(&mut app.canvas.parts),
+            });
+        }
+        if let Some(at) = app.canvas.scenes.iter().position(|s| s.key.0 == st.uid && s.space == st.space)
+            && let Some(scene) = app.canvas.scenes.remove(at)
+        {
+            app.canvas.key = scene.key;
+            app.canvas.source = Some(scene.source);
+            app.canvas.list = Some(scene.list);
+            app.canvas.window = scene.window;
+            app.canvas.render_cache = scene.cache;
+            app.canvas.parts = scene.parts;
+            app.canvas.rebuilt_parts = 0;
+            app.canvas.reused_parts = app.canvas.parts.len();
+            app.canvas.build_ms = 0.0;
+        }
+        app.canvas.space = st.space.clone();
+        app.canvas.mesh_key = None;
+        app.canvas.hover_at = None;
+        app.canvas.hover = None;
+        app.canvas.prim_index = PrimIndex::default();
+        app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
+        // Retain a few recent tabs, with one total geometry budget rather than one per tab.
+        while app.canvas.scenes.len() > 3 || app.canvas.scenes.iter().map(Scene::bytes).sum::<usize>() > 64 << 20 {
+            app.canvas.scenes.pop_front();
+        }
+    }
     let visible = views.iter().fold(Bounds2::EMPTY, |acc, v| acc.union(&v.0));
     let inside = app.canvas.window.is_none_or(|w| visible.is_empty() || w.contains_box(&visible));
     if app.canvas.list.is_some() && app.canvas.key == key && inside {
@@ -188,14 +294,26 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
         lineweights: app.session.settings.lwdisplay,
         view_height: st.paper_view().height,
         plot_style_table: None,
-        view: build_window(views),
+        view: if inside && app.canvas.list.is_some() { app.canvas.window } else { build_window(views) },
     };
     let space = st.space.clone();
-    app.canvas.list = Some(cadcraft_render::build(&st.doc, &space, &opts));
+    let built = app.canvas.render_cache.build(&st.doc, &space, &opts);
+    app.canvas.rebuilt_parts = built.rebuilt;
+    app.canvas.reused_parts = built.reused;
+    app.canvas.parts = built.parts;
+    app.canvas.list = Some(built.list);
+    app.canvas.source = Some(st.doc.clone());
     app.canvas.key = key;
     app.canvas.window = opts.view;
     app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
     app.canvas.build_ms = crate::now_ms() - t0;
+}
+
+/// Tessellation tolerance for the highlights inside the active viewport: `scale` (pixels per
+/// drawing unit) snapped to its 2x zoom band, as in [`ensure_list`], so zooming and panning
+/// inside the band doesn't rebuild the geometry.
+fn viewport_highlight_tolerance(scale: f64) -> f64 {
+    2f64.powi((1.0 / scale.max(1e-300)).log2().floor() as i32) * 0.5
 }
 
 /// The area a display list is built for: each view with half its larger side of margin all
@@ -378,6 +496,7 @@ fn draw_highlight_gpu(
     list_gen: u64,
     prim_index: &mut PrimIndex,
     sel: &[Handle],
+    selection_serial: u64,
     color: Color32,
     width: f32,
     hl: (&mut Option<u64>, &crate::gpu::MeshSlot, &mut Vec2, &mut Vec<usize>),
@@ -387,7 +506,7 @@ fn draw_highlight_gpu(
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (list_gen, sel, origin.x.to_bits(), origin.y.to_bits(), color.to_array(), width.to_bits()).hash(&mut h);
+        (list_gen, selection_serial, origin.x.to_bits(), origin.y.to_bits(), color.to_array(), width.to_bits()).hash(&mut h);
         h.finish()
     };
     if *hl_key != Some(key) {
@@ -421,22 +540,35 @@ fn draw_highlight_gpu(
 /// zoom band changes), and each frame only the transform in the view uniform moves. Rebuilding
 /// the transformed copies as egui shapes every frame was slow with heavy selections and could
 /// overflow the GPU buffer limit.
-fn draw_drag_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, doc: &cadcraft_doc::Drawing, drag: &cadcraft_engine::Drag, bg: Rgb) {
+/// `clipboard` is the session's clipboard and its serial (dragged when `drag.clipboard`, by PASTE).
+fn draw_drag_gpu(
+    c: &mut CanvasState,
+    p: &egui::Painter,
+    xf: &Xf,
+    doc: &cadcraft_doc::Drawing,
+    drag: &cadcraft_engine::Drag,
+    clipboard: (&[cadcraft_doc::Entity], u64),
+    bg: Rgb,
+) {
     // Tessellate for a power-of-two zoom band so zooming mid-drag rebuilds only every 2x.
     let band = xf.scale.max(1e-300).log2().round() as i32;
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         (c.key, band, bg.0, bg.1, bg.2, &drag.handles).hash(&mut h);
+        if drag.clipboard {
+            clipboard.1.hash(&mut h);
+        }
         h.finish()
     };
     if c.drag_key != Some(key) {
         let band_scale = 2f64.powi(band);
-        let list = cadcraft_render::build_entities(
-            doc,
-            drag.handles.iter().filter_map(|h| doc.entity(*h)).map(|e| e.as_ref()),
-            &cadcraft_render::Options { tolerance: 0.5 / band_scale, min_dash: 2.0 / band_scale, ..Default::default() },
-        );
+        let opts = cadcraft_render::Options { tolerance: 0.5 / band_scale, min_dash: 2.0 / band_scale, ..Default::default() };
+        let list = if drag.clipboard {
+            cadcraft_render::build_entities(doc, clipboard.0.iter(), &opts)
+        } else {
+            cadcraft_render::build_entities(doc, drag.handles.iter().filter_map(|h| doc.entity(*h)).map(|e| e.as_ref()), &opts)
+        };
         let origin = if list.bounds.is_empty() { Vec2::ZERO } else { list.bounds.center() };
         let mesh = crate::gpu::build_mesh(&list, origin, bg, false);
         if let Ok(mut slot) = c.drag_slot.lock() {
@@ -469,7 +601,10 @@ fn draw_drag_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, doc: &cadcraft
 /// the infinite lines, which are clipped to the view on the CPU every frame.
 fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdisplay: bool) {
     let Some(list) = &c.list else { return };
-    let origin = crate::gpu::choose_origin(&list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
+    // A screen window stays fixed through small edits. Using its centre keeps unchanged part
+    // buffers valid even when an edit changes the drawing's extents.
+    let bounds = c.window.as_ref().filter(|_| !c.parts.is_empty()).unwrap_or(&list.bounds);
+    let origin = crate::gpu::choose_origin(bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -478,7 +613,30 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
     };
     if c.mesh_key != Some(key) {
         let t0 = crate::now_ms();
-        let mesh = crate::gpu::build_mesh(list, origin, bg, lwdisplay);
+        let mesh = if c.parts.is_empty() {
+            let mesh = crate::gpu::build_mesh(list, origin, bg, lwdisplay);
+            c.mesh_bytes = mesh.bytes();
+            mesh
+        } else {
+            let mut next = HashMap::new();
+            let mut mesh = crate::gpu::MeshData::default();
+            c.mesh_bytes = 0;
+            for part in &c.parts {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (part.id, origin.x.to_bits(), origin.y.to_bits(), bg.0, bg.1, bg.2, lwdisplay).hash(&mut h);
+                let id = h.finish();
+                let data = c.part_meshes.get(&id).cloned().unwrap_or_else(|| {
+                    let data = Arc::new(crate::gpu::build_mesh(&part.list, origin, bg, lwdisplay));
+                    c.mesh_bytes = c.mesh_bytes.saturating_add(data.bytes());
+                    data
+                });
+                next.insert(id, data.clone());
+                mesh.parts.push((id, data));
+            }
+            c.part_meshes = if next.values().map(|m| m.bytes()).sum::<usize>() <= 32 << 20 { next } else { HashMap::new() };
+            mesh
+        };
         if let Ok(mut slot) = c.mesh_slot.lock() {
             *slot = Some(mesh);
         }
@@ -702,6 +860,31 @@ fn effective_point(app: &mut CadApp, raw: Vec2, xf: &Xf, ctx: &egui::Context) ->
     r.point
 }
 
+/// The vertical wheel scroll this frame that zooms, in points, read from the raw wheel events so
+/// each notch zooms by its whole step at once, as in standard CAD (#660). egui's smoothed delta
+/// spreads a notch over several frames, so quick notches lag behind the wheel. Units convert to
+/// points as egui does (a line is `line_scroll_speed` points, a page the view's height), and
+/// events egui turns into a pinch zoom (⌘/Ctrl) or a sideways scroll (⇧) are left out, as it does.
+fn wheel_zoom_points(events: &[egui::Event], opts: &egui::InputOptions, page: f32) -> f32 {
+    let points: f32 = events
+        .iter()
+        .filter_map(|e| match e {
+            egui::Event::MouseWheel { unit, delta, modifiers, .. }
+                if !modifiers.matches_any(opts.zoom_modifier) && !modifiers.matches_any(opts.horizontal_scroll_modifier) =>
+            {
+                let per = match unit {
+                    egui::MouseWheelUnit::Point => 1.0,
+                    egui::MouseWheelUnit::Line => opts.line_scroll_speed,
+                    egui::MouseWheelUnit::Page => page,
+                };
+                Some(delta.y * per)
+            }
+            _ => None,
+        })
+        .sum();
+    if points.is_finite() { points } else { 0.0 }
+}
+
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
     let full = ui.available_rect_before_wrap();
@@ -826,25 +1009,28 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
     });
-    if inside && scroll != egui::Vec2::ZERO {
-        if app.canvas.scroll_pans {
-            // Two-finger swipe pans: the drawing follows the fingers, like a middle-drag.
-            // Pinch (and Cmd+scroll) still zoom via `zoom_delta` below.
-            if let Ok(st) = app.session.state_mut() {
-                let v = st.view();
-                st.set_view_quiet(cadcraft_engine::View {
-                    center: v.center - Vec2::new(f64::from(scroll.x) / scale, -f64::from(scroll.y) / scale),
-                    height: v.height,
-                });
-            }
-        } else if scroll.y.abs() > 0.0
-            && let Some(hp) = hover_pos
-        {
-            // Zoom with the mouse wheel about the cursor.
-            let f = app.session.wheel_zoom_factor(f64::from(scroll.y));
-            let about = xf.to_world(hp);
-            let _ = app.session.zoom_about(f, about);
+    if inside && app.canvas.scroll_pans && scroll != egui::Vec2::ZERO {
+        // Two-finger swipe pans: the drawing follows the fingers, like a middle-drag.
+        // Pinch (and Cmd+scroll) still zoom via `zoom_delta` below.
+        if let Ok(st) = app.session.state_mut() {
+            let v = st.view();
+            st.set_view_quiet(cadcraft_engine::View {
+                center: v.center - Vec2::new(f64::from(scroll.x) / scale, -f64::from(scroll.y) / scale),
+                height: v.height,
+            });
         }
+    }
+    let opts = ui.ctx().options(|o| o.input_options);
+    let wheel = ui.input(|i| wheel_zoom_points(&i.raw.events, &opts, rect.height()));
+    if inside
+        && !app.canvas.scroll_pans
+        && wheel != 0.0
+        && let Some(hp) = hover_pos
+    {
+        // Zoom with the mouse wheel about the cursor, each notch at once.
+        let f = app.session.wheel_zoom_factor(f64::from(wheel));
+        let about = xf.to_world(hp);
+        let _ = app.session.zoom_about(f, about);
     }
     let zoom_pinch = ui.input(|i| i.zoom_delta());
     if inside
@@ -1107,7 +1293,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             Rgb(t.canvas.r(), t.canvas.g(), t.canvas.b())
         }
     };
-    let sel = app.session.selection();
+    let (sel, selection_serial) = app.canvas.selection.snapshot(&app.session);
     if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
     } else if let Some(list) = &app.canvas.list {
@@ -1131,18 +1317,38 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
         if let Ok(st) = app.session.state() {
-            let mut hs = sel.clone();
-            hs.extend(app.canvas.hover.filter(|h| !sel.contains(h)));
-            let ents: Vec<_> = hs.iter().filter_map(|h| st.doc.model.get(*h)).map(|e| e.as_ref()).collect();
-            if !ents.is_empty() {
-                let list = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance: 0.5 / scale, ..Default::default() });
-                let clipped = painter.with_clip_rect(r.intersect(rect));
-                if let Some(h) = app.canvas.hover
-                    && !sel.contains(&h)
-                {
-                    draw_highlight(&clipped, &xf, &list, &prims_of(&list, &[h]), t.hover, 2.0, false);
+            let hover = app.canvas.hover.filter(|h| !sel.contains(h));
+            if !sel.is_empty() || hover.is_some() {
+                let tolerance = viewport_highlight_tolerance(scale);
+                let key = {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    (
+                        st.uid,
+                        st.revision,
+                        Arc::as_ptr(&st.doc) as usize,
+                        tolerance.to_bits(),
+                        selection_serial,
+                        hover,
+                        cadcraft_render::screen::font_revision(),
+                    )
+                        .hash(&mut h);
+                    h.finish()
+                };
+                if app.canvas.vp_hl.as_ref().is_none_or(|(k, _)| *k != key) {
+                    let ents = sel.iter().copied().chain(hover).filter_map(|h| st.doc.model.get(h)).map(|e| e.as_ref());
+                    let built = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance, ..Default::default() });
+                    app.canvas.vp_hl = Some((key, built));
                 }
-                draw_highlight(&clipped, &xf, &list, &prims_of(&list, &sel), t.selection, 1.5, true);
+                if let Some((_, list)) = &app.canvas.vp_hl {
+                    let clipped = painter.with_clip_rect(r.intersect(rect));
+                    if let Some(h) = app.canvas.hover
+                        && !sel.contains(&h)
+                    {
+                        draw_highlight(&clipped, &xf, list, &prims_of(list, &[h]), t.hover, 2.0, false);
+                    }
+                    draw_highlight(&clipped, &xf, list, &prims_of(list, &sel), t.selection, 1.5, true);
+                }
             }
         }
     } else if let CanvasState { list: Some(list), list_gen, prim_index, hover, gpu, hl_key, hl_slot, hl_origin, hl_infinite, .. } = &mut app.canvas {
@@ -1152,7 +1358,18 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &[h]), t.hover, 2.0, false);
         }
         if gpu.is_some() && !sel.is_empty() {
-            draw_highlight_gpu(&painter, &xf, list, *list_gen, prim_index, &sel, t.selection, 1.5, (hl_key, hl_slot, hl_origin, &mut *hl_infinite));
+            draw_highlight_gpu(
+                &painter,
+                &xf,
+                list,
+                *list_gen,
+                prim_index,
+                &sel,
+                selection_serial,
+                t.selection,
+                1.5,
+                (hl_key, hl_slot, hl_origin, &mut *hl_infinite),
+            );
             draw_highlight(&painter, &xf, list, hl_infinite, t.selection, 1.5, true);
         } else {
             draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &sel), t.selection, 1.5, true);
@@ -1209,13 +1426,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
     }
     // Rubber band preview of the active command.
-    let drag = match (app.canvas.cursor, app.canvas.gpu.is_some() && sheet.is_none()) {
+    // `xf` is the space being edited: paper space, or model space inside the active viewport.
+    let drag = match (app.canvas.cursor, app.canvas.gpu.is_some()) {
         (Some(c), true) => app.session.drag(c),
         _ => None,
     };
     if let Some((drag, extra)) = drag {
         if let Ok(st) = app.session.state() {
-            draw_drag_gpu(&mut app.canvas, &painter, &xf, &st.doc, &drag, bg);
+            let serial = app.session.clipboard_source.as_ref().map_or(0, |c| c.serial);
+            draw_drag_gpu(&mut app.canvas, &painter, &xf, &st.doc, &drag, (&app.session.clipboard, serial), bg);
             let list = cadcraft_render::build_entities(
                 &st.doc,
                 extra.iter(),
@@ -1760,7 +1979,7 @@ fn grip_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Handle, usize)
     let hp = hover?;
     let st = app.session.state().ok()?;
     let gs = app.session.settings.gripsize as f32 + 3.0;
-    for h in app.session.selection().iter().take(200) {
+    for h in app.session.selection_ref().iter().take(200) {
         let e = st.doc.entity(*h)?;
         if st.doc.layer(&e.common.layer).is_some_and(|l| l.locked) {
             continue;
@@ -1791,6 +2010,15 @@ mod tests {
     }
 
     #[test]
+    fn viewport_highlight_tolerance_is_constant_within_a_zoom_band() {
+        assert_eq!(viewport_highlight_tolerance(4.0), viewport_highlight_tolerance(3.0));
+        assert_ne!(viewport_highlight_tolerance(4.0), viewport_highlight_tolerance(1.5));
+        for s in [0.3, 1.0, 3.0, 4.0, 250.0] {
+            assert!(viewport_highlight_tolerance(s) <= 0.5 / s);
+        }
+    }
+
+    #[test]
     fn prim_index_matches_a_scan_and_follows_list_rebuilds() {
         let a = list(&[3, 1, 3, 2, 7, 3]);
         let mut ix = PrimIndex::default();
@@ -1802,6 +2030,49 @@ mod tests {
         // A rebuilt list (new generation) is re-indexed.
         let b = list(&[3, 9]);
         assert_eq!(ix.prims(2, &b, &hs(&[9, 3])), vec![0, 1]);
+    }
+
+    fn wheel(unit: egui::MouseWheelUnit, dy: f32, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::MouseWheel { unit, delta: vec2(0.0, dy), phase: egui::TouchPhase::Move, modifiers }
+    }
+
+    /// Wheel events convert to points as egui does; ⌘/Ctrl (egui's pinch zoom) and ⇧ (a sideways
+    /// scroll) don't zoom here, and every notch of the frame counts (#660).
+    #[test]
+    fn wheel_zoom_reads_every_notch_of_the_frame() {
+        use egui::{Modifiers, MouseWheelUnit as U};
+        let o = egui::InputOptions::default();
+        let none = Modifiers::NONE;
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, 1.0, none)], &o, 500.0), o.line_scroll_speed);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, -2.0, none)], &o, 500.0), -2.0 * o.line_scroll_speed);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Point, 7.5, none)], &o, 500.0), 7.5);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Page, 1.0, none)], &o, 500.0), 500.0);
+        // Three quick notches in one frame zoom three steps at once.
+        let three = [wheel(U::Line, 1.0, none), wheel(U::Line, 1.0, none), wheel(U::Line, 1.0, none)];
+        assert_eq!(wheel_zoom_points(&three, &o, 500.0), 3.0 * o.line_scroll_speed);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, 1.0, Modifiers::COMMAND)], &o, 500.0), 0.0);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, 1.0, Modifiers::SHIFT)], &o, 500.0), 0.0);
+        assert_eq!(wheel_zoom_points(&[wheel(U::Line, f32::NAN, none)], &o, 500.0), 0.0);
+        assert_eq!(wheel_zoom_points(&[egui::Event::PointerGone], &o, 500.0), 0.0);
+    }
+
+    /// The frame a notch arrives, egui's smoothed scroll holds only part of it (the rest trickles
+    /// in over later frames, which made quick notches lag), while the raw reading zooms the
+    /// whole notch at once (#660).
+    #[test]
+    fn a_wheel_notch_zooms_whole_in_its_own_frame() {
+        let ctx = egui::Context::default();
+        let o = ctx.options(|o| o.input_options);
+        let input = egui::RawInput { events: vec![wheel(egui::MouseWheelUnit::Line, 1.0, egui::Modifiers::NONE)], ..Default::default() };
+        let mut seen = (0.0, 0.0);
+        ctx.run_ui(input, |ui| {
+            seen = ui.input(|i| (i.smooth_scroll_delta.y, wheel_zoom_points(&i.raw.events, &o, 500.0)));
+        })
+        .textures_delta
+        .clear();
+        let (smoothed, raw) = seen;
+        assert_eq!(raw, o.line_scroll_speed, "the whole notch");
+        assert!(smoothed < raw, "egui's smoothed delta lags behind: {smoothed} of {raw}");
     }
 }
 

@@ -75,6 +75,43 @@ fn reorder(s: &mut Session, hs: &[Handle], order: Order, refs: &[Handle]) -> Res
     moving.dedup();
     let set: HashSet<Handle> = moving.iter().map(|m| m.1).collect();
     let refs: Vec<(usize, Handle)> = refs.iter().filter(|h| !set.contains(h)).filter_map(|h| index.get(h).map(|i| (*i, *h))).collect();
+    // Large selections are reordered in one pass instead of repeatedly shifting and copying
+    // the same store chunks. Keep the cheap single-object path for small selections.
+    if moving.len() > 256 {
+        let anchor = match order {
+            Order::Above => Some(refs.iter().max().map(|r| r.0).ok_or_else(|| EngineError::Other("no reference objects".into()))?),
+            Order::Under => Some(refs.iter().min().map(|r| r.0).ok_or_else(|| EngineError::Other("no reference objects".into()))?),
+            _ => None,
+        };
+        st.sort_by_key(|e| {
+            let i = index.get(&e.handle).copied().unwrap_or(usize::MAX);
+            let selected = set.contains(&e.handle);
+            let group = match order {
+                Order::Front => usize::from(selected),
+                Order::Back => usize::from(!selected),
+                Order::Above => {
+                    if selected {
+                        1
+                    } else if anchor.is_some_and(|a| i <= a) {
+                        0
+                    } else {
+                        2
+                    }
+                }
+                Order::Under => {
+                    if selected {
+                        1
+                    } else if anchor.is_some_and(|a| i < a) {
+                        0
+                    } else {
+                        2
+                    }
+                }
+            };
+            (group, i)
+        });
+        return Ok(moving.len());
+    }
     match order {
         Order::Front => {
             for (_, h) in &moving {
