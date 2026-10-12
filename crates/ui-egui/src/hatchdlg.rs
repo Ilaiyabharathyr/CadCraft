@@ -7,7 +7,10 @@ use cadcraft_doc::{Drawing, EntityKind, Handle};
 use cadcraft_engine::{HatchPicks, PickMode};
 use serde_json::{Value, json};
 
+use egui::vec2;
+
 use crate::CadApp;
+use crate::theme::Tokens;
 
 /// The gradient shapes the dialog offers; each can also be inverted (`INV` + name).
 pub(crate) const SHAPES: [&str; 5] = ["LINEAR", "CYLINDER", "CURVED", "SPHERICAL", "HEMISPHERICAL"];
@@ -297,6 +300,227 @@ pub fn resume(app: &mut CadApp) {
     app.ui.dialog = Some("hatch".into());
 }
 
+/// OK: run the dialog's command. True when the dialog closes; a failed command keeps it open
+/// with the error (the drawing is unchanged).
+pub fn ok(app: &mut CadApp) -> bool {
+    let Some(call) = app.hatch_dlg.as_ref().map(ok_call) else { return true };
+    let Some((cmd, p)) = call else {
+        app.hatch_dlg = None;
+        return true;
+    };
+    match app.run(cmd, p) {
+        Ok(_) => {
+            app.hatch_dlg = None;
+            true
+        }
+        Err(e) => {
+            if let Some(st) = app.hatch_dlg.as_mut() {
+                st.error = Some(e);
+            }
+            false
+        }
+    }
+}
+
+enum Action {
+    None,
+    Ok,
+    Cancel,
+    Pick(PickMode),
+}
+
+fn shape_label(name: &str) -> &'static str {
+    match name {
+        "CYLINDER" => crate::tl!("Cylinder"),
+        "CURVED" => crate::tl!("Curved"),
+        "SPHERICAL" => crate::tl!("Spherical"),
+        "HEMISPHERICAL" => crate::tl!("Hemispherical"),
+        _ => crate::tl!("Linear"),
+    }
+}
+
+fn origin_label(mode: &str) -> &'static str {
+    match mode {
+        "bottomRight" => crate::tl!("Bottom right"),
+        "topRight" => crate::tl!("Top right"),
+        "topLeft" => crate::tl!("Top left"),
+        "center" => crate::tl!("Center"),
+        _ => crate::tl!("Bottom left"),
+    }
+}
+
+fn num(v: f64) -> String {
+    let s = format!("{v:.4}");
+    if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
+}
+
+/// The Hatch and Gradient / Hatch Edit window (`app.ui.dialog == "hatch"`).
+pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
+    let uid = app.session.state().ok().map(|s| s.uid);
+    // Opened by name (control channel) with no state: create mode from the header.
+    if app.hatch_dlg.is_none()
+        && let Ok(st) = app.session.state()
+    {
+        app.hatch_dlg = Some(create_state(&st.doc, st.uid, false));
+    }
+    // No drawing, or another drawing than the one the dialog was opened on: close.
+    let Some(mut st) = app.hatch_dlg.take().filter(|s| Some(s.uid) == uid) else {
+        *open = false;
+        return;
+    };
+    let title = if st.edit.is_empty() { crate::tl!("Hatch and Gradient") } else { crate::tl!("Hatch Edit") };
+    let mut action = Action::None;
+    egui::Window::new(title).id(egui::Id::new("hatch_dialog")).open(open).collapsible(false).resizable(false).show(ctx, |ui| {
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(340.0);
+                fill_ui(ui, &mut st.fill, &mut action);
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_width(230.0);
+                options_ui(ui, &mut st, &mut action);
+            });
+        });
+        if let Some(e) = &st.error {
+            ui.colored_label(Tokens::get().warn, e);
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            let ready = !st.edit.is_empty() || !(st.points.is_empty() && st.handles.is_empty());
+            if ui.add_enabled(ready, egui::Button::new(crate::tl!("OK"))).clicked() {
+                action = Action::Ok;
+            }
+            if ui.button(crate::tl!("Cancel")).clicked() {
+                action = Action::Cancel;
+            }
+        });
+    });
+    app.hatch_dlg = Some(st);
+    match action {
+        Action::Ok => {
+            if ok(app) {
+                *open = false;
+            }
+        }
+        Action::Cancel => {
+            app.hatch_dlg = None;
+            *open = false;
+        }
+        Action::Pick(mode) => start_pick(app, mode),
+        Action::None => {
+            if !*open {
+                app.hatch_dlg = None;
+            }
+        }
+    }
+}
+
+fn fill_ui(ui: &mut egui::Ui, f: &mut Fill, action: &mut Action) {
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut f.gradient, false, crate::tl!("Pattern"));
+        ui.selectable_value(&mut f.gradient, true, crate::tl!("Gradient"));
+    });
+    ui.separator();
+    if f.gradient {
+        egui::Grid::new("hatch_gradient").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
+            ui.label(crate::tl!("Color 1"));
+            if let Some(c) = crate::layers::color_button(ui, egui::Id::new("hatch_color1"), f.color1, false, 160.0) {
+                f.color1 = c;
+            }
+            ui.end_row();
+            ui.label(crate::tl!("Color 2"));
+            if let Some(c) = crate::layers::color_button(ui, egui::Id::new("hatch_color2"), f.color2, false, 160.0) {
+                f.color2 = c;
+            }
+            ui.end_row();
+            ui.label(crate::tl!("Shape"));
+            egui::ComboBox::from_id_salt("hatch_shape").selected_text(shape_label(&f.shape)).show_ui(ui, |ui| {
+                for name in SHAPES {
+                    ui.selectable_value(&mut f.shape, name.to_string(), shape_label(name));
+                }
+            });
+            ui.end_row();
+            ui.label("");
+            ui.checkbox(&mut f.inverted, crate::tl!("Inverted"));
+            ui.end_row();
+            ui.label("");
+            ui.checkbox(&mut f.centered, crate::tl!("Centered"));
+            ui.end_row();
+            ui.label(crate::tl!("Angle"));
+            ui.add(egui::DragValue::new(&mut f.angle).speed(1.0).range(-360.0..=360.0).suffix("°"));
+            ui.end_row();
+        });
+    } else {
+        egui::ScrollArea::vertical().id_salt("hatch_swatches").max_height(220.0).show(ui, |ui| {
+            if let Some(name) = crate::palettes::patterns::grid(ui, &f.pattern, "") {
+                f.pattern = name;
+            }
+        });
+        egui::Grid::new("hatch_pattern").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
+            ui.label(crate::tl!("Angle"));
+            ui.add(egui::DragValue::new(&mut f.angle).speed(1.0).range(-360.0..=360.0).suffix("°"));
+            ui.end_row();
+            ui.label(crate::tl!("Scale"));
+            ui.add(egui::DragValue::new(&mut f.scale).speed(0.05).range(0.0001..=1.0e6));
+            ui.end_row();
+        });
+    }
+    ui.separator();
+    ui.strong(crate::tl!("Hatch origin"));
+    ui.radio_value(&mut f.specified, false, crate::tl!("Use current origin"));
+    ui.radio_value(&mut f.specified, true, crate::tl!("Specified origin"));
+    ui.add_enabled_ui(f.specified, |ui| {
+        if ui.button(crate::tl!("Click to set new origin")).clicked() {
+            *action = Action::Pick(PickMode::Origin);
+        }
+        if let Some([x, y]) = f.origin {
+            ui.label(crate::tf!("Origin: {x}, {y}", x = num(x), y = num(y)));
+        }
+        let mut extents = f.origin.is_none();
+        if ui.add_enabled(f.origin.is_some(), egui::Checkbox::new(&mut extents, crate::tl!("Default to boundary extents"))).changed() && extents {
+            f.origin = None;
+        }
+        ui.add_enabled_ui(f.origin.is_none(), |ui| {
+            egui::ComboBox::from_id_salt("hatch_origin_mode").selected_text(origin_label(&f.origin_mode)).show_ui(ui, |ui| {
+                for m in ORIGIN_MODES {
+                    ui.selectable_value(&mut f.origin_mode, m.to_string(), origin_label(m));
+                }
+            });
+        });
+    });
+}
+
+fn options_ui(ui: &mut egui::Ui, st: &mut HatchDlgState, action: &mut Action) {
+    if st.edit.is_empty() {
+        ui.strong(crate::tl!("Boundaries"));
+        if ui.button(crate::tl!("Add: Pick points")).clicked() {
+            *action = Action::Pick(PickMode::Points);
+        }
+        if ui.button(crate::tl!("Add: Select objects")).clicked() {
+            *action = Action::Pick(PickMode::Objects);
+        }
+        ui.horizontal(|ui| {
+            ui.label(crate::tf!("Boundaries picked: {n}", n = st.points.len() + st.handles.len()));
+            let any = !(st.points.is_empty() && st.handles.is_empty());
+            if ui.add_enabled(any, egui::Button::new(crate::tl!("Clear"))).clicked() {
+                st.points.clear();
+                st.handles.clear();
+            }
+        });
+        ui.separator();
+    }
+    ui.strong(crate::tl!("Options"));
+    ui.checkbox(&mut st.fill.associative, crate::tl!("Associative"));
+    if st.edit.is_empty() {
+        ui.checkbox(&mut st.separate, crate::tl!("Create separate hatches"));
+    }
+    ui.label(crate::tl!("Island detection"));
+    ui.radio_value(&mut st.fill.style, 0, crate::tl!("Normal"));
+    ui.radio_value(&mut st.fill.style, 1, crate::tl!("Outer"));
+    ui.radio_value(&mut st.fill.style, 2, crate::tl!("Ignore"));
+}
+
 #[cfg(test)]
 mod tests {
     use cadcraft_color::Color;
@@ -509,5 +733,64 @@ mod tests {
         assert_eq!((st.points.clone(), st.handles.clone(), st.error.clone()), (vec![[5.0, 5.0]], vec![r], None));
         merge_picks(&mut st, HatchPicks { mode: PickMode::Origin, origin: Some(Vec2::new(1.0, 2.0)), ..HatchPicks::default() });
         assert_eq!((st.fill.specified, st.fill.origin), (true, Some([1.0, 2.0])));
+    }
+
+    fn frames(app: &mut CadApp) {
+        let ctx = egui::Context::default();
+        app.logic(&ctx);
+        let input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(input.clone(), |ui| app.ui(ui));
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn the_dialog_draws_both_modes_and_tabs_and_stays_open() {
+        let (mut app, _) = app_with_rect();
+        // Opened by name with no state: create mode from the header.
+        app.ui.dialog = Some("hatch".into());
+        frames(&mut app);
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        assert!(app.hatch_dlg.as_ref().is_some_and(|s| s.edit.is_empty()));
+        if let Some(st) = app.hatch_dlg.as_mut() {
+            st.fill.gradient = true;
+        }
+        frames(&mut app);
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+        let hx = app.session.execute("hatch", &json!({ "points": [[5, 5]] })).unwrap()["handle"].as_str().unwrap().to_string();
+        let st = app.session.state().unwrap();
+        app.hatch_dlg = edit_state(&st.doc, st.uid, vec![Handle::parse_hex(&hx).unwrap()]);
+        frames(&mut app);
+        assert_eq!(app.ui.dialog.as_deref(), Some("hatch"));
+    }
+
+    #[test]
+    fn ok_makes_the_hatch_and_closes() {
+        let (mut app, _) = app_with_rect();
+        open_create(&mut app);
+        if let Some(st) = app.hatch_dlg.as_mut() {
+            st.points.push([5.0, 5.0]);
+        }
+        assert!(ok(&mut app));
+        assert_eq!(app.hatch_dlg, None);
+        assert!(app.session.doc().unwrap().model.iter().any(|e| matches!(e.kind, cadcraft_doc::EntityKind::Hatch(_))));
+    }
+
+    #[test]
+    fn a_failed_ok_keeps_the_dialog_open_with_the_error() {
+        let (mut app, r) = app_with_rect();
+        open_create(&mut app);
+        if let Some(st) = app.hatch_dlg.as_mut() {
+            st.handles.push(r);
+        }
+        // The picked boundary is erased before OK.
+        app.session.execute("erase", &json!({ "handles": [r.hex()] })).unwrap();
+        let n = app.session.doc().unwrap().model.len();
+        assert!(!ok(&mut app));
+        let st = app.hatch_dlg.clone().unwrap();
+        assert!(st.error.is_some_and(|e| !e.is_empty()));
+        assert_eq!(app.session.doc().unwrap().model.len(), n, "drawing unchanged");
     }
 }
