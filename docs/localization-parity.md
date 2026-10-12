@@ -35,7 +35,7 @@ shaping and right-to-left text through TrueType, vertical SHX text styles.
   Bidirectional Algorithm and OpenType shaping with `harfrust` (Arabic, Persian and Urdu joining,
   lam-alef, ZWNJ, marks; Hebrew), in TEXT and MTEXT including wrapping (#287). Left-to-right lines
   are still placed one glyph per code point: **no shaping** for Devanagari and other Indic
-  scripts, and **no vertical text**. SHX fonts are not read; our stroke font stands in.
+  scripts, and **no vertical text**. SHX shape fonts and unifonts are read from `FONTPATH` folders; SHX **big fonts** (CJK) are not, so an installed font draws those characters.
 - **Text input:** egui/winit IME. Several upstream IME fixes are queued as PRs (#110–#119:
   macOS Korean, emoji picker, Windows caret placement, X11 and Wayland), so CJK input is not yet
   reliable on every platform.
