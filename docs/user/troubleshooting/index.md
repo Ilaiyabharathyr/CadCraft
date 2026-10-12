@@ -19,4 +19,4 @@ If your problem is not listed, tell us in [Discord](https://discord.gg/artcraft)
 - The log file. The desktop app writes it to `logs/cadcraft.log` in its settings folder. On Windows that is `%APPDATA%\CADCraft\logs\cadcraft.log`. On macOS it is `~/Library/Application Support/CADCraft/logs/`. On Linux it is `~/.config/cadcraft/logs/`.
 - A drawing that shows the problem, if you can share one.
 
-Each launch moves the previous log to `cadcraft.1.log`, then `cadcraft.2.log`. If CADCraft crashed, attach the log from the crashed run before you start the app again more than twice.
+After a crash, the crashed run's log is `cadcraft.1.log` once you start again. Two more starts push it out, so attach it soon.

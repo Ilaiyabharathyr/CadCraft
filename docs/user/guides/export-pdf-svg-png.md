@@ -5,7 +5,7 @@ order: 30
 verified: 0.5.0
 ---
 
-To get a PDF, choose **File ▸ Export to PDF...**. For an SVG or PNG image, choose **File ▸ Save As...** and pick the SVG or PNG file type.
+To get a PDF, choose **File ▸ Export to PDF...**. For an SVG or PNG image, choose **File ▸ Save As...** and pick the SVG or PNG file type. On macOS, use Cmd in place of Ctrl.
 
 ## Export to PDF
 

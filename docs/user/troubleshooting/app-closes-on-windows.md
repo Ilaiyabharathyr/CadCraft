@@ -23,11 +23,13 @@ If CADCraft 0.5.0 opens a window and closes again within a second, start it with
 
 The last line clears the setting so later launches use the default again. You need the first two lines each time you start CADCraft this way.
 
-Do not use `gl` in place of `vulkan`: it can bring back a driver crash on some AMD systems.
+On Intel graphics (UHD, Iris), use `gl` in place of `vulkan`. Intel's Vulkan driver (`igvk64.dll`) has crashed CADCraft at start ([issue #33](https://github.com/storytold/cadcraft/issues/33)).
+
+On AMD graphics do not use `gl`: it can bring back the `atio6axx.dll` driver crash.
 
 ## Why this happens
 
-CADCraft 0.5.0 draws with DirectX 12 on Windows and compiles its shaders with DXC. The 0.5.0 Windows build does not ship the DXC compiler files (`dxcompiler.dll` and `dxil.dll`), so on some PCs the graphics device is lost before the first frame and the app exits. This is issue [#608](https://github.com/storytold/cadcraft/issues/608). The issue reports that starting with Vulkan instead gets the app running.
+CADCraft 0.5.0 draws with DirectX 12 on Windows and compiles its shaders with DXC. The 0.5.0 Windows build does not ship the DXC compiler files (`dxcompiler.dll` and `dxil.dll`), so on some PCs the graphics device is lost before the first frame and the app exits. This is issue [#608](https://github.com/storytold/cadcraft/issues/608). The issue reports that starting with Vulkan instead gets the app running. A fix that uses FXC, the compiler built into Windows, is merged after 0.5.0 (#613) and is not in a release yet.
 
 ## Still stuck?
 

@@ -5,7 +5,7 @@ order: 10
 verified: 0.5.0
 ---
 
-You draw in CADCraft by typing a command at the command line and answering its prompts with typed coordinates or clicks. The command line is at the bottom of the window. If you do not see it, choose **Window ▸ Command Line** (Ctrl+9).
+You draw in CADCraft by typing a command at the command line and answering its prompts with typed coordinates or clicks. The command line is at the bottom of the window. If you do not see it, choose **Window ▸ Command Line** (Ctrl+9). On macOS, use Cmd in place of Ctrl.
 
 ## Steps
 

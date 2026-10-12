@@ -5,7 +5,7 @@ order: 20
 verified: 0.5.0
 ---
 
-CADCraft opens DXF and DWG drawings and saves both. New drawings are saved as DXF unless you change the default.
+CADCraft opens DXF and DWG drawings and saves both. New drawings are saved as DXF unless you change the default. On macOS, use Cmd in place of Ctrl.
 
 ## Open a drawing
 
