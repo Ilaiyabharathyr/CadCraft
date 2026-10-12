@@ -779,6 +779,8 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         // A printer takes the PDF.
         if printer.is_some() {
             o.insert("output".into(), json!("pdf"));
+            // Printers feed portrait sheets: a landscape plot comes already turned.
+            o.insert("portraitMedia".into(), json!(true));
         }
         if let Some(v) = p.get("scale") {
             let k = parse_scale(v).ok_or_else(|| bad(cmd, "`scale` must be positive: paper units per drawing unit, or a ratio such as \"1:50\""))?;

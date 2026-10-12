@@ -76,6 +76,10 @@ pub struct PdfOptions {
     /// Entity hyperlinks read from a drawing file (`PE_URL` extended data) become link
     /// annotations too, after [`PdfOptions::links`]. Default on.
     pub hyperlinks: bool,
+    /// Landscape pages on portrait media: the sheet turned a quarter turn on a page of the
+    /// paper's portrait size (for printers, which feed portrait sheets and may not turn a
+    /// landscape page themselves). Link annotations are left out of turned pages.
+    pub portrait_media: bool,
 }
 
 impl Default for PdfOptions {
@@ -97,6 +101,7 @@ impl Default for PdfOptions {
             text_as_geometry: false,
             margins: None,
             hyperlinks: true,
+            portrait_media: false,
         }
     }
 }
@@ -129,6 +134,7 @@ impl PdfOptions {
             window: window(v.get("window")),
             margins: margins(v.get("margins")),
             hyperlinks: v.get("hyperlinks").and_then(Value::as_bool).unwrap_or(true),
+            portrait_media: v.get("portraitMedia").and_then(Value::as_bool).unwrap_or(false),
         }
     }
 }
@@ -761,7 +767,17 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
     for p in pages {
         let page = objs.reserve();
         let texts = fonts.texts(&p.list);
-        let content = objs.add(stream(content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts).as_bytes(), o.compress, ""));
+        // A landscape sheet on portrait media: turned a quarter turn counterclockwise, so the
+        // sheet's bottom edge runs up the page's right edge.
+        let turned = o.portrait_media && p.media.x > p.media.y;
+        let mut body = content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts);
+        if turned {
+            let mut cm = String::from("q 0 1 -1 0 ");
+            num(&mut cm, p.media.y);
+            cm.push_str(" 0 cm\n");
+            body = format!("{cm}{body}\nQ\n");
+        }
+        let content = objs.add(stream(body.as_bytes(), o.compress, ""));
         let mut used: Vec<usize> = texts.values().map(|(f, _)| *f).collect();
         used.sort_unstable();
         used.dedup();
@@ -780,7 +796,7 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
             let _ = write!(props, " /L{l} {id} 0 R");
         }
         let mut annots = Vec::new();
-        for (r, url) in &p.links {
+        for (r, url) in p.links.iter().filter(|_| !turned) {
             let Some(uri) = uri_string(url) else { continue };
             let mut rect = String::new();
             pt(&mut rect, r.min);
@@ -789,7 +805,7 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
             annots.push(objs.add(format!("<< /Type /Annot /Subtype /Link /Rect [{rect}] /Border [0 0 0] /A << /S /URI /URI {uri} >> >>")));
         }
         let mut mb = String::new();
-        pt(&mut mb, p.media);
+        pt(&mut mb, if turned { Vec2::new(p.media.y, p.media.x) } else { p.media });
         let annots = if annots.is_empty() { String::new() } else { format!(" /Annots [{}]", refs(annots)) };
         page_dicts.push((page, used, props, format!("/MediaBox [0 0 {mb}] /Contents {content} 0 R{annots}")));
         kids.push(page);
