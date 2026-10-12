@@ -452,9 +452,10 @@ fn sparse_dots_keep_their_look_when_lines_are_close() {
 
 #[test]
 fn scattered_dot_pattern_reads_solid_once_dots_fill_the_pixels() {
-    // AR-SAND at scale 3: three dot families, no single one dense enough on its own at 0.5 per
-    // pixel, but together about four dots on every pixel. Zoomed in 4x the dots stand apart.
-    let h = pattern_hatch("AR-SAND", 3.0, (0.0, 0.0, 100.0, 100.0));
+    // AR-SAND at scale 3/16 (the library pattern is drawn 16x coarser since #643, so this is the
+    // geometry of the old scale 3): three dot families, no single one dense enough on its own at
+    // 0.5 per pixel, but together about four dots on every pixel. Zoomed in 4x the dots stand apart.
+    let h = pattern_hatch("AR-SAND", 3.0 / 16.0, (0.0, 0.0, 100.0, 100.0));
     assert!(crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, 0.5));
     assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, 0.125));
 }
