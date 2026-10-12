@@ -929,6 +929,15 @@ impl WinitView {
             return;
         }
 
+        let has_marked_text = self.ivars().marked_text.borrow().length() > 0;
+        if has_marked_text {
+            // CADCraft patch: ask AppKit to drop the native composition before clearing its local
+            // marked text (rust-windowing/winit#4745). `discardMarkedText` may re-enter
+            // `unmarkText`, so let the `RefCell` borrow end before making the call.
+            let input_context = self.inputContext().expect("input context");
+            input_context.discardMarkedText();
+        }
+
         // Clear markedText
         *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
         self.ivars().pending_commit.set(false);
