@@ -15,7 +15,9 @@ use crate::{Accept, EngineError, Input, Interactive, Picker, Prompt, Result, Ses
 
 mod assoc;
 mod edit;
+mod pick;
 pub(crate) use assoc::update as refill_associative;
+pub use pick::{HatchPicks, PickMode};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -24,6 +26,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("boundary", "Boundary...", run_boundary).menu(&["Draw", "Boundary..."]).alias(&["bo", "bpoly"]).params("{points: [[x,y]]}").interactive(|_| Ok(Box::new(BoundaryM { region: false }))),
         CommandSpec::new("region", "Region", run_region).menu(&["Draw", "Region"]).alias(&["reg"]).params("{handles?}"),
         CommandSpec::new("hatchedit", "Hatch Edit", edit::run_hatchedit).menu(&["Modify", "Object", "Hatch..."]).alias(&["he", "-hatchedit"]).params("{handles?, pattern?, scale?, angle?, gradient?: {name?, color1?, color2?, angle? (degrees), centered?} (makes or changes a gradient fill; `pattern` turns it back), associative?: bool (false unlinks; true links each loop to a closed object of the same shape, or to `boundary` objects), boundary?: [hex], style?, origin? | originMode?, separate?: true, recreate?: \"polyline\"|\"region\", associate?: bool (link to the recreated boundary)}").interactive(|s| Ok(Box::new(edit::HatchEditM::new(s)))),
+        CommandSpec::new("hatchpick", "Hatch Pick", pick::run_hatchpick)
+            .params("{points?: [[x,y]] (internal points), handles?: [hex] (closed objects)} (typed: Points, Objects, oRigin or Hatch, then the picks): the Hatch and Gradient dialog's picks, kept in the session; changes nothing")
+            .enabled(has_doc)
+            .noundo()
+            .interactive(|_| Ok(Box::new(pick::HatchPickM::default()))),
     ]
 }
 

@@ -135,3 +135,106 @@ fn hatchedit_refuses_a_bad_gradient_and_changes_nothing() {
     assert!(s.execute("hatchedit", &json!({ "handles": [h], "pattern": "ANSI31", "gradient": { "name": "LINEAR" } })).is_err());
     assert_eq!(hatch(&s, &h), before);
 }
+
+use cadcraft_engine::geom::Vec2;
+use cadcraft_engine::{Input, PickMode};
+
+fn h(hex: &str) -> Handle {
+    Handle::parse_hex(hex).unwrap()
+}
+
+#[test]
+fn hatchpick_keeps_points_inside_boundaries_and_changes_nothing() {
+    let mut s = Session::new();
+    rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    let (n, depth) = (count(&s), undo_depth(&s));
+    s.start("hatchpick").unwrap();
+    s.input(Input::Keyword("Points".into())).unwrap();
+    assert!(s.prompt_text().contains("Pick internal point"), "{}", s.prompt_text());
+    s.input(Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+    assert!(!s.preview(Vec2::new(6.0, 6.0)).is_empty(), "the found boundary is previewed");
+    // Outside every boundary: reported, not kept.
+    s.input(Input::Point(Vec2::new(50.0, 50.0))).unwrap();
+    assert!(s.log.iter().any(|l| l.contains("Valid hatch boundary not found")), "{:?}", s.log);
+    s.input(Input::Point(Vec2::new(2.0, 2.0))).unwrap();
+    s.input(Input::Keyword("Undo".into())).unwrap();
+    s.input(Input::Enter).unwrap();
+    assert!(s.running.is_none());
+    let p = s.hatch_picks.clone().unwrap();
+    assert_eq!(p.mode, PickMode::Points);
+    assert_eq!(p.points, vec![Vec2::new(5.0, 5.0)]);
+    assert_eq!((count(&s), undo_depth(&s)), (n, depth), "nothing added, no undo step");
+}
+
+#[test]
+fn hatchpick_keeps_closed_objects_only() {
+    let mut s = Session::new();
+    let r = rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    s.execute("line", &json!({ "points": [[20, 0], [30, 0]] })).unwrap();
+    let l = last(&s);
+    s.start("hatchpick").unwrap();
+    s.input(Input::Keyword("Objects".into())).unwrap();
+    s.input(Input::Pick(vec![h(&r), h(&l)])).unwrap();
+    s.input(Input::Enter).unwrap();
+    let p = s.hatch_picks.clone().unwrap();
+    assert_eq!((p.mode, p.handles), (PickMode::Objects, vec![h(&r)]));
+}
+
+#[test]
+fn hatchpick_origin_and_hatch_modes() {
+    let mut s = Session::new();
+    let r = rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    let hx = handle(&s.execute("hatch", &json!({ "points": [[5, 5]] })).unwrap());
+    s.start("hatchpick").unwrap();
+    s.input(Input::Keyword("oRigin".into())).unwrap();
+    s.input(Input::Point(Vec2::new(1.0, 2.0))).unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(s.hatch_picks.clone().unwrap().origin, Some(Vec2::new(1.0, 2.0)));
+    s.hatch_picks = None;
+    s.start("hatchpick").unwrap();
+    s.input(Input::Keyword("Hatch".into())).unwrap();
+    // Not a hatch: asked again.
+    s.input(Input::Pick(vec![h(&r)])).unwrap();
+    assert!(s.running.is_some());
+    s.input(Input::Pick(vec![h(&r), h(&hx)])).unwrap();
+    assert!(s.running.is_none());
+    let p = s.hatch_picks.clone().unwrap();
+    assert_eq!((p.mode, p.handles), (PickMode::Hatch, vec![h(&hx)]));
+}
+
+#[test]
+fn hatchpick_typed_mode_and_escape_keeps_nothing() {
+    let mut s = Session::new();
+    rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    s.cmdline("hatchpick points").unwrap();
+    assert!(s.prompt_text().contains("Pick internal point"), "{}", s.prompt_text());
+    s.input(Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+    s.cancel();
+    assert!(s.running.is_none());
+    assert!(s.hatch_picks.is_none());
+}
+
+#[test]
+fn hatchpick_json_form_validates_like_the_prompts() {
+    let mut s = Session::new();
+    let r = rect(&mut s, [0.0, 0.0], [10.0, 10.0]);
+    s.execute("line", &json!({ "points": [[20, 0], [30, 0]] })).unwrap();
+    let l = last(&s);
+    s.execute("hatchpick", &json!({ "points": [[5, 5]], "handles": [r] })).unwrap();
+    let p = s.hatch_picks.clone().unwrap();
+    assert_eq!((p.points, p.handles), (vec![Vec2::new(5.0, 5.0)], vec![h(&r)]));
+    let too_many: Vec<[f64; 2]> = vec![[5.0, 5.0]; 1001];
+    for bad in [
+        json!({}),
+        json!({ "points": [[50, 50]] }),
+        json!({ "points": [["a"]] }),
+        json!({ "handles": [l] }),
+        json!({ "handles": ["zz"] }),
+        json!({ "handles": "x" }),
+        json!({ "points": too_many }),
+    ] {
+        s.hatch_picks = None;
+        assert!(s.execute("hatchpick", &bad).is_err(), "{bad}");
+        assert!(s.hatch_picks.is_none(), "{bad}");
+    }
+}
