@@ -683,3 +683,17 @@ fn editing_commands_leave_locked_layer_objects_alone() {
     s.execute("explode", &json!({"handles": [r]})).unwrap();
     assert_ne!(model_dump(&s), before);
 }
+
+#[test]
+fn offset_polyline_arc_bulge_follows_joined_endpoints() {
+    let mut s = Session::new();
+    // A diagonal line into a CCW semicircle centred on (10, 5); offsetting inward moves the arc start.
+    let pl = pline(&mut s, json!([[0, -5], {"p": [10, 0], "bulge": 1}, [10, 10]]), false);
+    s.execute("offset", &json!({"handle": pl, "distance": 1, "side": [12, 5]})).unwrap();
+    let p = poly(&last(&s));
+    let (a, b) = (p.vertices[1], p.vertices[2]);
+    let (arc, ccw) = cadcraft_geom::bulge_to_arc(a.p, b.p, a.bulge).unwrap();
+    assert!(ccw);
+    assert!(near(arc.center, 10.0, 5.0), "arc centre drifted to {:?}", arc.center);
+    assert!((arc.radius - 4.0).abs() < 1e-6, "radius {}", arc.radius);
+}
