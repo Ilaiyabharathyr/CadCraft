@@ -239,7 +239,10 @@ pub(crate) fn loops_from_handles(s: &Session, hs: &[Handle]) -> Result<Vec<Hatch
     let d = s.doc()?;
     let mut loops = Vec::new();
     for h in hs {
-        if let Some(vs) = d.entity(*h).and_then(|e| closed_loop(d, e)) {
+        // An object selected twice would cancel its own fill.
+        if let Some(vs) = d.entity(*h).and_then(|e| closed_loop(d, e))
+            && !loops.iter().any(|l: &HatchLoop| l.vertices == vs)
+        {
             loops.push(HatchLoop { vertices: vs, outer: loops.is_empty(), sources: vec![*h] });
         }
     }
@@ -357,7 +360,19 @@ fn make(s: &mut Session, p: &Value, gradient: bool) -> Result<Value> {
 
 /// Add the hatches for groups of loops: one per group when separate, otherwise one for all.
 fn add_hatches(s: &mut Session, st: &HatchSettings, groups: Vec<Vec<HatchLoop>>) -> Result<Vec<Handle>> {
-    let groups: Vec<Vec<HatchLoop>> = if st.separate { groups } else { vec![groups.into_iter().flatten().collect()] };
+    let groups: Vec<Vec<HatchLoop>> = if st.separate {
+        groups
+    } else {
+        // The fill is even-odd, so a boundary loop picked twice would cancel itself out. A pick inside an island comes back as
+        // an outer loop (other role) and is kept, so the island stays filled.
+        let mut merged: Vec<HatchLoop> = Vec::new();
+        for l in groups.into_iter().flatten() {
+            if !merged.iter().any(|m| m.outer == l.outer && same_loop(&m.vertices, &l.vertices)) {
+                merged.push(l);
+            }
+        }
+        vec![merged]
+    };
     let mut out = Vec::new();
     for loops in groups.into_iter().filter(|g| !g.is_empty()) {
         let h = s.add_entity(st.hatch(loops))?;
@@ -369,6 +384,13 @@ fn add_hatches(s: &mut Session, st: &HatchSettings, groups: Vec<Vec<HatchLoop>>)
         out.push(h);
     }
     Ok(out)
+}
+
+/// Whether two closed loops have the same vertices in the same order, from any start (a traced
+/// outline starts at the edge the pick's ray reaches first).
+fn same_loop(a: &[PolyVertex], b: &[PolyVertex]) -> bool {
+    a.len() == b.len()
+        && b.first().is_none_or(|f| (0..a.len()).any(|k| a.get(k) == Some(f) && a.iter().cycle().skip(k).zip(b).all(|(x, y)| x == y)))
 }
 
 fn run_hatch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -665,6 +687,51 @@ mod tests {
     fn only_hatch(s: &Session) -> (String, Hatch) {
         let d = s.doc().unwrap();
         d.model.iter().find_map(|e| if let EntityKind::Hatch(h) = &e.kind { Some((e.handle.hex(), h.clone())) } else { None }).unwrap()
+    }
+
+    fn hatch_params(cmd: &str, mut p: Value) -> Value {
+        if cmd == "hatch" {
+            p["pattern"] = json!("SOLID");
+        }
+        p
+    }
+
+    #[test]
+    fn repeated_picks_do_not_duplicate_boundary_loops() {
+        for cmd in ["hatch", "gradient"] {
+            let mut s = Session::new();
+            s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+            s.execute("rectang", &json!({ "p1": [20, 0], "p2": [30, 10] })).unwrap();
+            s.execute(cmd, &hatch_params(cmd, json!({ "points": [[2, 2], [8, 8], [5, 5]] }))).unwrap();
+            assert_eq!(only_hatch(&s).1.loops.len(), 1, "{cmd} points");
+            let h = s.doc().unwrap().model.iter().find(|e| !matches!(e.kind, EntityKind::Hatch(_))).unwrap().handle.hex();
+            s.execute(cmd, &hatch_params(cmd, json!({ "handles": [h.clone(), h] }))).unwrap();
+            let d = s.doc().unwrap();
+            assert!(d.model.iter().all(|e| !matches!(&e.kind, EntityKind::Hatch(h) if h.loops.len() != 1)), "{cmd} handles");
+            // Distinct regions keep one loop each.
+            s.execute(cmd, &hatch_params(cmd, json!({ "points": [[5, 5], [25, 5]] }))).unwrap();
+            let d = s.doc().unwrap();
+            assert!(d.model.iter().any(|e| matches!(&e.kind, EntityKind::Hatch(h) if h.loops.len() == 2)), "{cmd} distinct");
+        }
+    }
+
+    #[test]
+    fn repeated_picks_on_a_curved_boundary_keep_one_loop() {
+        // Picks at different heights reach the outline through different edges, so its vertices start elsewhere.
+        let mut s = Session::new();
+        s.execute("circle", &json!({ "center": [5, 5], "radius": 4 })).unwrap();
+        s.execute("hatch", &json!({ "points": [[5, 3], [5, 7]], "pattern": "SOLID" })).unwrap();
+        assert_eq!(only_hatch(&s).1.loops.len(), 1);
+    }
+
+    #[test]
+    fn picking_inside_an_island_keeps_its_own_loop() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("rectang", &json!({ "p1": [4, 4], "p2": [6, 6] })).unwrap();
+        let n = loops_at(&s, Vec2::new(1.0, 1.0)).unwrap().len() + loops_at(&s, Vec2::new(5.0, 5.0)).unwrap().len();
+        s.execute("hatch", &json!({ "points": [[1, 1], [5, 5]], "pattern": "SOLID" })).unwrap();
+        assert_eq!(only_hatch(&s).1.loops.len(), n);
     }
 
     #[test]
