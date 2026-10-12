@@ -62,9 +62,9 @@ pub struct CanvasState {
     hl_origin: Vec2,
     /// Selected infinite lines (clipped and drawn on the CPU each frame).
     hl_infinite: Vec<usize>,
-    /// The highlight geometry of the active viewport's model space, with the key it was built for
-    /// (see [`viewport_highlight_tolerance`]).
-    vp_hl: Option<(u64, DisplayList)>,
+    /// The selection and hover highlights inside the active MSPACE viewport (see [`VpHighlight`]).
+    vp_sel: VpHighlight,
+    vp_hover: VpHighlight,
     /// Model space seen through the active MSPACE viewport (see [`VpContent`]).
     vp: VpContent,
     /// Indices of infinite-line primitives in `list` (drawn on the CPU in GPU mode).
@@ -157,7 +157,9 @@ impl PrimIndex {
     }
 }
 
-/// Indices of the primitives in `list` drawn for `handles` (a scan; for small lists).
+/// Indices of the primitives in `list` drawn for `handles` (a scan: the reference [`PrimIndex`]
+/// is tested against).
+#[cfg(test)]
 fn prims_of(list: &DisplayList, handles: &[Handle]) -> Vec<usize> {
     if handles.is_empty() {
         return Vec::new();
@@ -473,6 +475,36 @@ fn viewport_highlight_tolerance(scale: f64) -> f64 {
     2f64.powi((1.0 / scale.max(1e-300)).log2().floor() as i32) * 0.5
 }
 
+/// The selected or the hovered objects tessellated in model units for the active MSPACE
+/// viewport, whose contents can't be looked up by handle in the layout's lists. The selection and
+/// the hover are kept apart, so moving the cursor over objects doesn't tessellate the selection
+/// again; each is rebuilt only when the drawing, the objects or the zoom band change.
+#[derive(Default)]
+struct VpHighlight {
+    key: Option<u64>,
+    list: DisplayList,
+    /// Bumped on each rebuild (identifies `list` for [`draw_highlight_gpu`]).
+    list_gen: u64,
+}
+
+impl VpHighlight {
+    fn update(&mut self, st: &cadcraft_engine::DocState, handles: &[Handle], scale: f64) {
+        let tolerance = viewport_highlight_tolerance(scale);
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, tolerance.to_bits(), handles).hash(&mut h);
+            h.finish()
+        };
+        if self.key != Some(key) {
+            let ents = handles.iter().filter_map(|h| st.doc.model.get(*h)).map(|e| e.as_ref());
+            self.list = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance, ..Default::default() });
+            self.key = Some(key);
+            self.list_gen = self.list_gen.wrapping_add(1);
+        }
+    }
+}
+
 /// The area a display list is built for: each view with half its larger side of margin all
 /// round (panning by up to that much doesn't rebuild), joined. `None` (everything) when a view
 /// isn't usable.
@@ -645,17 +677,20 @@ fn draw_list(p: &egui::Painter, xf: &Xf, list: &DisplayList, bg: Rgb, lwdisplay:
 /// Draw the selection highlight (dashed, `width` points) through the GPU: its vertex data is
 /// rebuilt only when the display list, the selection or the vertex origin changes. Dashing every
 /// selected line and tessellating it as egui shapes each frame made large selections sluggish.
+/// `prims`: the selection's primitives in `list`, asked for only when the vertex data is rebuilt.
+/// `stencil`: [`crate::gpu::Stencil::Inside`] keeps it inside a clipped viewport's outline.
 #[allow(clippy::too_many_arguments)]
 fn draw_highlight_gpu(
     p: &egui::Painter,
     xf: &Xf,
     list: &DisplayList,
     list_gen: u64,
-    prim_index: &mut PrimIndex,
+    prims: impl FnOnce() -> Vec<usize>,
     sel: &[Handle],
     color: Color32,
     width: f32,
     hl: (&mut Option<u64>, &crate::gpu::MeshSlot, &mut Vec2, &mut Vec<usize>),
+    stencil: crate::gpu::Stencil,
 ) {
     let (hl_key, hl_slot, hl_origin, hl_infinite) = hl;
     let origin = crate::gpu::choose_origin(&list.bounds, xf.center, f64::from(xf.rect.height()) / xf.scale.max(1e-300));
@@ -666,7 +701,7 @@ fn draw_highlight_gpu(
         h.finish()
     };
     if *hl_key != Some(key) {
-        let prims = prim_index.prims(list_gen, list, sel);
+        let prims = prims();
         let mesh = crate::gpu::build_highlight_mesh(list, &prims, origin, color.to_array(), width);
         *hl_infinite = prims.into_iter().filter(|&i| list.prims.get(i).is_some_and(|p| matches!(p.kind, Kind::Infinite { .. }))).collect();
         if let Ok(mut slot) = hl_slot.lock() {
@@ -687,7 +722,7 @@ fn draw_highlight_gpu(
             layer: crate::gpu::LAYER_HIGHLIGHT,
             xform: crate::gpu::IDENTITY_XFORM,
             dash: 10.0,
-            stencil: crate::gpu::Stencil::Off,
+            stencil,
         },
     ));
 }
@@ -805,7 +840,7 @@ fn draw_list_gpu(c: &mut CanvasState, p: &egui::Painter, xf: &Xf, bg: Rgb, lwdis
 }
 
 /// Draw selected/hovered entities as highlight overlays: `prims` are indices into `list` (from
-/// [`PrimIndex::prims`] or [`prims_of`]).
+/// [`PrimIndex::prims`], or all of a [`VpHighlight`] list).
 fn draw_highlight(p: &egui::Painter, xf: &Xf, list: &DisplayList, prims: &[usize], color: Color32, width: f32, dashed: bool) {
     let mut shapes = Vec::new();
     for prim in prims.iter().filter_map(|&i| list.prims.get(i)) {
@@ -1348,10 +1383,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     };
     let sel = app.session.selection();
     // The active viewport's contents, drawn apart from the layout's list, under its own objects.
+    // `masked`: its outline is in the stencil buffer this frame.
+    let mut masked = false;
     if let Some(f) = ensure_vp_content(app, &xf_paper, ui.ctx()) {
         let gpu = app.canvas.gpu.is_some();
         let clipped = painter.with_clip_rect(f.on_screen.intersect(rect));
         draw_vp_content(&mut app.canvas.vp, gpu, &clipped, &f, &xf_paper, bg, app.session.settings.lwdisplay);
+        masked = gpu && f.outline.is_some();
     }
     if app.canvas.gpu.is_some() {
         draw_list_gpu(&mut app.canvas, &painter, &xf_paper, bg, app.session.settings.lwdisplay);
@@ -1376,29 +1414,34 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
         if let Ok(st) = app.session.state() {
-            let mut hs = sel.clone();
-            hs.extend(app.canvas.hover.filter(|h| !sel.contains(h)));
-            let ents: Vec<_> = hs.iter().filter_map(|h| st.doc.model.get(*h)).map(|e| e.as_ref()).collect();
-            if !ents.is_empty() {
-                let tolerance = viewport_highlight_tolerance(scale);
-                let key = {
-                    use std::hash::{Hash, Hasher};
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    (st.uid, st.revision, std::sync::Arc::as_ptr(&st.doc) as usize, tolerance.to_bits(), &hs).hash(&mut h);
-                    h.finish()
-                };
-                if app.canvas.vp_hl.as_ref().is_none_or(|(k, _)| *k != key) {
-                    let built = cadcraft_render::build_entities(&st.doc, ents, &cadcraft_render::Options { tolerance, ..Default::default() });
-                    app.canvas.vp_hl = Some((key, built));
-                }
-                if let Some((_, list)) = &app.canvas.vp_hl {
-                    let clipped = painter.with_clip_rect(r.intersect(rect));
-                    if let Some(h) = app.canvas.hover
-                        && !sel.contains(&h)
-                    {
-                        draw_highlight(&clipped, &xf, list, &prims_of(list, &[h]), t.hover, 2.0, false);
-                    }
-                    draw_highlight(&clipped, &xf, list, &prims_of(list, &sel), t.selection, 1.5, true);
+            // A clipped viewport's outline bounds (its outline is masked when `masked`).
+            let bounds = active_clip.as_ref().map_or(r, |c| {
+                let b = c.bounds();
+                Rect::from_two_pos(xf_paper.to_screen(Vec2::new(b.min.x, b.max.y)), xf_paper.to_screen(Vec2::new(b.max.x, b.min.y)))
+            });
+            let clipped = painter.with_clip_rect(bounds.intersect(rect));
+            let c = &mut app.canvas;
+            if let Some(h) = c.hover
+                && !sel.contains(&h)
+            {
+                c.vp_hover.update(st, &[h], scale);
+                let list = &c.vp_hover.list;
+                draw_highlight(&clipped, &xf, list, &(0..list.prims.len()).collect::<Vec<_>>(), t.hover, 2.0, false);
+            }
+            if !sel.is_empty() {
+                c.vp_sel.update(st, &sel, scale);
+                let list = &c.vp_sel.list;
+                let all = || (0..list.prims.len()).collect::<Vec<_>>();
+                if c.gpu.is_some() {
+                    // Shares the GPU highlight layer with the layout's own selection; the high bit
+                    // keeps this list's generations apart from the layout list's.
+                    let list_id = c.vp_sel.list_gen | 1 << 63;
+                    let stencil = if masked { crate::gpu::Stencil::Inside } else { crate::gpu::Stencil::Off };
+                    let hl = (&mut c.hl_key, &c.hl_slot, &mut c.hl_origin, &mut c.hl_infinite);
+                    draw_highlight_gpu(&clipped, &xf, list, list_id, all, &sel, t.selection, 1.5, hl, stencil);
+                    draw_highlight(&clipped, &xf, list, &c.hl_infinite, t.selection, 1.5, true);
+                } else {
+                    draw_highlight(&clipped, &xf, list, &all(), t.selection, 1.5, true);
                 }
             }
         }
@@ -1409,7 +1452,20 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &[h]), t.hover, 2.0, false);
         }
         if gpu.is_some() && !sel.is_empty() {
-            draw_highlight_gpu(&painter, &xf, list, *list_gen, prim_index, &sel, t.selection, 1.5, (hl_key, hl_slot, hl_origin, &mut *hl_infinite));
+            let list_id = *list_gen;
+            let hl = (hl_key, &*hl_slot, hl_origin, &mut *hl_infinite);
+            draw_highlight_gpu(
+                &painter,
+                &xf,
+                list,
+                list_id,
+                || prim_index.prims(list_id, list, &sel),
+                &sel,
+                t.selection,
+                1.5,
+                hl,
+                crate::gpu::Stencil::Off,
+            );
             draw_highlight(&painter, &xf, list, hl_infinite, t.selection, 1.5, true);
         } else {
             draw_highlight(&painter, &xf, list, &prim_index.prims(*list_gen, list, &sel), t.selection, 1.5, true);
@@ -2041,6 +2097,36 @@ mod tests {
         for s in [0.3, 1.0, 3.0, 4.0, 250.0] {
             assert!(viewport_highlight_tolerance(s) <= 0.5 / s);
         }
+    }
+
+    #[test]
+    fn viewport_highlight_is_tessellated_once_per_selection_and_zoom_band() {
+        use cadcraft_doc::{Circle, Common, Drawing, EntityKind, Space};
+        let mut d = Drawing::new_imperial();
+        let circle = |r| EntityKind::Circle(Circle { center: cadcraft_geom::Vec3::new(0.0, 0.0, 0.0), radius: r });
+        let a = d.add(&Space::Model, Common::default(), circle(10.0)).unwrap();
+        let b = d.add(&Space::Model, Common::default(), circle(5.0)).unwrap();
+        let st = cadcraft_engine::DocState::new(d, "highlight", None);
+        let points = |l: &DisplayList| l.prims.iter().map(|p| l.points(p).len()).sum::<usize>();
+        let (mut sel, mut hover) = (VpHighlight::default(), VpHighlight::default());
+        sel.update(&st, &[a], 10.0);
+        let (first, segments) = (sel.list_gen, points(&sel.list));
+        assert!(!sel.list.prims.is_empty());
+        // Every frame of a pan, zooming within the 2x band, and the hover moving: the same list.
+        sel.update(&st, &[a], 10.0);
+        sel.update(&st, &[a], 12.0);
+        hover.update(&st, &[b], 12.0);
+        hover.update(&st, &[a], 12.0);
+        assert_eq!(sel.list_gen, first);
+        // Zooming in past the band tessellates finer.
+        sel.update(&st, &[a], 40.0);
+        assert_ne!(sel.list_gen, first);
+        assert!(points(&sel.list) > segments);
+        // A different selection is rebuilt.
+        let zoomed = sel.list_gen;
+        sel.update(&st, &[a, b], 40.0);
+        assert_ne!(sel.list_gen, zoomed);
+        assert_eq!(sel.list.prims.iter().map(|p| p.handle).collect::<std::collections::BTreeSet<_>>().len(), 2);
     }
 
     #[test]

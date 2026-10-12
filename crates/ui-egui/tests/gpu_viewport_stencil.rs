@@ -1,14 +1,14 @@
-//! A clipped layout viewport's contents are clipped on the GPU (#688): the outline is drawn into
-//! the stencil buffer as a triangle fan that flips a bit (even-odd), and the contents draw only
-//! where it is set. Renders through the canvas pipelines into an offscreen colour + stencil
-//! target and reads the pixels back.
+//! A clipped layout viewport's contents and selection highlight are clipped on the GPU (#688):
+//! the outline is drawn into the stencil buffer as a triangle fan that flips a bit (even-odd),
+//! and they draw only where it is set. Renders through the canvas pipelines into an offscreen
+//! colour + stencil target and reads the pixels back.
 
 use std::sync::Arc;
 
 use cadcraft_engine::doc::Handle;
 use cadcraft_engine::geom::{Bounds2, Vec2};
 use cadcraft_engine::render::{DPrim, DisplayList, Kind};
-use cadcraft_ui_egui::gpu::{self, CanvasCallback, GpuFaults, LAYER_MASK, LAYER_VIEWPORT, MeshSlot, Stencil};
+use cadcraft_ui_egui::gpu::{self, CanvasCallback, GpuFaults, LAYER_HIGHLIGHT, LAYER_MASK, LAYER_VIEWPORT, MeshSlot, Stencil};
 use egui_wgpu::wgpu;
 use egui_wgpu::{CallbackTrait, ScreenDescriptor};
 
@@ -142,6 +142,21 @@ fn clipped_viewport_contents_draw_only_inside_their_outline() {
     assert!(dark(&px, 16, 24) && dark(&px, 40, 48), "inside both arms of the L");
     assert!(!dark(&px, 40, 24), "the notch is outside");
     assert!(!dark(&px, 2, 2) && !dark(&px, 60, 60));
+
+    // The selection highlight inside a clipped viewport stays inside its outline too: a wide
+    // line across the whole target at world y 32, masked by the circle.
+    let line = DisplayList {
+        prims: vec![DPrim { handle: Handle(1), color: cadcraft_color::Rgb(0, 0, 0), aci7: false, lw: 0.0, kind: Kind::Polyline, start: 0, len: 2 }],
+        verts: vec![Vec2::new(0.0, 32.0), Vec2::new(64.0, 32.0)],
+        bounds: Bounds2::new(Vec2::new(0.0, 32.0), Vec2::new(64.0, 32.0)),
+        ..Default::default()
+    };
+    let slot: MeshSlot = Arc::default();
+    *slot.lock().unwrap() = Some(gpu::build_highlight_mesh(&line, &[0], Vec2::ZERO, [0, 0, 0, 255], 3.0));
+    let highlight = CanvasCallback { slot, layer: LAYER_HIGHLIGHT, ..callback(&line, LAYER_HIGHLIGHT, 6, Stencil::Inside) };
+    let px = render(&rs, &[callback(&fan(&circle), LAYER_MASK, 1, Stencil::Mask), highlight]);
+    assert!(dark(&px, 32, 32) && dark(&px, 20, 32) && dark(&px, 44, 32), "inside the circle");
+    assert!(!dark(&px, 4, 32) && !dark(&px, 60, 32), "outside it");
 
     // Without a mask, Off draws everywhere.
     let mut off = square(5);
