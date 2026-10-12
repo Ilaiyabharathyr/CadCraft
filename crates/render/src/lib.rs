@@ -19,6 +19,7 @@ pub mod pen;
 mod plotstyle;
 mod point;
 pub mod raster;
+mod text;
 mod tolerance;
 pub mod units;
 mod wide;
@@ -30,6 +31,7 @@ use pen::Pen;
 
 pub use dim::{ArrowGeom, Arrowhead, DimGeometry, DimText, LineRole, arrowhead, dimension_geometry, dimension_geometry_with, format_linear_value};
 pub use fill::triangulate_evenodd;
+pub use hatch::pattern_swatch;
 pub use paper::{PAPER_SIZES, PaperSize, Sheet, paper_size, sheet};
 pub use tolerance::{gdt_points, tolerance_in};
 
@@ -172,7 +174,8 @@ impl DisplayList {
 pub struct Options {
     /// Chord tolerance in world units (about half a pixel at the current zoom).
     pub tolerance: f64,
-    /// Dashes shorter than this (world units) are drawn as continuous lines.
+    /// Two pixels in world units: shorter dashes are continuous and filled font text uses
+    /// screen-size detail. Zero keeps full detail (plots and image/vector exports).
     pub min_dash: f64,
     /// Draw text (off for very coarse previews).
     pub text: bool,
@@ -185,12 +188,26 @@ pub struct Options {
     /// Plot style table to draw with. When `None`, [`build`] of a layout whose page setup has
     /// "Display plot styles" on uses the layout's table; [`build_plot`] uses none.
     pub plot_style_table: Option<std::sync::Arc<cadcraft_doc::PlotStyleTable>>,
+    /// The area being looked at (world units of the space being built), for on-screen builds:
+    /// hatch patterns are only generated inside it. `None` = everywhere (plots, exports, picks).
+    pub view: Option<Bounds2>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, view_height: 0.0, plot_style_table: None }
+        Options { tolerance: 0.001, min_dash: 0.0, text: true, fill: true, lineweights: false, view_height: 0.0, plot_style_table: None, view: None }
     }
+}
+
+/// The largest axis scale of a transform's linear part (its largest singular value): a length
+/// `l` in the transform's own units measures at most `l * max_scale` after it, in any direction.
+/// A uniform scale gives its factor, where [`Mat3::scale_factor`] gives the mean of the axes.
+fn max_scale(m: &Mat3) -> f64 {
+    let (a, b, c, d) = (m.a, m.b, m.c, m.d);
+    let e = (a * a + b * b + c * c + d * d) / 2.0;
+    let f = (((a * a + b * b - c * c - d * d) / 2.0).powi(2) + (a * c + b * d).powi(2)).sqrt();
+    let s = (e + f).max(0.0).sqrt();
+    if s.is_finite() { s } else { 0.0 }
 }
 
 /// Graphics state inherited through block references.
@@ -234,6 +251,8 @@ struct Builder<'a> {
     styles: Option<&'a plotstyle::Styler>,
     /// Named plot style (table index) of the entity being drawn.
     named: Option<usize>,
+    /// The block-expansion budget shared by the parts of a list built in parallel.
+    shared_budget: Option<&'a std::sync::atomic::AtomicUsize>,
 }
 
 /// Upper bound on the block contents drawn per display list (each block reference, MINSERT copy
@@ -275,6 +294,9 @@ impl Builder<'_> {
         self.list.prims.push(DPrim { handle: ctx.top, color: color.rgb, aci7: color.aci7, lw, kind: Kind::Polyline, start, len: pts.len() as u32 });
     }
     fn tris(&mut self, ctx: &Ctx, color: Ink, tris: &[Vec2]) {
+        self.tris_at(ctx, color, tris, ctx.xf);
+    }
+    fn tris_at(&mut self, ctx: &Ctx, color: Ink, tris: &[Vec2], xf: Mat3) {
         if tris.len() < 3 {
             return;
         }
@@ -282,7 +304,7 @@ impl Builder<'_> {
         let (color, _) = self.styled(color, 0.0);
         let start = self.list.tris.len() as u32;
         for p in tris {
-            let q = ctx.xf.apply(*p);
+            let q = xf.apply(*p);
             self.list.bounds.add(q);
             self.list.tris.push(q);
         }
@@ -298,16 +320,26 @@ impl Builder<'_> {
         }
         let fill = self.opts.fill && ctx.d.header.i64("TEXTFILL", 1) != 0;
         // Plots note which filled outlines are font glyphs (see `DisplayList::texts`).
-        let mut text = if self.plotting && fill { sh.text.iter().peekable() } else { [].iter().peekable() };
+        let mut text = sh.text.iter().peekable();
+        let pixel = if self.plotting { 0.0 } else { self.opts.min_dash * 0.5 };
         for (i, g) in sh.glyphs.iter().enumerate() {
             if fill {
-                let tris = fill::triangulate_evenodd(g);
-                let at = self.list.prims.len();
-                self.tris(ctx, color, &tris);
                 while text.next_if(|t| t.outline < i).is_some() {}
-                if let Some(t) = text.next_if(|t| t.outline == i)
+                let glyph = text.next_if(|t| t.outline == i);
+                let at = self.list.prims.len();
+                let len = if let Some(t) = glyph {
+                    let xf = crate::text::placement(t, ctx.xf);
+                    let mesh = crate::text::mesh(t, xf, pixel);
+                    self.tris_at(ctx, color, &mesh.triangles, xf);
+                    mesh.triangles.len()
+                } else {
+                    let tris = fill::triangulate_evenodd(g);
+                    self.tris(ctx, color, &tris);
+                    tris.len()
+                };
+                if let Some(t) = glyph.filter(|_| self.plotting)
                     && self.list.prims.len() > at
-                    && let (Ok(prim), Ok(verts)) = (u32::try_from(at), u32::try_from(tris.len()))
+                    && let (Ok(prim), Ok(verts)) = (u32::try_from(at), u32::try_from(len))
                 {
                     let xf = &ctx.xf;
                     let glyph = cadcraft_fonts::TextGlyph { origin: xf.apply(t.origin), x: xf.apply_vec(t.x), y: xf.apply_vec(t.y), ..t.clone() };
@@ -339,7 +371,10 @@ impl Builder<'_> {
     /// Take one unit of the block-expansion budget; false once it is spent.
     fn expand(&mut self) -> bool {
         self.list.expanded = self.list.expanded.saturating_add(1);
-        self.list.expanded <= MAX_BLOCK_EXPANSION
+        match self.shared_budget {
+            Some(spent) => spent.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < MAX_BLOCK_EXPANSION,
+            None => self.list.expanded <= MAX_BLOCK_EXPANSION,
+        }
     }
 }
 
@@ -382,12 +417,17 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
         _ => None,
     });
     let styler = table.map(|t| plotstyle::Styler::new(d, t));
-    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting, styles: styler.as_ref(), named: None, shared_budget: None };
     if let Space::Paper(name) = space {
         b.list.sheet = paper::sheet(d, name);
     }
     if let Some(store) = d.space(space) {
         let paper = matches!(space, Space::Paper(_));
+        #[cfg(not(target_arch = "wasm32"))]
+        if !paper && !plotting && b.styles.is_none() && store.len() >= 2 * PARALLEL_CHUNK {
+            build_parallel(&mut b, d, store);
+            return b.list;
+        }
         let mut viewports = 0usize;
         for e in store.iter() {
             if paper && let EntityKind::Viewport(vp) = &e.kind {
@@ -408,6 +448,66 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
         pen::apply(&mut b.list, sheet.unit_mm);
     }
     b.list
+}
+
+/// Top-level entities per task when a display list is built on all cores.
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_CHUNK: usize = 256;
+
+/// Build model space for the screen on all cores: the entities are split into chunks built
+/// side by side, then joined in drawing order, so the list is the same as a one-thread build.
+/// The canvas rebuilds the whole list at every 2x zoom step, on the UI thread; one core made
+/// that a visible stall on real drawings. Plots, layouts and plot styles keep the one-thread
+/// path (they run once, and their pens and per-primitive layers are built along the way).
+#[cfg(not(target_arch = "wasm32"))]
+fn build_parallel(b: &mut Builder, d: &Drawing, store: &cadcraft_doc::EntityStore) {
+    use rayon::prelude::*;
+    let ents: Vec<&std::sync::Arc<Entity>> = store.iter().collect();
+    let budget = std::sync::atomic::AtomicUsize::new(0);
+    let (opts, plotting) = (b.opts, b.plotting);
+    let parts: Vec<DisplayList> = ents
+        .par_chunks(PARALLEL_CHUNK)
+        .map(|chunk| {
+            let mut part = Builder { list: DisplayList::default(), opts, plotting, styles: None, named: None, shared_budget: Some(&budget) };
+            for e in chunk {
+                entity(&mut part, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
+            }
+            part.list
+        })
+        .collect();
+    // One allocation per array for the joined list.
+    b.list.prims.reserve(parts.iter().map(|p| p.prims.len()).sum());
+    b.list.verts.reserve(parts.iter().map(|p| p.verts.len()).sum());
+    b.list.tris.reserve(parts.iter().map(|p| p.tris.len()).sum());
+    for part in parts {
+        append(&mut b.list, part);
+    }
+}
+
+/// Append `src` to `dst`: its primitives index into `dst`'s vertex and triangle arrays.
+#[cfg(not(target_arch = "wasm32"))]
+fn append(dst: &mut DisplayList, src: DisplayList) {
+    let (verts, tris, prims) = (dst.verts.len() as u32, dst.tris.len() as u32, dst.prims.len() as u32);
+    // Pens are parallel to the primitives, with missing entries meaning "use object".
+    if !src.pens.is_empty() {
+        dst.pens.resize(dst.prims.len(), Pen::default());
+    }
+    dst.prims.extend(src.prims.into_iter().map(|mut p| {
+        p.start += if matches!(p.kind, Kind::Tris | Kind::Mask) { tris } else { verts };
+        p
+    }));
+    dst.verts.extend(src.verts);
+    dst.tris.extend(src.tris);
+    dst.prim_layers.extend(src.prim_layers);
+    dst.texts.extend(src.texts.into_iter().map(|mut t| {
+        if t.prim < PlotText::CLIPPED {
+            t.prim += prims;
+        }
+        t
+    }));
+    dst.pens.extend(src.pens);
+    dst.bounds = dst.bounds.union(&src.bounds);
+    dst.expanded = dst.expanded.saturating_add(src.expanded);
 }
 
 /// `opts` with a view height for relative point sizes: the extents height when none is given
@@ -464,7 +564,7 @@ fn viewport(b: &mut Builder, d: &Drawing, e: &Entity, vp: &cadcraft_doc::Viewpor
     let mcenter = vp.view_center + (rect.center() - center) / s;
     // Model window with slack: entity bounds are approximate (text, dimensions).
     let win = Bounds2::new(mcenter - mhalf, mcenter + mhalf).expand(mhalf.x.max(mhalf.y) * 0.1);
-    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None };
+    let mut sub = Builder { list: DisplayList::default(), opts: b.opts, plotting: b.plotting, styles: b.styles, named: None, shared_budget: None };
     // PSLTSCALE on: model-space dashes are scaled so they measure the same on paper as in
     // paper space, whatever the viewport scale.
     let lt_factor = if d.header.i64("PSLTSCALE", 1) != 0 { 1.0 / s } else { 1.0 };
@@ -602,7 +702,7 @@ pub fn build_entities<'a, I: IntoIterator<Item = &'a Entity>>(d: &Drawing, ents:
     } else {
         opts
     };
-    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None };
+    let mut b = Builder { list: DisplayList::default(), opts, plotting: false, styles: None, named: None, shared_budget: None };
     for e in ents {
         entity(&mut b, &top_ctx(d, Mat3::IDENTITY, e.handle, &[], &[]), e);
     }

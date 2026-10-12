@@ -108,6 +108,7 @@
 	Close All	Fechar tudo
 	Closed	Fechada
 	Coincident	Coincidente
+	Collapse Palettes	Recolher paletas
 	Collapse Tool Sets	Recolher conjuntos de ferramentas
 	Collinear	Colinear
 	Color	Cor
@@ -523,6 +524,7 @@
 	Plot	Plotar
 	Plot (click: do not plot)	Plotar (clique para não plotar)
 	Plot Preview	Visualizar plotagem
+	Plot Window	Janela de plotagem
 	Plot style	Estilo de plotagem
 	Plot style attached to	Estilo de plotagem anexado a
 	Plot style table	Tabela de estilos de plotagem
@@ -993,3 +995,5 @@
 	Hide Others	Ocultar outros
 	Accessibility	Acessibilidade
 	Show System Cursor	Exibir cursor do sistema
+	Hatch Pattern	Padrão de hachura
+	Search for pattern	Pesquisar padrão

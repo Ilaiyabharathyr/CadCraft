@@ -1,7 +1,7 @@
 //! Interactive commands: prompts, inputs and the command-line coordinate grammar.
 
 use cadcraft_doc::{EntityKind, Handle};
-use cadcraft_geom::Vec2;
+use cadcraft_geom::{Mat3, Vec2};
 use serde::Serialize;
 
 use crate::{Result, Session};
@@ -45,15 +45,32 @@ pub struct Prompt {
     /// index): Dynamic Input shows its dimensions ([`crate::grip_dims`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grip: Option<(Handle, usize)>,
+    /// A visual chooser the UI can show for this prompt; a choice made in it is entered as
+    /// [`Input::Text`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picker: Option<Picker>,
+}
+
+/// A visual chooser for a prompt ([`Prompt::picker`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Picker {
+    /// A hatch pattern by name (see [`crate::pattern_choices`]); holds the current pattern.
+    HatchPattern(String),
 }
 
 impl Prompt {
     pub fn new(message: impl Into<String>, accept: Accept) -> Self {
-        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, deferred: false, grip: None }
+        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, deferred: false, grip: None, picker: None }
     }
     /// The grip being stretched (the `grip` field).
     pub fn grip(mut self, g: (Handle, usize)) -> Self {
         self.grip = Some(g);
+        self
+    }
+    /// The visual chooser the UI can show (the `picker` field).
+    pub fn picker(mut self, p: Picker) -> Self {
+        self.picker = Some(p);
         self
     }
     pub fn kw(mut self, k: &[&str]) -> Self {
@@ -165,6 +182,24 @@ pub trait Interactive: Send {
     fn preview(&self, _s: &Session, _cursor: Vec2) -> Vec<EntityKind> {
         Vec::new()
     }
+    /// The preview as existing objects under one transform, when it is that (MOVE, COPY,
+    /// ROTATE, SCALE). The UI then draws them from geometry uploaded once instead of rebuilding
+    /// the transformed copies every frame; `None` falls back to [`Interactive::preview`].
+    fn drag(&self, _s: &Session, _cursor: Vec2) -> Option<Drag> {
+        None
+    }
+}
+
+/// See [`Interactive::drag`].
+#[derive(Clone, Debug)]
+pub struct Drag {
+    pub handles: Vec<Handle>,
+    pub matrix: Mat3,
+    /// Rubber-band geometry drawn as well (the base-to-cursor line), and dragged objects the
+    /// matrix can't draw (text MIRROR keeps readable), already transformed.
+    pub extra: Vec<EntityKind>,
+    /// The dragged objects are the clipboard's ([`Session::clipboard`]), not `handles`.
+    pub clipboard: bool,
 }
 
 /// Parse a typed point: `x,y[,z]`, `@dx,dy`, `@dist<angle`, `dist<angle`, `#x,y` (absolute),

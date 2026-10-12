@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("mview", "Viewports", run_mview)
             .alias(&["mv"])
             .params(
-                "{option?: fit|polygonal|object|on|off|lock|restore, p1?, p2? (default: printable area), count?: 1-4, arrangement?: vertical|horizontal|left|right|above|below, points?: [[x,y]…] + bulges? (polygonal), object? (closed object to clip by), handles? + locked? (on/off/lock), layout?}",
+                "{option?: fit|polygonal|object|on|off|lock|restore, p1?, p2? (default: printable area), count?: 1-4, arrangement?: vertical|horizontal|left|right|above|below, points?: [[x,y]…] + bulges? (polygonal), object? (closed object to clip by), handles? + locked? (on/off/lock), name? (restore: a model space viewport configuration, default *Active; its viewports fill p1-p2 or the printable area), layout?}",
             )
             .interactive(|_| Ok(Box::new(MviewM::new(1, true)))),
         CommandSpec::new("mview.polygonal", "Polygonal Viewport", |s, p| run_mview(s, &viewports::with(p.clone(), "option", json!("polygonal"))))
@@ -704,6 +704,10 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
         if !["layout", "extents", "display", "window", "limits"].contains(&v.as_str()) {
             return Err(bad(cmd, "`plotArea` must be layout, extents, display, window or limits"));
         }
+        // Layout plotting always prints the whole sheet; the other areas are only stored for DXF round trips.
+        if v != "layout" && v != page.plot_area {
+            return Err(bad(cmd, format!("plot area `{v}` is not available yet; layouts plot the whole sheet (`layout`)")));
+        }
         page.plot_area = v;
     }
     if let Some(v) = str_param(p, "plotStyleTable") {
@@ -1016,6 +1020,12 @@ mod tests {
         assert!(s.execute("pagesetup", &json!({"layout": "Layout1", "margins": [1, 2]})).is_err());
         assert!(s.execute("pagesetup", &json!({"layout": "Layout1", "width": 1e308, "height": 5})).is_err());
         assert!(s.execute("pagesetup", &json!({"paper": "A4"})).is_err(), "model tab needs a layout");
+        for area in ["extents", "display", "window", "limits"] {
+            let e = s.execute("pagesetup", &json!({"layout": "Layout1", "plotArea": area})).unwrap_err();
+            assert!(e.to_string().contains("not available yet"), "{area}: {e}");
+        }
+        let r = s.execute("pagesetup", &json!({"layout": "Layout1", "plotArea": "Layout"})).unwrap();
+        assert_eq!(r["page"]["plotArea"], "layout");
         let report = s.execute("pagesetup", &Value::Null).unwrap();
         assert!(report["papers"].as_array().unwrap().len() >= 10);
         s.execute("pagesetup", &json!({"layout": "Layout2", "width": 500, "height": 300})).unwrap();

@@ -237,6 +237,21 @@ fn stroke_line_width(shx: Option<&shx::Font>, s: &str, height: f64, width_factor
     if shx.is_some() { n.max(0.0) } else { (n - stroke::GAP / stroke::CAP * height * width_factor).max(0.0) }
 }
 
+/// Width of the gap MTEXT leaves between two words. Words are measured without their trailing
+/// letter gap, so the stroke font's gap is added on both sides of the space, as TEXT lays it out.
+pub fn space_width(font: &TextFont, height: f64, width_factor: f64) -> f64 {
+    if let TextFont::Outline(face) = font
+        && let Some(w) = ttf::width(face, " ", height, width_factor)
+    {
+        return w;
+    }
+    // An SHX font's advances carry no trailing gap to add back.
+    if let TextFont::Shx(f) = font {
+        return stroke_advance(Some(f), ' ', height, width_factor);
+    }
+    stroke_advance(None, ' ', height, width_factor) + stroke::GAP / stroke::CAP * height * width_factor
+}
+
 /// The font a piece of text is set in: the built-in stroke font, an SHX shape font (strokes) or
 /// an installed TrueType / OpenType face (outlines). In each, characters the font lacks come
 /// from a fallback font.

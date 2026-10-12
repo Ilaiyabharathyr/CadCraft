@@ -343,6 +343,50 @@ fn copy_rotate_scale_mirror() {
 }
 
 #[test]
+fn copy_and_rotate_drag_as_a_transform_of_the_selection() {
+    fn start(cmd: &str) -> Session {
+        let mut s = Session::new();
+        s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap();
+        for t in [cmd, "all", "", "0,0"] {
+            s.cmdline(t).unwrap();
+        }
+        s
+    }
+    let s = start("copy");
+    let (d, extra) = s.drag(Vec2::new(3.0, 4.0)).expect("COPY drags its selection");
+    assert_eq!(d.handles.len(), 1);
+    assert!(d.matrix.apply(Vec2::new(1.0, 0.0)).near(Vec2::new(4.0, 4.0), 1e-9));
+    assert_eq!(extra.len(), 1, "the base-to-cursor line");
+
+    let (d, _) = start("rotate").drag(Vec2::new(0.0, 5.0)).expect("ROTATE drags its selection");
+    assert!(d.matrix.apply(Vec2::new(1.0, 0.0)).near(Vec2::new(0.0, 1.0), 1e-9));
+
+    // MIRROR: geometry is mirrored by the matrix; text, which stays readable, is transformed
+    // object by object and comes with the extra geometry.
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap();
+    s.execute("text", &json!({"at": [2, 2], "height": 1, "text": "A"})).unwrap();
+    for t in ["mirror", "all", "", "0,0"] {
+        s.cmdline(t).unwrap();
+    }
+    let (d, extra) = s.drag(Vec2::new(0.0, 5.0)).expect("MIRROR drags its selection");
+    assert_eq!(d.handles.len(), 1, "the line is mirrored by the matrix");
+    assert!(d.matrix.apply(Vec2::new(1.0, 0.0)).near(Vec2::new(-1.0, 0.0), 1e-9));
+    assert_eq!(extra.len(), 2, "the base-to-cursor line and the text");
+    let EntityKind::Text(t) = &extra[1].kind else { panic!("expected the text") };
+    assert!(t.insert.xy().near(Vec2::new(-2.0, 2.0), 1e-9) && t.rotation.abs() < 1e-9, "mirrored, still reading left to right");
+
+    // PASTECLIP drags the clipboard.
+    let mut s = Session::new();
+    let l = s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap();
+    s.execute("copyclip", &json!({"handles": [l["handles"][0].clone()]})).unwrap();
+    s.cmdline("pasteclip").unwrap();
+    let (d, _) = s.drag(Vec2::new(5.0, 5.0)).expect("PASTECLIP drags the clipboard");
+    assert!(d.clipboard && d.handles.is_empty());
+    assert!(d.matrix.apply(s.clipboard_base).near(Vec2::new(5.0, 5.0), 1e-9));
+}
+
+#[test]
 fn scale_reference_typed_and_picked() {
     // Issue #17: SCALE ▸ Reference scales by new length / reference length.
     fn end(s: &Session) -> Vec2 {

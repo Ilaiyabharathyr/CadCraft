@@ -19,10 +19,33 @@ pub enum Preference {
     Ukrainian,
     #[serde(rename = "pt-BR")]
     BrazilianPortuguese,
+    #[serde(rename = "de")]
+    German,
+    #[serde(rename = "es")]
+    Spanish,
+    #[serde(rename = "cs")]
+    Czech,
+    #[serde(rename = "ru")]
+    Russian,
+    #[serde(rename = "fr")]
+    French,
+    #[serde(rename = "zh")]
+    Chinese,
 }
 
 impl Preference {
-    pub const ALL: [Self; 4] = [Self::Auto, Self::English, Self::Ukrainian, Self::BrazilianPortuguese];
+    pub const ALL: [Self; 10] = [
+        Self::Auto,
+        Self::English,
+        Self::Ukrainian,
+        Self::BrazilianPortuguese,
+        Self::German,
+        Self::Spanish,
+        Self::Czech,
+        Self::Russian,
+        Self::French,
+        Self::Chinese,
+    ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
     pub fn codes() -> String {
@@ -39,6 +62,12 @@ impl Preference {
             Self::English => "en",
             Self::Ukrainian => "uk",
             Self::BrazilianPortuguese => "pt-BR",
+            Self::German => "de",
+            Self::Spanish => "es",
+            Self::Czech => "cs",
+            Self::Russian => "ru",
+            Self::French => "fr",
+            Self::Chinese => "zh",
         }
     }
 
@@ -48,6 +77,12 @@ impl Preference {
             Self::English => "English",
             Self::Ukrainian => "Українська",
             Self::BrazilianPortuguese => "Português (Brasil)",
+            Self::German => "Deutsch",
+            Self::Spanish => "Español",
+            Self::Czech => "Čeština",
+            Self::Russian => "Русский",
+            Self::French => "Français",
+            Self::Chinese => "简体中文",
         }
     }
 
@@ -65,6 +100,12 @@ impl Preference {
             Self::English => "en",
             Self::Ukrainian => "uk",
             Self::BrazilianPortuguese => "pt-BR",
+            Self::German => "de",
+            Self::Spanish => "es",
+            Self::Czech => "cs",
+            Self::Russian => "ru",
+            Self::French => "fr",
+            Self::Chinese => "zh",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -81,7 +122,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 3] = [
+pub static LANGUAGES: [Language; 9] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -94,6 +135,18 @@ pub static LANGUAGES: [Language; 3] = [
         plural_forms: 2,
         catalog: OnceLock::new(),
     },
+    // German plurals follow the English rule: one (1), other.
+    Language { code: "de", name: "Deutsch", source: include_str!("de.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Spanish integer plurals follow the English rule too.
+    Language { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    Language { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, plural_forms: 3, catalog: OnceLock::new() },
+    // Russian integer plurals follow the Ukrainian rule: one (1, 21), few (2–4), many.
+    Language { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new() },
+    // French integer plurals (CLDR `fr`): one (0, 1), other, the Portuguese rule.
+    Language { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_pt, plural_forms: 2, catalog: OnceLock::new() },
+    // Chinese has no grammatical plural: both `@plural` forms read the same. Its glyphs come from
+    // an installed CJK font (`theme::cjk_font`); without one the interface stays English.
+    Language { code: "zh", name: "简体中文", source: include_str!("zh.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
@@ -154,6 +207,16 @@ pub fn t(source: &str) -> &str {
     CURRENT.with(|l| tr(l.get(), source))
 }
 
+/// Menu headings can differ from command or object labels (e.g. Czech Kótování / Kóta).
+/// Catalogs without a `menu` entry retain their ordinary translation.
+pub fn tr_menu<'a>(language: &str, source: &'a str) -> &'a str {
+    catalog(language).and_then(|c| c.get(&("menu", source))).copied().unwrap_or_else(|| tr(language, source))
+}
+
+pub fn menu(source: &str) -> &str {
+    CURRENT.with(|l| tr_menu(l.get(), source))
+}
+
 /// Named placeholders allow translations to reorder values. Inserted values are never looked up
 /// or substituted again, so a user's name containing `{n}` is preserved verbatim.
 pub fn format(source: &str, values: &[(&str, String)]) -> String {
@@ -197,6 +260,15 @@ pub fn plural_pt(n: u64) -> usize {
 
 fn plural_en(n: u64) -> usize {
     usize::from(n != 1)
+}
+
+/// Czech integer plurals: one (1), few (2–4), other (0 and 5 or more).
+pub fn plural_cs(n: u64) -> usize {
+    match n {
+        1 => 0,
+        2..=4 => 1,
+        _ => 2,
+    }
 }
 
 pub fn count(n: u64, one: &str, other: &str) -> String {

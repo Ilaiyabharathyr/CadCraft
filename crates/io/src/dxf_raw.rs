@@ -23,8 +23,17 @@ use cadcraft_dxf::{Section, Tag};
 /// starts with `CADCRAFT`): they are read into the model, not kept raw. A change that starts
 /// modelling another entry adds it here. (An entry the writer writes is also never written
 /// twice: the kept one is left out.)
-const MODELLED_KEYS: &[&str] =
-    &["ACAD_GROUP", "ACAD_LAYOUT", "ACAD_MLEADERSTYLE", "ACAD_PLOTSTYLENAME", "ACAD_TABLESTYLE", "ACAD_IMAGE_DICT", "ACAD_IMAGE_VARS"];
+const MODELLED_KEYS: &[&str] = &[
+    "ACAD_GROUP",
+    "ACAD_LAYOUT",
+    "ACAD_MLEADERSTYLE",
+    "ACAD_MLINESTYLE",
+    "ACAD_PLOTSTYLENAME",
+    "ACAD_SCALELIST",
+    "ACAD_TABLESTYLE",
+    "ACAD_IMAGE_DICT",
+    "ACAD_IMAGE_VARS",
+];
 
 /// Extension dictionary entries not kept raw: dimension associativity (CADCraft reads and
 /// rewrites it), draw order and annotation scale contexts (written from their own models by the
@@ -589,6 +598,19 @@ impl Map<'_> {
         while let Some(r) = o.tags.get(i) {
             i += 1;
             if r.code == 102 && r.value.trim().starts_with('{') {
+                // A `{NAME` group is a handle list (`{ACAD_REACTORS 330 … }`) only when every
+                // group inside it is a reference. Application data groups also use 102 brackets
+                // with mixed values and their own closing form — the AcDs thumbnail schema's
+                // `{ATTRRECORD 341 h 2 name 280 1 291 1 ATTRRECORD}` — and collapsing those into
+                // a handle list rewrote the handle under the LAST code read (291, a bool) and
+                // dropped the rest, which strict DXF readers reject. Those are written as read,
+                // references remapped, by the plain path below.
+                let end = (i..o.tags.len()).find(|&k| o.tags[k].code == 102).unwrap_or(o.tags.len());
+                let inner = &o.tags[i..end];
+                if !inner.is_empty() && !inner.iter().all(|n| is_pointer(n.code)) {
+                    out.push(tag(r));
+                    continue;
+                }
                 let name = r.value.trim().trim_start_matches('{').to_string();
                 let mut hs = Vec::new();
                 let mut code = 330;
