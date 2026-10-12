@@ -1,31 +1,31 @@
 ---
 title: Export a drawing to PDF, SVG or PNG
-description: Use File Export to PDF or File Export to save a CADCraft drawing as a PDF, SVG or PNG file.
+description: Save a CADCraft drawing as a PDF with File Export to PDF, or as an SVG or PNG image with File Save As.
 order: 30
 verified: 0.5.0
 ---
 
-To get a PDF, choose **File ▸ Export to PDF...**. For an SVG or PNG image, choose **File ▸ Export...**.
+To get a PDF, choose **File ▸ Export to PDF...**. For an SVG or PNG image, choose **File ▸ Save As...** and pick the SVG or PNG file type.
 
 ## Export to PDF
 
 1. Open the drawing.
-2. Choose **File ▸ Export to PDF...**.
+2. Choose **File ▸ Export to PDF...**. **File ▸ Print...** (Ctrl+P) asks for a PDF file name in the same way.
 3. In the dialog, pick a folder and a name. The suggested name is the drawing's name with `.pdf`.
 4. Save. The command line reports `Plotted to` followed by the path.
 
 ## Export to SVG or PNG
 
 1. Open the drawing.
-2. Choose **File ▸ Export...**. The suggested name ends in `.svg`.
-3. To get a PNG instead, pick the PNG file type or type a name that ends in `.png`. The file type decides the format.
+2. Choose **File ▸ Save As...**. The shortcut is Ctrl+Shift+S.
+3. Pick the file type **SVG** or **PNG**, or type a name that ends in `.svg` or `.png`.
 4. Save.
 
-## Print with page settings
+An export only writes the image or PDF. The drawing keeps its own name and still counts as unsaved if you had changes, so save it as DXF or DWG too.
 
-**File ▸ Print...** opens the **Plot** window. It has a **Plot area** setting and a **Plot object lineweights** checkbox. **File ▸ Plot Preview** shows the result before you plot.
+## From the command line
 
-CADCraft also has paper-space layouts with viewports and page setups for scaled sheets.
+`cadcraft-cli convert drawing.dxf drawing.svg` converts a drawing without opening the window.
 
 ## Related
 

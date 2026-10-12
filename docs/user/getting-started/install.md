@@ -49,7 +49,7 @@ Download `cadcraft-0.5.0-freebsd-x86_64.tar.gz`.
 
 ## In the browser
 
-`cadcraft-web-0.5.0.zip` is a static site that runs in a modern browser. It is for hosting on your own web server.
+`cadcraft-web-0.5.0.zip` is a static site that runs in a modern browser. It is a static site build.
 
 ## Command-line tool
 

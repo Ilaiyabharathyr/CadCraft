@@ -15,14 +15,8 @@ Choose **Edit ▸ Interface Language** and pick a language from the list. The in
    - **Auto (system language)**
    - **English**
    - **Українська**
-   - **Português (Brasil)**
-   - **Deutsch**
-   - **Español**
-   - **Čeština**
-   - **Русский**
-   - **Français**
 
-CADCraft remembers your choice. With **Auto (system language)**, it follows your operating system's language. If your system language is not one of the supported ones, the interface is in English.
+CADCraft remembers your choice. With **Auto (system language)**, it follows your operating system's language. CADCraft 0.5.0 has English and Ukrainian.
 
 ## Related
 

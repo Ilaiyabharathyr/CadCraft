@@ -5,7 +5,7 @@ order: 40
 verified: 0.5.0
 ---
 
-Layers are managed in the **Layer Properties Manager**. Open it with **Window ▸ Layers**. A smaller **Layers Palette** is under **Window ▸ Layers Palette**.
+Layers are managed in the **Layer Properties Manager**. Open it with **Window ▸ Layers**.
 
 ## Create a layer and make it current
 

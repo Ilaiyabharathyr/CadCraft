@@ -7,13 +7,11 @@ verified: 0.5.0
 
 CADCraft opens and saves DXF and DWG. It exports PDF, SVG and PNG.
 
-| Format | Open                               | Save                               |
-|--------|------------------------------------|------------------------------------|
-| DXF    | R12 through 2018, ASCII and binary | 2000 through 2018, 2018 by default |
-| DWG    | R13 through 2018                   | 2000 through 2018, 2018 by default |
+| Format | Open                               | Save         |
+|--------|------------------------------------|--------------|
+| DXF    | R12 through 2018, ASCII and binary | R2000, ASCII |
+| DWG    | R13 through 2018                   | R2000        |
 
-Export formats are PDF, SVG and PNG, from **File ▸ Export...**, **File ▸ Export to PDF...** or **File ▸ Print...**.
+PDF, SVG and PNG are export formats. See [Export a drawing to PDF, SVG or PNG](../guides/export-pdf-svg-png.md).
 
-Not everything in a drawing survives yet. CADCraft keeps an object it does not model as raw data in a DXF file, but a DWG save drops some of them, such as 3D solids and surfaces. Keep the original file, and see [Open and save DXF and DWG drawings](../guides/open-and-save-drawings.md).
-
-CADCraft draws in 2D only. Commands for 3D orbiting report that they are not available yet.
+Not everything in a drawing survives yet. Entities CADCraft does not model yet are not kept when you save. Keep the original file, and see [Open and save DXF and DWG drawings](../guides/open-and-save-drawings.md).

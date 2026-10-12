@@ -27,7 +27,7 @@ Do not use `gl` in place of `vulkan`: it can bring back a driver crash on some A
 
 ## Why this happens
 
-CADCraft 0.5.0 draws with DirectX 12 on Windows. On some PCs its shader compiler setup fails before the first frame and the graphics device is lost (issue [#608](https://github.com/storytold/cadcraft/issues/608)). The development version of CADCraft already compiles DirectX 12 shaders with a different compiler. Check the release notes of newer versions.
+CADCraft 0.5.0 draws with DirectX 12 on Windows and compiles its shaders with DXC. The 0.5.0 Windows build does not ship the DXC compiler files (`dxcompiler.dll` and `dxil.dll`), so on some PCs the graphics device is lost before the first frame and the app exits. This is issue [#608](https://github.com/storytold/cadcraft/issues/608). The issue reports that starting with Vulkan instead gets the app running.
 
 ## Still stuck?
 
