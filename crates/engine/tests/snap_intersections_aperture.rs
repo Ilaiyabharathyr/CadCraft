@@ -33,6 +33,16 @@ fn finite_intersection_on_the_aperture_boundary_is_included() {
 }
 
 #[test]
+fn finite_intersection_just_outside_the_aperture_is_rejected() {
+    let mut d = Drawing::new_imperial();
+    let x = 0.300001;
+    add_line(&mut d, Vec2::new(-1.0, 0.4), Vec2::new(1.0, 0.4));
+    add_line(&mut d, Vec2::new(x, -1.0), Vec2::new(x, 1.0));
+
+    assert!(hit(&d, Vec2::ZERO, 0.5, mode::INT).is_none());
+}
+
+#[test]
 fn finite_line_parameter_tolerance_is_preserved() {
     let mut d = Drawing::new_imperial();
     let x = 1.0 + 5e-10;
@@ -42,6 +52,35 @@ fn finite_line_parameter_tolerance_is_preserved() {
     let h = hit(&d, Vec2::new(x, 0.0), 1e-9, mode::INT).expect("intersection within the existing line parameter tolerance");
     assert_eq!(h.mode, mode::INT);
     assert!(h.point.near(Vec2::new(x, 0.0), 1e-15), "{h:?}");
+}
+
+#[test]
+fn tessellated_line_parameter_tolerance_is_preserved() {
+    let mut d = Drawing::new_imperial();
+    add_ellipse(&mut d, Vec2::ZERO, Vec2::new(10.0, 0.0), 0.5);
+    let x = 10.0 + 5e-12;
+    add_line(&mut d, Vec2::new(x, -1.0), Vec2::new(x, 1.0));
+
+    let h = hit(&d, Vec2::new(x, 0.0), 1e-10, mode::INT).expect("finite intersection within a tessellated chord's parameter tolerance");
+    assert_eq!(h.mode, mode::INT);
+    assert!(h.point.near(Vec2::new(x, 0.0), 1e-10), "{h:?}");
+}
+
+#[test]
+fn large_tessellated_chord_parameter_slack_is_not_pruned() {
+    let mut d = Drawing::new_imperial();
+    let radius = 1e12;
+    let step = std::f64::consts::TAU / cadcraft_geom::arc_segments(radius, std::f64::consts::TAU, radius * 1e-3) as f64;
+    let next = Vec2::new(-radius + radius * step.cos(), radius * 0.5 * step.sin());
+    let t = 1.0 / next.x;
+    assert!(t.abs() < 1e-9);
+    let cursor = Vec2::new(1.0, t * next.y);
+    add_ellipse(&mut d, Vec2::new(-radius, 0.0), Vec2::new(radius, 0.0), 0.5);
+    add_line(&mut d, Vec2::new(1.0, cursor.y - 100.0), Vec2::new(1.0, cursor.y + 100.0));
+
+    let h = hit(&d, cursor, 0.5, mode::INT).expect("finite intersection within a long tessellated chord's parameter tolerance");
+    assert_eq!(h.mode, mode::INT);
+    assert!(h.point.near(cursor, 1e-6), "{h:?}");
 }
 
 #[test]
