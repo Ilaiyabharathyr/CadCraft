@@ -583,3 +583,24 @@ fn max_scale_is_the_most_stretched_axis() {
     assert!((max_scale(&r) - 2.0).abs() < 1e-12);
     assert!((max_scale(&Mat3::IDENTITY) - 1.0).abs() < 1e-12);
 }
+
+#[test]
+fn table_cell_text_height_scales_with_the_table() {
+    let height = |table_h: f64, own: Option<f64>| {
+        let d = Drawing::new_imperial();
+        let st = crate::table_style_of(&d, &cadcraft_doc::Table::default());
+        let cell = cadcraft_doc::TableCell { text: "a".into(), text_height: own, ..Default::default() };
+        let t = cadcraft_doc::Table {
+            col_widths: vec![500.0],
+            row_heights: vec![500.0],
+            cells: vec![vec![cell]],
+            text_height: table_h * st.text_height,
+            ..Default::default()
+        };
+        crate::table_geometry(&d, &t).texts.first().map(|x| x.height)
+    };
+    let base = height(1.0, None).unwrap();
+    assert_eq!(height(1.0, Some(150.0)), Some(150.0));
+    assert_eq!(height(2.0, Some(150.0)), Some(300.0));
+    assert_eq!(height(2.0, None), Some(base * 2.0));
+}
