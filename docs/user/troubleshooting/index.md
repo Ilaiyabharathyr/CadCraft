@@ -1,0 +1,22 @@
+---
+title: Troubleshooting
+description: Fixes for problems with starting CADCraft, and how to report a bug.
+order: 30
+verified: 0.5.0
+---
+
+## Known problems
+
+- [The app closes right after opening on Windows](app-closes-on-windows.md)
+- [A screen magnifier does not follow the crosshair](magnifier-does-not-follow-crosshair.md)
+
+## Report a problem
+
+If your problem is not listed, tell us in [Discord](https://discord.gg/artcraft) or open an issue in the [issue tracker](https://github.com/storytold/cadcraft/issues). Include:
+
+- The CADCraft version (**Help ▸ About CADCraft**) and your operating system.
+- What you did, what you expected and what happened.
+- The log file. The desktop app writes it to `logs/cadcraft.log` in its settings folder. On Windows that is `%APPDATA%\CADCraft\logs\cadcraft.log`. On macOS it is `~/Library/Application Support/CADCraft/logs/`. On Linux it is `~/.config/cadcraft/logs/`.
+- A drawing that shows the problem, if you can share one.
+
+Each launch moves the previous log to `cadcraft.1.log`, then `cadcraft.2.log`. If CADCraft crashed, attach the log from the crashed run before you start the app again more than twice.

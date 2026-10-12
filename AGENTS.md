@@ -48,6 +48,10 @@ People trust CADCraft with their drawings; a crash loses their work. **This outr
 ## Roadmap
 `ROADMAP.md` (committed) is the one-page summary: stage, parity numbers, estimates. It follows craftrules' `standards/progress-docs.md`: the assessment is `docs/target-app-parity.md`, the work list `docs/gaps.md` (pick work from its top rows), milestones `docs/roadmap.md`, deep checklists `docs/geometry-parity.md`, `docs/ui-parity.md`, `docs/file-format-parity.md`, `docs/hardware-parity.md`, `docs/localization-parity.md`. When work lands, update the affected rows and the docs' status lines and revision history. `cargo xtask parity` regenerates the menu-breadth checklist in `docs/parity-checklist.md`.
 
+## User docs
+
+User docs live in `docs/user/` and are published at https://getartcraft.com/docs/cadcraft. If a change alters something a user sees or does (menu or dialog labels, install, file formats, errors), update the matching page in `docs/user/` in the same PR, or add one. Rules: `docs/user/AGENTS.md`. The contributor docs in `docs/*.md` are a separate thing and are not published there.
+
 ## Contributor credits (About window)
 
 - About ▸ Contributors/Models are compiled into the binary from `contributors/contributors.json`
