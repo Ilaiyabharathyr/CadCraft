@@ -29,10 +29,12 @@ pub enum Preference {
     Russian,
     #[serde(rename = "fr")]
     French,
+    #[serde(rename = "zh")]
+    Chinese,
 }
 
 impl Preference {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Auto,
         Self::English,
         Self::Ukrainian,
@@ -42,6 +44,7 @@ impl Preference {
         Self::Czech,
         Self::Russian,
         Self::French,
+        Self::Chinese,
     ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
@@ -64,6 +67,7 @@ impl Preference {
             Self::Czech => "cs",
             Self::Russian => "ru",
             Self::French => "fr",
+            Self::Chinese => "zh",
         }
     }
 
@@ -78,6 +82,7 @@ impl Preference {
             Self::Czech => "Čeština",
             Self::Russian => "Русский",
             Self::French => "Français",
+            Self::Chinese => "简体中文",
         }
     }
 
@@ -100,6 +105,7 @@ impl Preference {
             Self::Czech => "cs",
             Self::Russian => "ru",
             Self::French => "fr",
+            Self::SimplifiedChinese => "zh",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -116,7 +122,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 8] = [
+pub static LANGUAGES: [Language; 9] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -138,6 +144,7 @@ pub static LANGUAGES: [Language; 8] = [
     Language { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new() },
     // French integer plurals (CLDR `fr`): one (0, 1), other, the Portuguese rule.
     Language { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_pt, plural_forms: 2, catalog: OnceLock::new() },
+    Language { code: "zh", name: "简体中文", source: include_str!("zh.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new(),},
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
