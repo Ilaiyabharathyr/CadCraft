@@ -123,7 +123,7 @@ fn spell_at_the_command_line_with_a_user_dictionary() {
     let dict = dir.join("user.dic");
     std::fs::write(&dict, "the\nedges\nplate\n").unwrap();
     let mut s = Session::new();
-    s.execute("setvar", &json!({"name": "DCTCUST", "value": dict.to_string_lossy()})).unwrap();
+    s.execute("setvar", &json!({"name": "SPELLDICTIONARY", "value": dict.to_string_lossy()})).unwrap();
     let t = s.execute("text", &json!({"at": [0, 0], "text": "teh edges of plaet"})).unwrap();
     let h = t["handle"].as_str().unwrap().to_string();
     s.cmdline("spell all").unwrap();
@@ -137,5 +137,30 @@ fn spell_at_the_command_line_with_a_user_dictionary() {
     assert!(s.running.is_none(), "{}", s.prompt_text());
     assert_eq!(contents(&s, &h), "the edges of plaet");
     assert!(std::fs::read_to_string(&dict).unwrap().lines().any(|l| l == "of"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn spell_never_uses_a_dictionary_path_from_the_drawing() {
+    let dir = std::env::temp_dir().join(format!("cadcraft-spell-evil-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let evil = dir.join("victim.txt");
+    std::fs::write(&evil, "the\nedges\n").unwrap();
+    let good = dir.join("good.dic");
+    std::fs::write(&good, "the\nedges\n").unwrap();
+    let mut s = Session::new();
+    // The drawing header names a file (as a downloaded drawing could).
+    s.execute("setvar", &json!({"name": "DCTCUST", "value": evil.to_string_lossy()})).unwrap();
+    s.execute("text", &json!({"at": [0, 0], "text": "teh edges"})).unwrap();
+    // Command line with the setting pointing elsewhere: Add writes there, not to the header's file.
+    s.execute("setvar", &json!({"name": "SPELLDICTIONARY", "value": good.to_string_lossy()})).unwrap();
+    s.cmdline("spell all").unwrap();
+    s.cmdline("").unwrap();
+    s.cmdline("add").unwrap();
+    assert_eq!(std::fs::read_to_string(&evil).unwrap(), "the\nedges\n");
+    assert!(std::fs::read_to_string(&good).unwrap().lines().any(|l| l == "teh"));
+    // The explicit `dictionary` parameter reads the named file.
+    let r = s.execute("spell", &json!({"dictionary": good.to_string_lossy()})).unwrap();
+    assert_eq!(r["unknown"].as_array().unwrap().len(), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }

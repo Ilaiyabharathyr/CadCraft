@@ -1,6 +1,8 @@
 //! SPELL: check the words of texts, multiline texts, attributes and multileader texts against
-//! a word list: the user dictionary file (DCTCUST, one word per line), a file named in the
-//! JSON form or words passed with it. CADCRAFT bundles no dictionary.
+//! a word list: the user dictionary file (the SPELLDICTIONARY user setting, else `user.dic` in
+//! the settings folder; one word per line), a file named in the JSON form or words passed with
+//! it. CADCRAFT bundles no dictionary. The path is never taken from the drawing: a drawing's
+//! `$DCTCUST` is data from the file and is ignored.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -18,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Spelling"])
             .alias(&["sp"])
             .params(
-                "{handles?, words?: [..], dictionary?: path (default DCTCUST), replace?: {word: replacement}} \
+                "{handles?, words?: [..], dictionary?: path (default: the SPELLDICTIONARY setting), replace?: {word: replacement}} \
                  (no handles: every object in the current space)",
             )
             .interactive(|_| Ok(Box::new(SpellM::default()))),
@@ -62,7 +64,12 @@ fn append_word(path: &str, word: &str) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::io::Write;
+        if let Some(dir) = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()) {
+            let _ = std::fs::create_dir_all(dir);
+        }
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| other(format!("{path}: {e}")))?;
+        // A word is one line: never let one carry a line break.
+        let word: String = word.chars().filter(|c| !c.is_control()).collect();
         writeln!(f, "{word}").map_err(|e| other(format!("{path}: {e}")))
     }
     #[cfg(target_arch = "wasm32")]
@@ -72,9 +79,20 @@ fn append_word(path: &str, word: &str) -> Result<()> {
     }
 }
 
-/// The user dictionary path (DCTCUST).
-fn dctcust(s: &Session) -> Option<String> {
-    s.doc().ok().map(|d| d.header.str("DCTCUST", "")).filter(|p| !p.trim().is_empty())
+/// The user dictionary path: the SPELLDICTIONARY profile setting, else `user.dic` in the
+/// settings folder. Never read from the drawing (a downloaded drawing must not choose which
+/// file SPELL reads or appends to).
+fn user_dictionary(s: &Session) -> Option<String> {
+    let set = s.settings.spelldictionary.trim();
+    if !set.is_empty() {
+        return Some(set.to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        super::super::plotters::config_root().map(|r| r.join("user.dic").to_string_lossy().into_owned())
+    }
+    #[cfg(target_arch = "wasm32")]
+    None
 }
 
 /// The words of a text, in order: runs of letters (apostrophes inside), two letters or more.
@@ -221,12 +239,18 @@ fn run_spell(s: &mut Session, p: &Value) -> Result<Value> {
         let a = ws.as_array().ok_or_else(|| bad("spell", "`words` must be an array of words"))?;
         dict.extend(a.iter().filter_map(Value::as_str).take(MAX_WORDS).map(str::to_lowercase));
     }
-    let path = str_param(p, "dictionary").map(str::to_string).or_else(|| if p.get("words").is_some() { None } else { dctcust(s) });
+    let path = str_param(p, "dictionary").map(str::to_string).or_else(|| if p.get("words").is_some() { None } else { user_dictionary(s) });
     if let Some(path) = &path {
-        dict.extend(read_list(path)?);
+        // The default list may not exist yet; an explicitly named one must.
+        if str_param(p, "dictionary").is_some() || std::path::Path::new(path).exists() {
+            dict.extend(read_list(path)?);
+        }
     }
     if dict.is_empty() {
-        return Err(bad("spell", "no word list: set DCTCUST to a word list file (one word per line), or pass `words` or `dictionary`"));
+        return Err(bad(
+            "spell",
+            "no word list: set the SPELLDICTIONARY option to a word list file (one word per line), or pass `words` or `dictionary`",
+        ));
     }
     let hs = objects(s, p)?;
     let replace: Vec<(String, String)> = match p.get("replace") {
@@ -285,7 +309,8 @@ struct SpellM {
 
 impl SpellM {
     fn start(&mut self, s: &mut Session, hs: &[Handle]) -> Result<Step> {
-        let path = dctcust(s).ok_or_else(|| other("No word list: set DCTCUST to a word list file (one word per line)."))?;
+        let path =
+            user_dictionary(s).ok_or_else(|| other("No word list: set the SPELLDICTIONARY option to a word list file (one word per line)."))?;
         self.dict = read_list(&path).map_err(|e| other(e.to_string()))?;
         let d = s.doc()?;
         for h in hs {
@@ -357,7 +382,7 @@ impl Interactive for SpellM {
                 self.ignored.insert(w.to_lowercase());
             }
             "add" => {
-                if let Some(path) = dctcust(s) {
+                if let Some(path) = user_dictionary(s) {
                     append_word(&path, &w)?;
                 }
                 self.dict.insert(w.to_lowercase());
