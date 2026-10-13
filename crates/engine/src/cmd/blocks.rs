@@ -1,5 +1,7 @@
-//! Blocks: BLOCK, INSERT, ATTDEF, ATTEDIT (programmatic), WBLOCK, BASE, PURGE, block listing.
+//! Blocks: BLOCK, INSERT, ATTDEF, ATTEDIT (programmatic), WBLOCK, BASE, PURGE, block listing, the
+//! Block Editor.
 
+pub(crate) mod bedit;
 mod purge;
 
 use std::sync::Arc;
@@ -76,6 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
     .into_iter()
     .chain(xref::specs())
     .chain(refedit::specs())
+    .chain(bedit::specs())
     .collect()
 }
 
@@ -204,6 +207,8 @@ pub(crate) fn insert_with(
                 constant: false,
                 prompt: String::new(),
                 props: Default::default(),
+                multiline: ad.multiline.as_ref().map(|ml| ml.transformed(&m)),
+                modes: ad.modes.for_reference(),
             });
         }
     }
@@ -276,6 +281,8 @@ fn attdef_kind(s: &Session, tag: &str, prompt: &str, default: &str, at: Vec2, he
         constant: false,
         prompt: prompt.into(),
         props: Default::default(),
+        multiline: None,
+        modes: Default::default(),
     })
 }
 
