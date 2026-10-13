@@ -134,8 +134,7 @@ points are fixed points (perpendicular inside the segment, endpoints outside), t
 keep `{start, end} = {p1, p3}` and contain p2 (the CCW-only storage swaps the pair when p2 is on
 the clockwise side, as DXF does), and hostile inputs (NaN, infinities, subnormals, raw bit
 patterns, 1e300) never panic and return only finite hits or none. Known answers hold at 1e6–1e7
-coordinates to 1e-9 relative. Hostile-input tests
-exist for parsing, not for numerics.
+coordinates to 1e-9 relative.
 
 ## What to do first (ranked)
 
