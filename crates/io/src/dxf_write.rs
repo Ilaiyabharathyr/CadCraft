@@ -1461,6 +1461,9 @@ pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`, with what `target` (the version the
 /// file ends up in: `version`, or the DWG version the bridge writes) has.
 fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
+    // An in-place block edit in progress is not written: the drawing as before it.
+    let committed = d.committed();
+    let d: &Drawing = &committed;
     // Structural handles start above every entity handle.
     let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new() };
     // Pre-allocate handles for block records.
@@ -1496,13 +1499,24 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         for e in st.iter() {
             if let EntityKind::Dimension(dm) = &e.kind {
                 let reused = dim_plan.reuse.get(&e.handle);
-                let mut ents = dim_block_entities(d, dm, &e.common.layer);
+                let ents: Vec<Entity>;
                 let name = match reused {
+                    // A dimension still linked to the block it was read with hasn't changed since
+                    // (edits drop the link, and the screen draws that block): the block is written
+                    // as read, so other programs show it as they drew it.
+                    Some(b) if !b.entities.is_empty() => {
+                        ents = b.entities.iter().map(|x| x.as_ref().clone()).collect();
+                        reused_handles.extend(ents.iter().map(|x| x.handle).filter(|h| h.0 != 0));
+                        b.name.clone()
+                    }
                     Some(b) => {
-                        reuse_handles(&mut ents, b, &mut reused_handles);
+                        let mut fresh = dim_block_entities(d, dm, &e.common.layer);
+                        reuse_handles(&mut fresh, b, &mut reused_handles);
+                        ents = fresh;
                         b.name.clone()
                     }
                     None => {
+                        ents = dim_block_entities(d, dm, &e.common.layer);
                         let mut name = format!("*D{n}");
                         while d.block(&name).is_some() {
                             n += 1;
@@ -2299,7 +2313,12 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             w.s(1002, "}");
         }
     };
-    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &PageSetup::default(), None);
+    // Model space has no page setup of its own: write what PLOT does for it, the drawing extents
+    // fitted to the paper (plot type 1, scaled to fit). The default page's "layout" area is
+    // plot type 5, "Layout information" (DXF Reference, PLOTSETTINGS group 74), which means
+    // nothing for model space: another program's Plot dialog then shows no plot area or scale.
+    let model_page = PageSetup { plot_area: "extents".into(), scale_to_fit: true, ..PageSetup::default() };
+    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &model_page, None);
     for (i, (_, brh, l)) in ps_brs.iter().enumerate() {
         let h = layout_handles.get(i).cloned().unwrap_or_default();
         layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &l.page, l.view);
@@ -2313,6 +2332,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         *t = Tag::s(5, seed);
     }
     crate::dxf_raw::finish(&mut w.t, d);
+    crate::dxf_raw::data_store(&mut w.t, d, target >= Version::R2013);
     add_class_instance_counts(&mut w.t);
     mark_xrefs(&mut w.t, d);
     w.t
