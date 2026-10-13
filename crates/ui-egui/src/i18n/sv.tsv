@@ -1,0 +1,10 @@
+# CADCraft Swedish interface catalog — original translations by the CADCraft contributors.
+# License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
+# Written from CADCraft's English strings; no proprietary translations were copied.
+# Clean room: every entry is written from the plain meaning of the English label in ordinary
+# computing vocabulary. No other product's Swedish interface, string table or terminology
+# database was consulted, and no other catalog is used as a source.
+# UTF-8: context<TAB>English source<TAB>Swedish translation.
+# Empty context = ordinary label; @plural = one|other forms with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# Work in progress: entries are added before the language is registered.
