@@ -301,36 +301,51 @@ pub fn mono() -> FontId {
     FontId::new(12.0, FontFamily::Monospace)
 }
 
-/// Load a system UI font at run time when one is installed (not bundled), else keep egui's.
+/// Load a system UI font and use an installed or embedded Thai font as a fallback when available.
 pub fn install_fonts(ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        let candidates: &[&str] = if cfg!(target_os = "macos") {
-            &["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/Helvetica.ttc", "/Library/Fonts/Arial.ttf"]
-        } else if cfg!(windows) {
-            &["C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf"]
-        } else {
-            &[
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/TTF/DejaVuSans.ttf",
-                "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            ]
-        };
-        let mut fonts = egui::FontDefinitions::default();
-        for path in candidates {
-            if let Ok(bytes) = std::fs::read(path) {
-                fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-                if let Some(f) = fonts.families.get_mut(&FontFamily::Proportional) {
-                    f.insert(0, "system-ui".into());
-                }
-                break;
-            }
-        }
-        ctx.set_fonts(fonts);
-    }
+    ctx.set_fonts(font_definitions());
     #[cfg(target_arch = "wasm32")]
     let _ = ctx;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn font_definitions() -> egui::FontDefinitions {
+    let candidates: &[&str] = if cfg!(target_os = "macos") {
+        &["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/Helvetica.ttc", "/Library/Fonts/Arial.ttf"]
+    } else if cfg!(windows) {
+        &["C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf"]
+    } else {
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        ]
+    };
+    let mut fonts = egui::FontDefinitions::default();
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+            if let Some(f) = fonts.families.get_mut(&FontFamily::Proportional) {
+                f.insert(0, "system-ui".into());
+            }
+            break;
+        }
+    }
+    // The font database searches installed fonts and optional CRAFT_FONTS_DIR embeds by glyph.
+    if let Some(face) = cadcraft_fonts::ttf::fallback_for('\u{0e01}') {
+        let mut font = egui::FontData::from_owned(face.bytes.as_ref().clone());
+        font.index = face.index;
+        let name = "thai-fallback".to_string();
+        fonts.font_data.insert(name.clone(), std::sync::Arc::new(font));
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            if let Some(fonts) = fonts.families.get_mut(&family) {
+                fonts.push(name.clone());
+            }
+        }
+    }
+    fonts
 }
 
 /// egui's visuals for `theme`, from its tokens.
@@ -383,4 +398,24 @@ pub fn apply(ctx: &egui::Context, theme: Theme, follow_system: bool) {
         s.text_styles.insert(egui::TextStyle::Small, small());
         s.text_styles.insert(egui::TextStyle::Monospace, mono());
     });
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installed_or_embedded_thai_font_is_registered_as_a_fallback() {
+        let Some(face) = cadcraft_fonts::ttf::fallback_for('\u{0e01}') else {
+            return;
+        };
+        let fonts = font_definitions();
+        assert_eq!(fonts.font_data.get("thai-fallback").map(|font| font.index), Some(face.index));
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            assert!(
+                fonts.families.get(&family).is_some_and(|fonts| fonts.iter().any(|name| name == "thai-fallback")),
+                "{family:?} is missing the Thai fallback"
+            );
+        }
+    }
 }
