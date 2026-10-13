@@ -76,15 +76,31 @@ pub(crate) fn refused_in_editor(s: &Session, id: &str) -> Option<String> {
 /// The block a block reference refers to.
 fn block_of(d: &Drawing, h: Handle) -> Option<String> {
     match d.entity(h).map(|e| &e.kind) {
-        Some(EntityKind::Insert(i)) => Some(i.block.clone()),
+        Some(EntityKind::Insert(i)) => Some(dynamic_definition(d, &i.block).unwrap_or_else(|| i.block.clone())),
         _ => None,
     }
 }
 
+/// The dynamic block whose anonymous block `name` is (a dynamic block reference with values of
+/// its own shows one, `*U12`): its BLOCK_RECORD's `AcDbBlockRepBTag` xdata names the dynamic
+/// block's record. `None` for other blocks.
+fn dynamic_definition(d: &Drawing, name: &str) -> Option<String> {
+    if !name.starts_with('*') {
+        return None;
+    }
+    let x = &d.foreign.records.get(&("BLOCK_RECORD".to_string(), name.to_ascii_uppercase()))?.xdata;
+    let at = x.iter().position(|t| t.code == 1001 && t.value.eq_ignore_ascii_case("AcDbBlockRepBTag"))?;
+    let record = x.iter().skip(at + 1).take_while(|t| t.code != 1001).find(|t| t.code == 1005).and_then(|t| Handle::parse_hex(&t.value))?;
+    let (kind, block) = d.foreign.targets.get(&record)?;
+    (kind == "BLOCK_RECORD").then(|| d.block(block).map(|b| b.name.clone())).flatten()
+}
+
 /// Whether block `name` carries dynamic block data from another program (parameters and actions
-/// in its `ACAD_ENHANCEDBLOCK` dictionary), which CADCraft keeps but can't edit yet.
+/// in its `ACAD_ENHANCEDBLOCK` dictionary), which CADCraft keeps but can't edit yet. The dictionary
+/// hangs off the block's BLOCK_RECORD table entry.
 fn has_dynamic_data(d: &Drawing, name: &str) -> bool {
-    let Some(xdict) = d.foreign.records.get(&("BLOCK".to_string(), name.to_ascii_uppercase())).and_then(|x| x.xdict) else { return false };
+    let key = ("BLOCK_RECORD".to_string(), name.to_ascii_uppercase());
+    let Some(xdict) = d.foreign.records.get(&key).and_then(|x| x.xdict) else { return false };
     d.foreign.objects.iter().any(|o| o.handle == xdict && o.tags.iter().any(|t| t.code == 3 && t.value.eq_ignore_ascii_case("ACAD_ENHANCEDBLOCK")))
 }
 
