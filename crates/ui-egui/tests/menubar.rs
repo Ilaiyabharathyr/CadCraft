@@ -379,6 +379,16 @@ fn a_shared_letter_steps_through_its_rows() {
     assert!(is_open(&h, "New Drawing..."), "nothing ran");
     assert_eq!(h.state().session.log.len(), before);
     assert_eq!(h.state().session.docs.len(), 2);
+
+    // Rows without an access key answer to their initial, which only moves the highlight even
+    // when one row has it: U opens Drawing Utilities, A highlights Audit without running it.
+    press(&mut h, egui::Key::U);
+    assert!(focused_row(&h, "Audit"));
+    press(&mut h, egui::Key::R);
+    assert!(focused_row(&h, "Recover..."));
+    press(&mut h, egui::Key::A);
+    assert!(focused_row(&h, "Audit") && is_open(&h, "Recover..."), "an initial does not run its row");
+    assert_eq!(h.state().session.log.len(), before);
 }
 
 #[test]
