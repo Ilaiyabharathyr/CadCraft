@@ -1307,3 +1307,26 @@
 	Origin: {x}, {y}	Початок: {x}, {y}
 	Sheet Books to PDF...	Книги аркушів у PDF...
 	Not a number or distance: {text}	Не число й не відстань: {text}
+	Dynamic Block Data	Дані динамічного блока
+	Custom	Користувацькі
+	Dynamic Block Reference	Посилання на динамічний блок
+	Set Dynamic Property	Задати динамічну властивість
+	Dynamic Block Grips	Ручки динамічного блока
+	Drag Dynamic Grip	Перетягнути ручку динамічного блока
+# Block Editor (BEDIT).
+	Save Block	Зберегти блок
+	Save Block As	Зберегти блок як
+	Close Block Editor	Закрити редактор блоків
+	Unsaved changes	Незбережені зміни
+	Edit Block Definition	Редагувати визначення блока
+	Block to create or edit	Блок для створення або редагування
+	Open in Block Editor	Відкрити в редакторі блоків
+	This drawing	Це креслення
+	contains authoring elements. Open in Block Editor?	містить елементи розробки. Відкрити в редакторі блоків?
+	New block	Новий блок
+	Italic	Курсив
+	Underline	Підкреслений
+	Overline	Надкреслений
+	Justify	За шириною
+	Text color	Колір тексту
+	Click the ruler to add a tab stop, right-click to remove one	Натисніть на лінійку, щоб додати табуляцію; права кнопка видаляє її

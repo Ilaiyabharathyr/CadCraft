@@ -11,12 +11,14 @@
 pub mod assoc;
 pub mod audit;
 pub mod autosave;
+pub mod blockedit;
 pub mod cmd;
 mod finite;
 pub mod grip_dims;
 pub mod grips;
 mod guard;
 pub mod lisp;
+pub mod mtext_edit;
 pub mod pointmod;
 pub mod prompt;
 mod recent;
@@ -137,6 +139,9 @@ pub struct DocState {
     pub uid: u64,
     /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
     pub binary_dxf: bool,
+    /// The Block Editor (BEDIT), when it is open: `doc` is then the editor's drawing, and the
+    /// drawing itself waits in it ([`DocState::drawing`]).
+    pub block_edit: Option<blockedit::BlockEdit>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -162,10 +167,13 @@ impl DocState {
             view_history: Vec::new(),
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
+            block_edit: None,
         }
     }
+    /// The drawing has changes not saved to its file, or the Block Editor has changes not yet
+    /// saved into its block.
     pub fn is_dirty(&self) -> bool {
-        !Arc::ptr_eq(&self.doc, &self.saved)
+        !Arc::ptr_eq(self.drawing(), &self.saved) || self.block_unsaved()
     }
     /// After undo/redo replaced the drawing (`before` is the one shown until then): if the current
     /// layout no longer exists, follow it to its other name when it was renamed (same tab order,
@@ -850,7 +858,11 @@ impl Session {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
+        if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {
+            return Err(EngineError::Disabled(spec.id.into(), why));
+        }
         let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
+        let editing = self.state().is_ok_and(|s| s.block_edit.is_some());
         let run = spec.run;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self, params)));
         let result = match result {
@@ -873,7 +885,10 @@ impl Session {
             (Some(m), Ok(_)) => Err(EngineError::Other(m)),
             (_, r) => r,
         };
-        self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), spec.undoable && result.is_ok());
+        // Opening or closing the Block Editor swaps the whole drawing: nothing in it changed.
+        if self.state().is_ok_and(|s| s.block_edit.is_some()) == editing {
+            self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), spec.undoable && result.is_ok());
+        }
         let result = match (result, &before) {
             (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
             (r, _) => r,
@@ -954,6 +969,9 @@ impl Session {
             self.cancel();
         }
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
+        if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {
+            return Err(EngineError::Disabled(spec.id.into(), why));
+        }
         if nested {
             // The outer command stays the one Enter repeats.
             self.echo(format!(">>{}", spec.id.to_ascii_uppercase()));
@@ -1315,6 +1333,12 @@ impl Session {
             self.pending_window = None;
             self.set_selection(Vec::new());
         }
+    }
+
+    /// The multiline text the running command is collecting, for the in-place editor
+    /// ([`Interactive::editing_mtext`]).
+    pub fn editing_mtext(&self) -> Option<cadcraft_doc::MText> {
+        self.running.as_ref().and_then(|r| r.machine.editing_mtext())
     }
 
     pub fn current_prompt(&self) -> Option<Prompt> {
@@ -1700,6 +1724,7 @@ impl Session {
                 serde_json::json!({
                     "index": i, "title": d.title, "path": d.path, "dirty": d.is_dirty(),
                     "entities": d.doc.entity_count(), "active": i == self.active, "revision": d.revision,
+                    "blockEditor": d.block_editor(),
                 })
             })
             .collect();
