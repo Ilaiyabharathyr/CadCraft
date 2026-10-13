@@ -504,13 +504,258 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
     ),
 ];
 
+/// Access keys. Alt and a menu's letter opens it from the keyboard; in an open menu a row's letter
+/// chooses that row, or steps through the rows that share it. A row is named by its command id,
+/// a submenu by its heading. Rows without a letter (those of submenus) answer to their initial.
+pub const ACCESS_KEYS: &[(&str, char, &[(&str, char)])] = &[
+    (
+        "File",
+        'F',
+        &[
+            ("new", 'N'),
+            ("ui.newtemplate", 'T'),
+            ("open", 'O'),
+            ("close", 'C'),
+            ("closeall", 'E'),
+            ("qsave", 'S'),
+            ("saveas", 'A'),
+            ("Default Save Format", 'D'),
+            ("import", 'I'),
+            ("export", 'E'),
+            ("exportpdf", 'F'),
+            ("plot", 'P'),
+            ("preview", 'V'),
+            ("pagesetup", 'G'),
+            ("stylesmanager", 'Y'),
+            ("plottermanager", 'M'),
+            ("publish", 'B'),
+            ("Drawing Utilities", 'U'),
+            ("ui.quit", 'Q'),
+        ],
+    ),
+    (
+        "Edit",
+        'E',
+        &[
+            ("u", 'U'),
+            ("redo", 'R'),
+            ("cutclip", 'T'),
+            ("copyclip", 'C'),
+            ("copybase", 'B'),
+            ("pasteclip", 'P'),
+            ("pasteblock", 'L'),
+            ("pasteorig", 'O'),
+            ("erase.selection", 'R'),
+            ("selectall", 'A'),
+            ("find", 'F'),
+            ("qselect", 'Q'),
+            ("ui.dialog.language", 'I'),
+        ],
+    ),
+    (
+        "View",
+        'V',
+        &[
+            ("redraw", 'R'),
+            ("regen", 'G'),
+            ("regenall", 'A'),
+            ("Zoom", 'Z'),
+            ("Pan", 'P'),
+            ("view", 'N'),
+            ("Viewports", 'V'),
+            ("UCS Icon", 'U'),
+            ("ViewCube", 'C'),
+            ("Show Annotative Objects", 'H'),
+            ("Interface Theme", 'T'),
+            ("Accessibility", 'Y'),
+        ],
+    ),
+    ("Insert", 'I', &[("insert", 'B'), ("xattach", 'R'), ("datalink", 'L'), ("Layout", 'Y')]),
+    (
+        "Format",
+        'O',
+        &[
+            ("layer", 'L'),
+            ("layerstate.save", 'S'),
+            ("Layer Tools", 'T'),
+            ("color", 'C'),
+            ("linetype", 'N'),
+            ("lweight", 'W'),
+            ("scalelistedit", 'E'),
+            ("style", 'X'),
+            ("dimstyle", 'D'),
+            ("tablestyle", 'B'),
+            ("mleaderstyle", 'M'),
+            ("mlstyle", 'U'),
+            ("plotstyle", 'P'),
+            ("ddptype", 'I'),
+            ("units", 'U'),
+            ("limits", 'G'),
+            ("rename", 'R'),
+        ],
+    ),
+    (
+        "Tools",
+        'T',
+        &[
+            ("script", 'R'),
+            ("compare", 'C'),
+            ("dataextraction", 'X'),
+            ("group", 'G'),
+            ("ungroup", 'U'),
+            ("Draw Order", 'D'),
+            ("Isolate", 'I'),
+            ("Inquiry", 'Q'),
+            ("count", 'N'),
+            ("Parametric", 'P'),
+            ("xopen", 'X'),
+            ("dsettings", 'F'),
+            ("ui.spacemouse", '3'),
+            ("options", 'O'),
+        ],
+    ),
+    (
+        "Draw",
+        'D',
+        &[
+            ("line", 'L'),
+            ("pline", 'P'),
+            ("3dpoly", '3'),
+            ("xline", 'T'),
+            ("ray", 'R'),
+            ("mline", 'U'),
+            ("rectang", 'G'),
+            ("polygon", 'Y'),
+            ("Circle", 'C'),
+            ("Arc", 'A'),
+            ("Ellipse", 'E'),
+            ("donut", 'D'),
+            ("Spline", 'S'),
+            ("helix", 'H'),
+            ("Revision Cloud", 'V'),
+            ("Point", 'O'),
+            ("centermark", 'M'),
+            ("centerline", 'N'),
+            ("Block", 'K'),
+            ("table", 'B'),
+            ("Text", 'X'),
+            ("hatch", 'H'),
+            ("gradient", 'G'),
+            ("boundary", 'B'),
+            ("region", 'I'),
+            ("wipeout", 'W'),
+        ],
+    ),
+    (
+        "Dimension",
+        'N',
+        &[
+            ("qdim", 'Q'),
+            ("dim", 'D'),
+            ("dimlinear", 'L'),
+            ("dimaligned", 'G'),
+            ("dimarc", 'H'),
+            ("dimordinate", 'O'),
+            ("dimradius", 'R'),
+            ("dimjogged", 'J'),
+            ("dimdiameter", 'M'),
+            ("dimangular", 'A'),
+            ("dimbaseline", 'B'),
+            ("dimcontinue", 'C'),
+            ("dimspace", 'P'),
+            ("dimbreak", 'K'),
+            ("mleader", 'E'),
+            ("tolerance", 'T'),
+            ("diminspect", 'I'),
+            ("dimjogline", 'V'),
+            ("dimedit.oblique", 'Q'),
+            ("Align Text", 'X'),
+            ("dimstyle.dimension", 'S'),
+            ("dimoverride", 'V'),
+            ("dimstyle.update", 'U'),
+            ("dimreassociate", 'N'),
+        ],
+    ),
+    (
+        "Modify",
+        'M',
+        &[
+            ("properties", 'P'),
+            ("matchprop", 'M'),
+            ("erase", 'E'),
+            ("copy", 'Y'),
+            ("mirror", 'I'),
+            ("offset", 'F'),
+            ("Array", 'A'),
+            ("move", 'V'),
+            ("rotate", 'R'),
+            ("scale", 'L'),
+            ("stretch", 'H'),
+            ("lengthen", 'G'),
+            ("trim", 'T'),
+            ("extend", 'X'),
+            ("break", 'K'),
+            ("breakatpoint", 'B'),
+            ("join", 'J'),
+            ("chamfer", 'C'),
+            ("fillet", 'F'),
+            ("blend", 'D'),
+            ("explode", 'O'),
+            ("Object", 'O'),
+            ("Annotative Object Scale", 'N'),
+            ("ncopy", 'N'),
+            ("chspace", 'S'),
+            ("flatten", 'A'),
+            ("overkill", 'D'),
+            ("Clip", 'P'),
+            ("Solid Editing", 'Z'),
+            ("3D Operations", '3'),
+        ],
+    ),
+    (
+        "Window",
+        'W',
+        &[
+            ("ui.toggle.toolsets", 'T'),
+            ("ui.panel.properties", 'P'),
+            ("ui.panel.layers", 'L'),
+            ("ui.panel.quickcalc", 'Q'),
+            ("xref", 'R'),
+            ("ui.toggle.toolbar", 'B'),
+            ("ui.toggle.filetabs", 'F'),
+            ("ui.toggle.statusbar", 'S'),
+            ("ui.toggle.cmdline", 'C'),
+            ("ui.toggle.menubar", 'M'),
+            ("ui.hidepalettes", 'H'),
+            ("ui.resetpalettes", 'E'),
+            ("ui.dock.reset", 'O'),
+            ("ui.start", 'A'),
+            ("ui.dialog.layers", 'Y'),
+            ("ui.dialog.blocks", 'K'),
+            ("ui.dialog.parameters", 'M'),
+            ("ui.toggle.history", 'I'),
+        ],
+    ),
+    ("Help", 'H', &[("ui.dialog.commands", 'H'), ("ui.sample", 'S'), ("ui.discord", 'D'), ("ui.dialog.about", 'A')]),
+];
+
+/// The letter that opens `menu` with Alt.
+pub fn menu_key(menu: &str) -> Option<char> {
+    ACCESS_KEYS.iter().find(|(name, ..)| *name == menu).map(|(_, key, _)| *key)
+}
+
+/// The letters of the rows of `menu`.
+pub fn row_keys(menu: &str) -> &'static [(&'static str, char)] {
+    ACCESS_KEYS.iter().find(|(name, ..)| *name == menu).map_or(&[], |(_, _, rows)| rows)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use cadcraft_engine::Session;
 
-    use super::{FLAT, MENU_LAYOUT, Row};
+    use super::{ACCESS_KEYS, FLAT, MENU_LAYOUT, Row, menu_key};
     use crate::menus::{self, Entry};
     use crate::{CadApp, Services};
 
@@ -604,6 +849,39 @@ mod tests {
         let app = CadApp::new(Session::new(), Services::default());
         for (menu, entries) in menus::tree(&app) {
             check(&menu, &entries);
+        }
+    }
+
+    #[test]
+    fn menu_access_keys_are_distinct_letters_of_the_names() {
+        assert_eq!(ACCESS_KEYS.iter().map(|(m, ..)| *m).collect::<Vec<_>>(), menus::MENUS);
+        let keys: BTreeSet<char> = ACCESS_KEYS.iter().map(|(_, key, _)| *key).collect();
+        assert_eq!(keys.len(), menus::MENUS.len(), "two menus share an access key");
+        for menu in menus::MENUS {
+            let key = menu_key(menu).unwrap();
+            assert!(key.is_ascii_uppercase() && menu.to_ascii_uppercase().contains(key), "{menu}: {key}");
+        }
+    }
+
+    /// A letter must belong to a row at the top of its menu, or it could never be pressed.
+    #[test]
+    fn row_access_keys_name_rows_of_their_menu() {
+        for (menu, _, keys) in ACCESS_KEYS {
+            let (_, rows) = MENU_LAYOUT.iter().find(|(m, _)| m == menu).unwrap();
+            let targets: BTreeSet<&str> = rows
+                .iter()
+                .filter_map(|r| match r {
+                    Row::Cmd { id, .. } => Some(*id),
+                    Row::Sub { label, .. } => Some(*label),
+                    Row::Sep => None,
+                })
+                .collect();
+            let mut seen = BTreeSet::new();
+            for (target, key) in *keys {
+                assert!(targets.contains(target), "{menu}: {target} is not a row of the menu");
+                assert!(seen.insert(*target), "{menu}: {target} has two access keys");
+                assert!(key.is_ascii_uppercase() || key.is_ascii_digit(), "{menu}: {target} has the key {key:?}");
+            }
         }
     }
 

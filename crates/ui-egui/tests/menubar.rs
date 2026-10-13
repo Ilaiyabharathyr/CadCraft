@@ -280,3 +280,167 @@ fn menubar_has_no_overlaps() {
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
+
+// ---------------- keyboard ----------------
+
+fn press(h: &mut Harness<'static, CadApp>, key: egui::Key) {
+    h.key_press(key);
+    h.run_steps(4);
+}
+
+fn alt(h: &mut Harness<'static, CadApp>, key: egui::Key) {
+    h.key_press_modifiers(egui::Modifiers::ALT, key);
+    h.run_steps(4);
+}
+
+/// The menu row with the keyboard focus.
+fn focused_row(h: &Harness<'static, CadApp>, label: &str) -> bool {
+    h.query_all_by_label(label).any(|n| (n.rect().height() - ROW).abs() < 0.5 && n.is_focused())
+}
+
+fn is_open(h: &Harness<'static, CadApp>, row_label: &str) -> bool {
+    find(h, row_label, ROW).is_some()
+}
+
+/// Whether `text`, painted in the bar or a menu, has an underlined letter.
+fn underlined(h: &Harness<'static, CadApp>, text: &str) -> bool {
+    painted(h).iter().any(|s| match s {
+        Shape::Text(t) => t.galley.text() == text && t.galley.job.sections.iter().any(|s| s.format.underline != egui::Stroke::NONE),
+        _ => false,
+    })
+}
+
+#[test]
+fn alt_letter_opens_a_menu_and_the_arrows_move_in_it() {
+    let mut h = harness(1.0);
+    assert!(!underlined(&h, "File"));
+    alt(&mut h, egui::Key::F);
+    snapshot(&mut h, "keys-file");
+    assert!(focused_row(&h, "New Drawing..."), "Alt+F opens File with its first row focused");
+    assert!(underlined(&h, "File") && underlined(&h, "Edit"), "access keys are underlined in the bar");
+    assert!(underlined(&h, "New Drawing...") && underlined(&h, "Default Save Format"), "and in the open menu");
+
+    press(&mut h, egui::Key::ArrowDown);
+    assert!(focused_row(&h, "New from Template..."));
+    press(&mut h, egui::Key::ArrowUp);
+    press(&mut h, egui::Key::ArrowUp);
+    assert!(focused_row(&h, "Quit CADCraft"), "up from the first row wraps to the last");
+    press(&mut h, egui::Key::Home);
+    assert!(focused_row(&h, "New Drawing..."));
+
+    // Left and right step to the neighbouring menus.
+    press(&mut h, egui::Key::ArrowRight);
+    assert!(!is_open(&h, "New Drawing...") && focused_row(&h, "Undo"));
+    press(&mut h, egui::Key::ArrowLeft);
+    assert!(focused_row(&h, "New Drawing..."));
+    press(&mut h, egui::Key::ArrowLeft);
+    assert!(focused_row(&h, "CADCraft Help"), "left from File wraps to Help");
+}
+
+#[test]
+fn keyboard_opens_submenus_and_chooses_rows() {
+    let mut h = harness(1.0);
+    alt(&mut h, egui::Key::F);
+    // D is Default Save Format alone: the letter opens its submenu.
+    press(&mut h, egui::Key::D);
+    assert!(focused_row(&h, "DXF"), "the submenu opens with its first row focused");
+    press(&mut h, egui::Key::ArrowLeft);
+    assert!(!is_open(&h, "DXF") && focused_row(&h, "Default Save Format"), "left closes the submenu");
+    press(&mut h, egui::Key::ArrowRight);
+    assert!(focused_row(&h, "DXF"), "right opens it again");
+    press(&mut h, egui::Key::ArrowDown);
+    assert!(focused_row(&h, "DWG"));
+    press(&mut h, egui::Key::Enter);
+    assert_eq!(h.state().ui.save_format.as_str(), "dwg");
+    assert!(!is_open(&h, "New Drawing..."), "choosing a row closes the menus");
+
+    // A letter that one row owns runs it.
+    alt(&mut h, egui::Key::H);
+    assert!(focused_row(&h, "CADCraft Help"));
+    press(&mut h, egui::Key::A);
+    assert_eq!(h.state().ui.dialog.as_deref(), Some("about"));
+    assert!(!is_open(&h, "CADCraft Help"));
+}
+
+#[test]
+fn a_shared_letter_steps_through_its_rows() {
+    let mut h = harness(1.0);
+    alt(&mut h, egui::Key::F);
+    let before = h.state().session.log.len();
+    // E is both Close All and Export...
+    press(&mut h, egui::Key::E);
+    assert!(focused_row(&h, "Close All"));
+    press(&mut h, egui::Key::E);
+    assert!(focused_row(&h, "Export..."));
+    press(&mut h, egui::Key::E);
+    assert!(focused_row(&h, "Close All"));
+    assert!(is_open(&h, "New Drawing..."), "nothing ran");
+    assert_eq!(h.state().session.log.len(), before);
+    assert_eq!(h.state().session.docs.len(), 2);
+}
+
+#[test]
+fn an_open_menu_takes_the_keys_and_gives_them_back() {
+    let mut h = harness(1.0);
+    let type_l = |h: &mut Harness<'static, CadApp>| {
+        h.event(egui::Event::Text("l".into()));
+        h.key_press(egui::Key::L);
+        h.run_steps(4);
+    };
+    // Opened with the pointer: typing still belongs to the menu, not the command line.
+    open(&mut h, "Edit");
+    type_l(&mut h);
+    assert_eq!(h.state().cmd.buffer, "", "typing with a menu open must not reach the command line");
+    assert!(is_open(&h, "Undo"));
+    assert!(!underlined(&h, "Edit"), "no underlines when the pointer opened the menu");
+
+    press(&mut h, egui::Key::Escape);
+    assert!(!is_open(&h, "Undo"));
+
+    // Opened with the keyboard and closed again: the focus is released.
+    alt(&mut h, egui::Key::E);
+    assert!(focused_row(&h, "Undo"));
+    press(&mut h, egui::Key::Escape);
+    assert!(!is_open(&h, "Undo"));
+    assert!(h.ctx.memory(|m| m.focused()).is_none(), "a closed menu keeps no focus");
+    assert!(!underlined(&h, "Edit"));
+    type_l(&mut h);
+    assert_eq!(h.state().cmd.buffer.to_lowercase(), "l", "typing reaches the command line again");
+}
+
+#[test]
+fn alt_alone_puts_the_focus_on_the_bar() {
+    let mut h = harness(1.0);
+    let tap = |h: &mut Harness<'static, CadApp>| {
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+        h.run_steps(2);
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.run_steps(3);
+    };
+    let on_bar =
+        |h: &Harness<'static, CadApp>, menu: &str| h.query_all_by_label(menu).any(|n| (n.rect().height() - BAR_BUTTON).abs() < 0.5 && n.is_focused());
+    tap(&mut h);
+    assert!(on_bar(&h, "File"), "Alt pressed and released alone focuses the first menu name");
+    assert!(underlined(&h, "File"));
+    press(&mut h, egui::Key::ArrowRight);
+    assert!(on_bar(&h, "Edit"));
+    press(&mut h, egui::Key::ArrowLeft);
+    press(&mut h, egui::Key::ArrowLeft);
+    assert!(on_bar(&h, "Help"), "left from File wraps to Help");
+    press(&mut h, egui::Key::ArrowDown);
+    assert!(focused_row(&h, "CADCraft Help"), "down opens the focused menu");
+    press(&mut h, egui::Key::Escape);
+    assert!(!is_open(&h, "CADCraft Help"));
+
+    // Alt again leaves the bar; Alt with another key is not a tap.
+    tap(&mut h);
+    assert!(on_bar(&h, "File"));
+    tap(&mut h);
+    assert!(h.ctx.memory(|m| m.focused()).is_none() && !underlined(&h, "File"));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+    h.key_press(egui::Key::F9);
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+    assert!(h.ctx.memory(|m| m.focused()).is_none());
+}

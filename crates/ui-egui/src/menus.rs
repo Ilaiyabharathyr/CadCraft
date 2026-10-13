@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::CadApp;
 use crate::icons::Icon;
-use crate::menu_layout::{FLAT, MENU_LAYOUT, Row};
+use crate::menu_layout::{FLAT, MENU_LAYOUT, Row, menu_key, row_keys};
 
 /// The top-level menus, in order.
 pub const MENUS: &[&str] = &["File", "Edit", "View", "Insert", "Format", "Tools", "Draw", "Dimension", "Modify", "Window", "Help"];
@@ -704,6 +704,8 @@ struct RowSpec<'a> {
     submenu: bool,
     enabled: bool,
     mark: Option<Mark>,
+    /// The access key to underline in the label.
+    key: Option<char>,
 }
 
 /// One row of a menu: icon slot, label, shortcut and submenu arrow. The row is highlighted under
@@ -715,7 +717,9 @@ fn menu_row(ui: &mut egui::Ui, row: &RowSpec, open: impl FnOnce(&egui::Ui, &egui
     let needed = row_width(label.size().x, shortcut.as_ref().map(|g| g.size().x));
     let sense = if row.enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(needed.max(ui.available_width()), ROW_HEIGHT), sense);
-    let hot = row.enabled && (resp.hovered() || resp.has_focus() || open(ui, &resp));
+    // While the keyboard drives the menus the pointer's row is not highlighted as well.
+    let pointed = resp.hovered() && !access(ui.ctx()).keyboard;
+    let hot = row.enabled && (pointed || resp.has_focus() || open(ui, &resp));
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         if hot {
@@ -745,7 +749,11 @@ fn menu_row(ui: &mut egui::Ui, row: &RowSpec, open: impl FnOnce(&egui::Ui, &egui
             (Some(Mark::Check(false)), _) | (None, None) => {}
             (None, Some(icon)) => crate::icons::paint_tinted(p, slot, icon, false, (hot || !row.enabled).then(|| ink(t.icon))),
         }
-        p.galley_with_override_text_color(egui::pos2(slot.right() + ROW_GAP, rect.center().y - label.size().y / 2.0), label, ink(t.text));
+        let at = egui::pos2(slot.right() + ROW_GAP, rect.center().y - label.size().y / 2.0);
+        match row.key {
+            Some(key) => p.galley(at, key_galley(ui, row.label, key, row_font(), ink(t.text)), ink(t.text)),
+            None => p.galley_with_override_text_color(at, label, ink(t.text)),
+        }
         let arrow = egui::Rect::from_min_size(egui::pos2(rect.right() - ROW_PAD_RIGHT - ROW_ARROW.x, rect.center().y - ROW_ARROW.y / 2.0), ROW_ARROW);
         if let Some(g) = shortcut {
             let at = egui::pos2(arrow.left() - ROW_GAP - g.size().x, rect.center().y - g.size().y / 2.0);
@@ -777,40 +785,150 @@ pub(crate) fn menu_separator(ui: &mut egui::Ui) {
 }
 
 pub(crate) fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
+    let _ = entry_row(ui, e, &[], clicked);
+}
+
+/// Keyboard use of the menu bar, kept from frame to frame.
+#[derive(Clone, Copy, Default)]
+struct Access {
+    /// Alt is down, and nothing else was pressed since it went down.
+    alt_down: bool,
+    alt_alone: bool,
+    /// The keyboard drives the menus: access keys are underlined.
+    keyboard: bool,
+    /// A menu of the bar was open on the last frame.
+    any_open: bool,
+    /// The menu (a popup or a submenu) whose first row takes the focus when it shows.
+    focus_first: Option<egui::Id>,
+}
+
+fn access(ctx: &egui::Context) -> Access {
+    ctx.data(|d| d.get_temp(egui::Id::new("cc_menubar_access"))).unwrap_or_default()
+}
+
+fn access_mut<R>(ctx: &egui::Context, change: impl FnOnce(&mut Access) -> R) -> R {
+    ctx.data_mut(|d| change(d.get_temp_mut_or_default(egui::Id::new("cc_menubar_access"))))
+}
+
+/// `text` with the first `key` in it underlined (as it is when `key` is not in `text`: a
+/// translated label need not hold the letter).
+fn key_galley(ui: &egui::Ui, text: &str, key: char, font: egui::FontId, color: egui::Color32) -> std::sync::Arc<egui::Galley> {
+    let plain = egui::TextFormat::simple(font, color);
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = f32::INFINITY;
+    match text.char_indices().find(|(_, c)| c.eq_ignore_ascii_case(&key)) {
+        Some((at, c)) => {
+            let end = at + c.len_utf8();
+            job.append(text.get(..at).unwrap_or_default(), 0.0, plain.clone());
+            job.append(text.get(at..end).unwrap_or_default(), 0.0, egui::TextFormat { underline: egui::Stroke::new(1.0, color), ..plain.clone() });
+            job.append(text.get(end..).unwrap_or_default(), 0.0, plain);
+        }
+        None => job.append(text, 0.0, plain),
+    }
+    ui.painter().layout_job(job)
+}
+
+/// The arrow keys belong to the menus while `resp` has the focus (egui would move the focus to
+/// whatever widget lies that way).
+fn keep_arrows(ui: &egui::Ui, resp: &egui::Response) {
+    if resp.has_focus() {
+        let filter = egui::EventFilter { tab: false, horizontal_arrows: true, vertical_arrows: true, escape: false };
+        ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, filter));
+    }
+}
+
+fn pressed(ui: &egui::Ui, key: egui::Key) -> bool {
+    ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key))
+}
+
+/// Open the submenu of the row `row`, its first row focused.
+fn open_submenu(ui: &egui::Ui, row: egui::Id) {
     use egui::containers::menu::{MenuState, SubMenu};
+    let id = SubMenu::id_from_widget_id(row);
+    MenuState::from_ui(ui, |state, _| state.open_item = Some(id));
+    // egui forgets an open submenu that did not show on the last frame; a letter opens this
+    // one after its row was drawn, so it shows on the next.
+    MenuState::mark_shown(ui.ctx(), id);
+    access_mut(ui.ctx(), |a| a.focus_first = Some(id));
+}
+
+/// A row as the keyboard sees it.
+struct Shown<'a> {
+    id: egui::Id,
+    entry: &'a Entry,
+    key: Option<char>,
+    initial: Option<char>,
+    enabled: bool,
+}
+
+/// Draw `e`; `keys` are the access keys of the menu it is in.
+fn entry_row<'a>(ui: &mut egui::Ui, e: &'a Entry, keys: &[(&str, char)], clicked: &mut Option<String>) -> Option<Shown<'a>> {
+    use egui::containers::menu::{MenuState, SubMenu};
+    let key_of = |name: &str| keys.iter().find(|(target, _)| *target == name).map(|(_, key)| *key);
+    let underline = access(ui.ctx()).keyboard || ui.input(|i| i.modifiers.alt);
+    let initial = |label: &str| label.chars().next().map(|c| c.to_ascii_uppercase());
     match e {
         Entry::Item { label, id, shortcut, enabled, icon, mark } => {
+            let key = key_of(id);
             let label = entry_label(crate::i18n::current(), label);
             let shortcut = shortcut.as_ref().map(|s| shortcut_label(s, ui.ctx().os().is_mac()));
-            if menu_row(ui, &RowSpec { icon: *icon, label: &label, shortcut, submenu: false, enabled: *enabled, mark: *mark }, |_, _| false).clicked()
-            {
+            let row =
+                RowSpec { icon: *icon, label: &label, shortcut, submenu: false, enabled: *enabled, mark: *mark, key: key.filter(|_| underline) };
+            let resp = menu_row(ui, &row, |_, _| false);
+            keep_arrows(ui, &resp);
+            if resp.clicked() {
                 *clicked = Some(id.clone());
                 ui.close();
             }
+            Some(Shown { id: resp.id, entry: e, key, initial: initial(&label), enabled: *enabled })
         }
         Entry::Sub { label, children, icon } => {
-            let row = RowSpec { icon: *icon, label: crate::i18n::menu(label), shortcut: None, submenu: true, enabled: true, mark: None };
-            let resp = menu_row(ui, &row, |ui, resp| MenuState::from_ui(ui, |state, _| state.open_item == Some(SubMenu::id_from_widget_id(resp.id))));
+            let key = key_of(label);
+            let label = crate::i18n::menu(label);
+            let row = RowSpec { icon: *icon, label, shortcut: None, submenu: true, enabled: true, mark: None, key: key.filter(|_| underline) };
+            let id = |row: egui::Id| SubMenu::id_from_widget_id(row);
+            let resp = menu_row(ui, &row, |ui, resp| MenuState::from_ui(ui, |state, _| state.open_item == Some(id(resp.id))));
+            keep_arrows(ui, &resp);
+            let open = MenuState::from_ui(ui, |state, _| state.open_item == Some(id(resp.id)));
+            if resp.has_focus() && !open {
+                if pressed(ui, egui::Key::ArrowRight) {
+                    open_submenu(ui, resp.id);
+                } else if resp.clicked() && !resp.clicked_by(egui::PointerButton::Primary) {
+                    // Enter: egui opens the submenu.
+                    access_mut(ui.ctx(), |a| a.focus_first = Some(id(resp.id)));
+                }
+            }
             // egui puts a submenu beside the row it opens from; a narrower anchor makes it
             // overlap this menu, its first row level with this one.
             let mut anchor = resp.clone();
             anchor.interact_rect.max.x -= SUBMENU_OVERLAP + 2.0;
-            SubMenu::new().config(menu_config()).show(ui, &anchor, |ui| menu_rows(ui, children, SUBMENU_ROW_WIDTH, false, clicked));
+            SubMenu::new().config(menu_config()).show(ui, &anchor, |ui| menu_rows(ui, children, SUBMENU_ROW_WIDTH, false, &[], id(resp.id), clicked));
+            // The submenu's own rows had the first say about the left arrow.
+            if open && pressed(ui, egui::Key::ArrowLeft) {
+                MenuState::from_ui(ui, |state, _| state.open_item = None);
+                resp.request_focus();
+            }
+            Some(Shown { id: resp.id, entry: e, key, initial: initial(label), enabled: true })
         }
-        Entry::Separator => menu_separator(ui),
+        Entry::Separator => {
+            menu_separator(ui);
+            None
+        }
     }
 }
 
-/// The rows of a menu, scrolling when the window is too short for them all. A menu `below` the
-/// bar has the room under it; a submenu, which egui moves to fit, has the height of the window.
-fn menu_rows(ui: &mut egui::Ui, entries: &[Entry], min_width: f32, below: bool, clicked: &mut Option<String>) {
+/// The rows of the menu `menu`, scrolling when the window is too short for them all. A menu
+/// `below` the bar has the room under it; a submenu, which egui moves to fit, has the height of
+/// the window.
+fn menu_rows(ui: &mut egui::Ui, entries: &[Entry], min_width: f32, below: bool, keys: &[(&str, char)], menu: egui::Id, clicked: &mut Option<String>) {
     set_menu_width(ui, entries.iter(), min_width);
     let window = ui.ctx().content_rect();
     let room = if below { window.bottom() - ui.cursor().top() - 20.0 } else { window.height() - 24.0 }.max(ROW_HEIGHT * 4.0);
     let height: f32 = entries.iter().map(|e| if matches!(e, Entry::Separator) { SEPARATOR_HEIGHT } else { ROW_HEIGHT }).sum();
+    let mut shown = Vec::new();
     let mut rows = |ui: &mut egui::Ui| {
         for e in entries {
-            entry_ui(ui, e, clicked);
+            shown.extend(entry_row(ui, e, keys, clicked));
         }
     };
     if height <= room {
@@ -819,6 +937,73 @@ fn menu_rows(ui: &mut egui::Ui, entries: &[Entry], min_width: f32, below: bool, 
         ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), room), egui::Layout::top_down_justified(egui::Align::Min), |ui| {
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, rows);
         });
+    }
+    menu_keys(ui, &shown, menu, clicked);
+}
+
+/// The keyboard in an open menu: the arrows, Home and End move the highlight, and a letter
+/// chooses the row with that access key (or steps through the rows that share it or start
+/// with it). Only the innermost open menu listens.
+fn menu_keys(ui: &mut egui::Ui, shown: &[Shown], menu: egui::Id, clicked: &mut Option<String>) {
+    use egui::containers::menu::MenuState;
+    let rows: Vec<&Shown> = shown.iter().filter(|s| s.enabled).collect();
+    let focus = |row: Option<&&Shown>| {
+        if let Some(row) = row {
+            ui.memory_mut(|m| m.request_focus(row.id));
+        }
+    };
+    if access(ui.ctx()).focus_first == Some(menu) {
+        access_mut(ui.ctx(), |a| a.focus_first = None);
+        focus(rows.first());
+        return;
+    }
+    if rows.is_empty() || MenuState::from_ui(ui, |state, _| state.open_item.is_some()) {
+        return;
+    }
+    let focused = ui.memory(|m| m.focused());
+    let at = rows.iter().position(|s| Some(s.id) == focused);
+    let n = rows.len();
+    if pressed(ui, egui::Key::ArrowDown) {
+        focus(rows.get(at.map_or(0, |i| (i + 1) % n)));
+    } else if pressed(ui, egui::Key::ArrowUp) {
+        focus(rows.get(at.map_or(n - 1, |i| (i + n - 1) % n)));
+    } else if pressed(ui, egui::Key::Home) {
+        focus(rows.first());
+    } else if pressed(ui, egui::Key::End) {
+        focus(rows.last());
+    }
+    let typed: Vec<char> = ui.input(|i| {
+        let letter = |e: &egui::Event| match e {
+            egui::Event::Key { key, pressed: true, modifiers, .. } if !modifiers.ctrl && !modifiers.command => {
+                let mut name = key.name().chars();
+                name.next().filter(|c| c.is_ascii_alphanumeric() && name.next().is_none())
+            }
+            _ => None,
+        };
+        i.events.iter().filter_map(letter).collect()
+    });
+    for letter in typed {
+        let with_key: Vec<usize> = rows.iter().enumerate().filter(|(_, s)| s.key == Some(letter)).map(|(i, _)| i).collect();
+        let matches =
+            if with_key.is_empty() { rows.iter().enumerate().filter(|(_, s)| s.initial == Some(letter)).map(|(i, _)| i).collect() } else { with_key };
+        let only = rows.iter().filter(|s| s.key == Some(letter)).count() == 1;
+        match (matches.as_slice(), only) {
+            ([one], true) => match rows.get(*one).map(|s| (s.id, s.entry)) {
+                Some((_, Entry::Item { id, .. })) => {
+                    *clicked = Some(id.clone());
+                    ui.close();
+                }
+                Some((row, Entry::Sub { .. })) => open_submenu(ui, row),
+                _ => {}
+            },
+            (several, _) => {
+                let next = several.iter().find(|i| at.is_none_or(|at| **i > at)).or(several.first());
+                focus(next.and_then(|i| rows.get(*i)));
+            }
+        }
+    }
+    if let Some(row) = shown.iter().find(|s| Some(s.id) == ui.memory(|m| m.focused())) {
+        ui.ctx().read_response(row.id).filter(|r| r.gained_focus()).inspect(|r| r.scroll_to_me(None));
     }
 }
 
@@ -857,6 +1042,124 @@ fn bar_button(
     resp
 }
 
+/// What the Alt key asks of the bar this frame: the menu to open (Alt and its letter), and
+/// whether to put the focus on the bar (Alt pressed and released alone, where that is the custom).
+fn access_keys(ctx: &egui::Context, alt: bool, tree: &[(String, Vec<Entry>)]) -> (Option<usize>, bool) {
+    // Not while a text field has the focus: there Alt and a letter types a character.
+    let ours = access(ctx).keyboard || !ctx.egui_wants_keyboard_input();
+    let mut open = None;
+    if ours {
+        ctx.input_mut(|i| {
+            for (n, (name, _)) in tree.iter().enumerate() {
+                let key = menu_key(name).and_then(|key| egui::Key::from_name(key.encode_utf8(&mut [0; 4])));
+                if key.is_some_and(|key| i.consume_key(egui::Modifiers::ALT, key)) {
+                    open = Some(n);
+                }
+            }
+            if open.is_some() {
+                i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
+            }
+        });
+    }
+    let busy = open.is_some()
+        || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::PointerButton { .. })));
+    let tapped = access_mut(ctx, |a| {
+        if alt && !a.alt_down {
+            a.alt_alone = true;
+        }
+        if busy {
+            a.alt_alone = false;
+        }
+        let tapped = !alt && a.alt_down && a.alt_alone;
+        a.alt_down = alt;
+        tapped
+    });
+    // On macOS the Option key alone does nothing.
+    if !tapped || ctx.os().is_mac() || !ours {
+        return (open, false);
+    }
+    if access(ctx).keyboard {
+        leave_keyboard(ctx);
+        return (open, false);
+    }
+    access_mut(ctx, |a| a.keyboard = true);
+    (open, true)
+}
+
+/// Back to the pointer: close the open menu and give up the focus the menus held.
+fn leave_keyboard(ctx: &egui::Context) {
+    egui::Popup::close_all(ctx);
+    release_focus(ctx);
+}
+
+fn release_focus(ctx: &egui::Context) {
+    access_mut(ctx, |a| (a.keyboard, a.focus_first) = (false, None));
+    ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+}
+
+/// The keyboard on the bar: left and right step along the menu names, or to the neighbouring
+/// menu when one is open; down opens the focused name's menu. `buttons` are the names' widget
+/// and popup ids; `starting` when this frame put the keyboard in charge.
+fn bar_keys(ctx: &egui::Context, buttons: &[(egui::Id, egui::Id)], starting: bool) {
+    let key = |key| ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key));
+    let focused = ctx.memory(|m| m.focused());
+    let on_bar = buttons.iter().position(|(id, _)| Some(*id) == focused);
+    let open = buttons.iter().position(|(_, popup)| egui::Popup::is_id_open(ctx, *popup));
+    let n = buttons.len();
+    let show = |at: usize| {
+        if let Some((_, popup)) = buttons.get(at) {
+            egui::Popup::open_id(ctx, *popup);
+            access_mut(ctx, |a| (a.keyboard, a.focus_first) = (true, Some(*popup)));
+        }
+    };
+    if let Some(at) = open.or(on_bar) {
+        let to = if key(egui::Key::ArrowRight) {
+            Some((at + 1) % n)
+        } else if key(egui::Key::ArrowLeft) {
+            Some((at + n - 1) % n)
+        } else {
+            None
+        };
+        match (to, open) {
+            (Some(to), Some(_)) => show(to),
+            (Some(to), None) => {
+                if let Some((id, _)) = buttons.get(to) {
+                    ctx.memory_mut(|m| m.request_focus(*id));
+                }
+            }
+            (None, _) => {}
+        }
+    }
+    if let (Some(at), None) = (on_bar, open) {
+        if key(egui::Key::ArrowDown) {
+            show(at);
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            release_focus(ctx);
+        }
+    }
+    let keyboard = access(ctx).keyboard;
+    // The pointer takes over as soon as it moves or presses; a menu that closed gives the
+    // focus back, so typing reaches the command line again.
+    let pointer = ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO || i.pointer.any_pressed());
+    let idle = open.is_none() && on_bar.is_none() && !buttons.iter().any(|(_, popup)| egui::Popup::is_id_open(ctx, *popup));
+    if keyboard && !starting && (pointer || idle) {
+        release_focus(ctx);
+    }
+    let any_open = buttons.iter().any(|(_, popup)| egui::Popup::is_id_open(ctx, *popup));
+    access_mut(ctx, |a| a.any_open = any_open);
+    if any_open {
+        // An open menu takes the keys: nothing typed reaches the command line. Escape stays,
+        // for egui to close the menu with.
+        ctx.input_mut(|i| {
+            i.events.retain(|e| !matches!(e, egui::Event::Text(_)) && !matches!(e, egui::Event::Key { key, .. } if *key != egui::Key::Escape))
+        });
+    }
+}
+
 pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
     use egui::containers::menu::MenuConfig;
     let t = crate::theme::Tokens::get();
@@ -889,13 +1192,17 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         ui.add_space(2.0);
 
+        let ctx = ui.ctx().clone();
+        let alt = ctx.input(|i| i.modifiers.alt && !i.modifiers.ctrl && !i.modifiers.command);
+        let (open_now, focus_bar) = access_keys(&ctx, alt, &tree);
         // With one menu open, pointing at another name opens that menu instead.
-        let any_open_id = egui::Id::new("cc_menubar_open");
-        let was_open = ui.data(|d| d.get_temp::<bool>(any_open_id)).unwrap_or(false);
-        let mut any_open = false;
+        let was_open = access(&ctx).any_open;
+        let underline = alt || access(&ctx).keyboard;
         let font = egui::FontId::proportional(13.0);
-        for (name, entries) in &tree {
+        let mut buttons = Vec::new();
+        for (n, (name, entries)) in tree.iter().enumerate() {
             let label = crate::i18n::menu(name);
+            let key = menu_key(name).filter(|_| underline);
             let galley = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text);
             let resp = bar_button(
                 ui,
@@ -904,26 +1211,41 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 |ui, rect, open| {
                     // White reads on the dark theme's open fill; the light theme's is pale.
                     let color = if open && crate::theme::luminance(t.tab_active) < 0.6 { t.on_accent } else { t.text };
-                    ui.painter().galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley.clone(), color);
+                    let at = rect.center() - galley.size() / 2.0;
+                    match key {
+                        Some(key) => ui.painter().galley(at, key_galley(ui, label, key, font.clone(), color), color),
+                        None => ui.painter().galley_with_override_text_color(at, galley.clone(), color),
+                    }
                 },
             );
+            keep_arrows(ui, &resp);
             let popup = egui::Popup::default_response_id(&resp);
-            let open = egui::Popup::is_id_open(ui.ctx(), popup);
-            if was_open && !open && resp.hovered() {
-                egui::Popup::open_id(ui.ctx(), popup);
+            let open = egui::Popup::is_id_open(&ctx, popup);
+            if open_now == Some(n) {
+                egui::Popup::open_id(&ctx, popup);
+                access_mut(&ctx, |a| (a.keyboard, a.focus_first) = (true, Some(popup)));
+            } else if was_open && !open && resp.hovered() && !access(&ctx).keyboard {
+                egui::Popup::open_id(&ctx, popup);
             }
-            any_open |= open;
+            if focus_bar && n == 0 {
+                resp.request_focus();
+            }
+            if resp.has_focus() && !open && resp.clicked() && !resp.clicked_by(egui::PointerButton::Primary) {
+                // Enter on the name: egui opens the menu.
+                access_mut(&ctx, |a| a.focus_first = Some(popup));
+            }
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, label));
             crate::control::record_widget(ui, &resp, label, "button", Some(open));
+            buttons.push((resp.id, popup));
             let config = menu_config();
             egui::Popup::menu(&resp)
                 .gap(1.0)
                 .close_behavior(config.close_behavior)
                 .style(config.style.clone())
                 .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
-                .show(|ui| menu_rows(ui, entries, MENU_ROW_WIDTH, true, &mut clicked));
+                .show(|ui| menu_rows(ui, entries, MENU_ROW_WIDTH, true, row_keys(name), popup, &mut clicked));
         }
-        ui.data_mut(|d| d.insert_temp(any_open_id, any_open));
+        bar_keys(&ctx, &buttons, open_now.is_some() || focus_bar);
     });
     if let Some(id) = clicked {
         activate(app, &id);
