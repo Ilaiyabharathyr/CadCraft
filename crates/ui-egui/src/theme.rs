@@ -448,9 +448,16 @@ pub fn cjk_font() -> Option<&'static std::path::Path> {
     None
 }
 
-/// Whether the interface can show `language`: Chinese needs an installed CJK font.
+/// Whether the interface can show `language`: Chinese needs an installed CJK font and Thai an
+/// installed Thai one.
 pub fn can_show(language: &str) -> bool {
-    !language.starts_with("zh") || cjk_font().is_some()
+    if language.starts_with("zh") {
+        cjk_font().is_some()
+    } else if language == "th" {
+        thai_font().is_some()
+    } else {
+        true
+    }
 }
 
 /// egui's visuals for `theme`, from its tokens.

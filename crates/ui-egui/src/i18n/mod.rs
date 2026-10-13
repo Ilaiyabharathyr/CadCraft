@@ -31,10 +31,12 @@ pub enum Preference {
     French,
     #[serde(rename = "zh")]
     Chinese,
+    #[serde(rename = "th")]
+    Thai,
 }
 
 impl Preference {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Auto,
         Self::English,
         Self::Ukrainian,
@@ -45,6 +47,7 @@ impl Preference {
         Self::Russian,
         Self::French,
         Self::Chinese,
+        Self::Thai,
     ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
@@ -68,6 +71,7 @@ impl Preference {
             Self::Russian => "ru",
             Self::French => "fr",
             Self::Chinese => "zh",
+            Self::Thai => "th",
         }
     }
 
@@ -83,6 +87,7 @@ impl Preference {
             Self::Russian => "Русский",
             Self::French => "Français",
             Self::Chinese => "简体中文",
+            Self::Thai => "ไทย",
         }
     }
 
@@ -106,6 +111,7 @@ impl Preference {
             Self::Russian => "ru",
             Self::French => "fr",
             Self::Chinese => "zh",
+            Self::Thai => "th",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -122,7 +128,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 9] = [
+pub static LANGUAGES: [Language; 10] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -147,6 +153,9 @@ pub static LANGUAGES: [Language; 9] = [
     // Chinese has no grammatical plural: both `@plural` forms read the same. Its glyphs come from
     // an installed CJK font (`theme::cjk_font`); without one the interface stays English.
     Language { code: "zh", name: "简体中文", source: include_str!("zh.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Thai has no grammatical plural either. Its glyphs come from an installed Thai font
+    // (`theme::thai_font`); without one the interface stays English.
+    Language { code: "th", name: "ไทย", source: include_str!("th.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.

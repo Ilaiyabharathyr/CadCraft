@@ -257,7 +257,7 @@ impl CadApp {
     }
 
     /// The interface language shown: the chosen one, or English when this computer has no font
-    /// for it (Chinese without an installed CJK font would be boxes).
+    /// for it (Chinese or Thai without an installed font for the script would be boxes).
     pub fn language(&self) -> &'static str {
         let l = self.ui.interface_language.resolve(&self.system_languages);
         if theme::can_show(l) { l } else { "en" }
