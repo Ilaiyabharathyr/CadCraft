@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::assoc::{detach, same_shape};
 use super::{GRADIENT_NAMES, ORIGIN_KW, OriginMode, closed_loop, gradient_name, island_style};
 use crate::cmd::helpers::lwpoly;
-use crate::cmd::{bad, bool_or, point_param, str_param, targets};
+use crate::cmd::{bad, bool_or, point_param, size_param, str_param, targets};
 use crate::{Accept, Input, Interactive, Picker, Prompt, Result, Session, Step};
 
 /// Upper bound on hatches edited by one call.
@@ -146,9 +146,10 @@ fn properties(h: &mut Hatch, p: &Value) {
     if let Some(v) = str_param(p, "pattern").map(str::trim).filter(|v| !v.is_empty()) {
         h.pattern = v.to_ascii_uppercase();
         h.solid = h.pattern == "SOLID";
+        // A named pattern, SOLID included, replaces the gradient fill; the renderer draws the
+        // gradient first when it is set.
+        h.gradient = None;
         if !h.solid {
-            // A named pattern replaces the gradient fill; the renderer draws the gradient first when it is set.
-            h.gradient = None;
             // A library pattern is drawn from the library; a loaded .pat pattern brings its lines;
             // any other name is the hatch's own and keeps its definition.
             if cadcraft_doc::library::pattern(&h.pattern).is_some() {
@@ -247,7 +248,19 @@ fn gradient_edit(p: &Value) -> Result<Option<GradientEdit>> {
     Ok(Some(GradientEdit { name, color1: color("color1")?, color2: color("color2")?, angle, centered }))
 }
 
+/// An explicit `scale` must be positive and an explicit `angle` a number, checked before anything
+/// is edited so a refused request changes nothing (absent and null leave them as they are).
+fn check_numbers(p: &Value) -> Result<()> {
+    size_param("hatchedit", p, "scale", false)?;
+    match p.get("angle") {
+        None | Some(Value::Null) => Ok(()),
+        Some(v) if v.as_f64().is_some_and(f64::is_finite) => Ok(()),
+        Some(_) => Err(bad("hatchedit", "`angle` must be a number of degrees")),
+    }
+}
+
 pub(super) fn run_hatchedit(s: &mut Session, p: &Value) -> Result<Value> {
+    check_numbers(p)?;
     let hs = hatches(s, p)?;
     let style = match str_param(p, "style") {
         Some(t) => Some(island_style(t).ok_or_else(|| bad("hatchedit", "`style` is \"normal\", \"outer\" or \"ignore\""))?),

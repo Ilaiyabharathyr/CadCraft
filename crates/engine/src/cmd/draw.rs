@@ -378,7 +378,7 @@ fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
         attach,
         rotation: f64_or(p, "rotation", 0.0).to_radians(),
         style,
-        contents: super::mtext_opts::json_paragraphs(p, text.replace('\n', "\\P"))?,
+        contents: super::mtext_opts::json_paragraphs(p, text.replace('\n', "\\P"), height)?,
         line_spacing: f64_or(p, "lineSpacing", 1.0),
         line_spacing_exact: bool_or(p, "lineSpacingExact", false),
         columns: super::mtext_opts::json_columns(p, height, width)?,
@@ -937,11 +937,17 @@ impl Interactive for PolygonM {
                 s.last_used.polygon_circumscribed = !ins;
             }
             (Some(c), Some(ins), Input::Point(p)) => {
+                if c.near(p, 1e-12) {
+                    return Err(crate::EngineError::Other("Value must be positive and nonzero.".into()));
+                }
                 s.add_entity(lwpoly(polygon_vertices(c, n, p, ins), true))?;
                 return Ok(Step::Done);
             }
             (Some(c), Some(ins), Input::Text(t)) => {
                 let r = number(&t).ok_or_else(|| crate::EngineError::Other("Requires numeric distance or point.".into()))?;
+                if !r.is_finite() || r <= 0.0 {
+                    return Err(crate::EngineError::Other("Value must be positive and nonzero.".into()));
+                }
                 let rp = polygon_typed_radius_point(c, n, r, ins);
                 s.add_entity(lwpoly(polygon_vertices(c, n, rp, ins), true))?;
                 return Ok(Step::Done);
@@ -1432,11 +1438,22 @@ struct TextM {
     justify: (HAlign, VAlign),
     asking_justify: bool,
     line: usize,
+    /// Run by a LISP routine (`command`): one line of text ends the command, as AutoLISP's
+    /// `command` runs TEXT; typed and in scripts each line asks for the next.
+    single_line: bool,
 }
 
 impl TextM {
-    fn new(_s: &Session) -> Self {
-        TextM { at: None, height: None, rotation: None, justify: (HAlign::Left, VAlign::Baseline), asking_justify: false, line: 0 }
+    fn new(s: &Session) -> Self {
+        TextM {
+            at: None,
+            height: None,
+            rotation: None,
+            justify: (HAlign::Left, VAlign::Baseline),
+            asking_justify: false,
+            line: 0,
+            single_line: s.lisp_running(),
+        }
     }
 }
 
@@ -1497,6 +1514,9 @@ impl Interactive for TextM {
                 let k = make_text(s, at, &t, h, r, self.justify);
                 s.add_entity(k)?;
                 self.line += 1;
+                if self.single_line {
+                    return Ok(Step::Done);
+                }
             }
             (Some(_), Some(_), Some(_), Input::Enter) => return Ok(Step::Done),
             _ => {}

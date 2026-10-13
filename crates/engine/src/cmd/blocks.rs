@@ -43,6 +43,14 @@ pub fn specs() -> Vec<CommandSpec> {
         attedit::dash_attedit_spec(),
         CommandSpec::new("wblock", "Write Block", run_wblock).alias(&["w"]).params("{path, name? | handles?, base?}"),
         CommandSpec::new("base", "Base", run_base).menu(&["Draw", "Block", "Base"]).params("{at: [x,y]}"),
+        CommandSpec::new("blocks.dynamic", "Dynamic Block Data", run_dynamic)
+            .params("{name (a block, or \"*Model_Space\" for a drawing that is a dynamic block's own)} → {parameters, actions, other} | null (not a dynamic block)")
+            .enabled(has_doc)
+            .noundo(),
+        CommandSpec::new("blocks.reference", "Dynamic Block Reference", run_reference)
+            .params("{handle (a block reference)} → {definition, values (by parameter graph id), properties: [{name, value, choices}]} | null (not a dynamic block reference)")
+            .enabled(has_doc)
+            .noundo(),
         CommandSpec::new("purge", "Purge", purge::run)
             .alias(&["pu", "-purge"])
             .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *)} → purged")
@@ -326,9 +334,38 @@ fn run_base(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
     let d = s.doc()?;
-    Ok(
-        json!({ "blocks": d.blocks.values().filter(|b| !b.anonymous).map(|b| json!({"name": b.name, "entities": b.entities.len(), "base": [b.base.x, b.base.y], "description": b.description})).collect::<Vec<_>>() }),
-    )
+    let block = |b: &Block| {
+        let dynamic = cadcraft_doc::dynblock::dynamic_block(d, &b.name).is_some();
+        json!({"name": b.name, "entities": b.entities.len(), "base": [b.base.x, b.base.y], "description": b.description, "dynamic": dynamic})
+    };
+    Ok(json!({ "blocks": d.blocks.values().filter(|b| !b.anonymous).map(|b| block(b)).collect::<Vec<_>>() }))
+}
+
+/// A dynamic block's parameters and actions as read from the file (null for a block that has
+/// none).
+fn run_dynamic(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = str_param(p, "name").ok_or_else(|| bad("blocks.dynamic", "`name` is required"))?;
+    let d = s.doc()?;
+    if d.block(name).is_none() && !name.trim().eq_ignore_ascii_case("*Model_Space") {
+        return Err(bad("blocks.dynamic", format!("no block `{name}`")));
+    }
+    serde_json::to_value(cadcraft_doc::dynblock::dynamic_block(d, name)).map_err(|e| bad("blocks.dynamic", e.to_string()))
+}
+
+/// The dynamic block a block reference shows, the values it was given and its custom properties
+/// (null for any other reference).
+fn run_reference(s: &mut Session, p: &Value) -> Result<Value> {
+    let h = super::curves::handle_param(p, "handle").ok_or_else(|| bad("blocks.reference", "`handle` is required"))?;
+    let d = s.doc()?;
+    match d.entity(h).map(|e| &e.kind) {
+        Some(EntityKind::Insert(_)) => {}
+        Some(_) => return Err(bad("blocks.reference", "`handle` is not a block reference")),
+        None => return Err(bad("blocks.reference", format!("no object {}", h.hex()))),
+    }
+    let (Some(r), Some((_, properties))) = (cadcraft_doc::dynblock::reference(d, h), cadcraft_doc::dynblock::custom_properties(d, h)) else {
+        return Ok(Value::Null);
+    };
+    Ok(json!({ "definition": r.definition, "values": r.values, "properties": properties }))
 }
 
 // ---------------- interactive ----------------

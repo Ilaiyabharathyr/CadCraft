@@ -453,6 +453,13 @@ fn add_hatches(s: &mut Session, st: &HatchSettings, groups: Vec<Vec<HatchLoop>>)
 
 fn run_hatch(s: &mut Session, p: &Value) -> Result<Value> {
     patfile::load_param(p)?;
+    // Like the prompt: a name without a definition would be drawn as ANSI31.
+    if let Some(up) = str_param(p, "pattern").map(str::to_ascii_uppercase)
+        && cadcraft_doc::library::pattern(&up).is_none()
+        && patfile::user_pattern(&up).is_none()
+    {
+        return Err(bad("hatch", format!("unknown pattern {up}")));
+    }
     make(s, p, false)
 }
 fn run_gradient(s: &mut Session, p: &Value) -> Result<Value> {
@@ -792,6 +799,21 @@ mod tests {
     }
 
     #[test]
+    fn hatchedit_solid_replaces_gradient() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        s.execute("gradient", &json!({ "points": [[5, 5]], "color1": "1", "color2": "3" })).unwrap();
+        let (h, before) = only_hatch(&s);
+        assert!(before.gradient.is_some());
+        s.execute("hatchedit", &json!({ "handles": [h.clone()], "pattern": "SOLID" })).unwrap();
+        let (h2, hatch) = only_hatch(&s);
+        assert_eq!(h2, h);
+        assert!(hatch.solid);
+        assert!(hatch.gradient.is_none(), "SOLID is a plain fill, not the gradient");
+        assert_eq!(hatch.loops, before.loops);
+    }
+
+    #[test]
     fn the_pattern_picker_is_offered_and_its_choice_sets_the_pattern() {
         let mut s = Session::new();
         s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
@@ -816,6 +838,19 @@ mod tests {
         s.cancel();
         s.start("gradient").unwrap();
         assert!(s.current_prompt().unwrap().picker.is_none());
+    }
+
+    #[test]
+    fn json_hatch_refuses_an_undefined_pattern() {
+        let mut s = Session::new();
+        s.execute("rectang", &json!({ "p1": [0, 0], "p2": [10, 10] })).unwrap();
+        let e = s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": "NOPE" })).unwrap_err();
+        assert!(e.to_string().contains("unknown pattern NOPE"), "{e}");
+        assert_eq!(s.doc().unwrap().model.len(), 1, "only the rectangle");
+        for name in ["ansi31", "SOLID"] {
+            s.execute("hatch", &json!({ "points": [[5, 5]], "pattern": name })).unwrap();
+        }
+        assert_eq!(s.doc().unwrap().model.len(), 3);
     }
 
     #[test]

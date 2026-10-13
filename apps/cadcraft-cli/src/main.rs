@@ -172,6 +172,11 @@ fn install_io() {
     cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
         cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
+    // AutoLISP's entget, entmake and entmod see entities as DXF groups.
+    cadcraft_engine::cmd::file::set_entity_codec(cadcraft_engine::cmd::file::EntityCodec {
+        groups: cadcraft_io::entity_groups,
+        entity: cadcraft_io::entity_from_groups,
+    });
 }
 
 fn open(s: &mut Session, path: &str) -> Result<(), String> {
@@ -267,8 +272,22 @@ fn convert(args: &[String]) -> Result<(), String> {
     check_framed_output(framing, Some(o))?;
     let mut s = Session::empty();
     open(&mut s, i)?;
+    if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
+        eprintln!("{m}");
+    }
     let window = export_window(&s, framing, None)?;
     export_framed(&s, o, window)
+}
+
+/// The warning for the records of `path` the reader could not place, or `None` when there are none.
+fn skipped_message(d: &cadcraft_engine::doc::Drawing, path: &str) -> Option<String> {
+    let n = d.skipped_records.values().fold(0usize, |a, n| a.saturating_add(*n));
+    if n == 0 {
+        return None;
+    }
+    let list: Vec<String> = d.skipped_records.iter().map(|(section, n)| format!("{section}: {n}")).collect();
+    let records = if n == 1 { "record" } else { "records" };
+    Some(format!("{path}: {n} {records} could not be read and are left out ({})", list.join(", ")))
 }
 
 fn run(args: &[String]) -> Result<(), String> {

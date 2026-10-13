@@ -22,6 +22,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod spacemouse;
+mod system_animations;
 mod workspace;
 
 use cadcraft_engine::Session;
@@ -32,6 +33,8 @@ struct App {
     spacemouse: spacemouse::SpaceMouse,
     /// The desktop's light/dark choice where winit reports none (Linux, the BSDs).
     desktop_theme: desktop_theme::DesktopTheme,
+    /// Whether the OS shows animations, for the System choice of View ▸ Accessibility ▸ Animation Effects.
+    system_animations: system_animations::SystemAnimations,
     workspace: workspace::Workspace,
     workspace_error: Option<String>,
     #[cfg(target_os = "macos")]
@@ -72,6 +75,7 @@ impl eframe::App for App {
                 m.poll(&mut self.cad, ctx);
             }
         }
+        self.cad.system_animations = self.system_animations.current();
         self.cad.logic(ctx);
         self.spacemouse.poll(&mut self.cad, ctx);
         self.persist_workspace(false);
@@ -120,6 +124,11 @@ pub fn install_io() {
     cadcraft_engine::cmd::plotters::set_system_printers(cadcraft_engine::cmd::plotters::SystemPrinters {
         list: cadcraft_io::cups::printers,
         print: |j| cadcraft_io::cups::print(j.printer, j.paper, j.copies, j.title, j.pdf),
+    });
+    // AutoLISP's entget, entmake and entmod see entities as DXF groups.
+    cadcraft_engine::cmd::file::set_entity_codec(cadcraft_engine::cmd::file::EntityCodec {
+        groups: cadcraft_io::entity_groups,
+        entity: cadcraft_io::entity_from_groups,
     });
 }
 
@@ -328,6 +337,13 @@ fn main() -> eframe::Result {
             // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
             if let Some(dir) = config_dir() {
                 app.enable_autosave(&dir.join("autosave"));
+                // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
+                // folder is made so it is there to put them in.
+                let support = dir.join("support");
+                if let Err(e) = std::fs::create_dir_all(&support) {
+                    log::warn!("no LISP support folder {}: {e}", support.display());
+                }
+                app.session.set_lisp_support_dir(Some(support));
             }
             app.integrated_titlebar = cfg!(target_os = "macos");
             if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
@@ -351,8 +367,11 @@ fn main() -> eframe::Result {
             }
             let ctx = cc.egui_ctx.clone();
             let desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            let system_animations = system_animations::SystemAnimations::start(move || ctx.request_repaint());
             Ok(Box::new(App {
                 desktop_theme,
+                system_animations,
                 cad: app,
                 spacemouse: spacemouse::SpaceMouse::start(cc.egui_ctx.clone()),
                 workspace,
