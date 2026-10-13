@@ -586,13 +586,6 @@ mod tests {
             item_ids(entries, &mut ids);
             assert!(ids.iter().any(|i| i == id), "{id} moved out of the {top} menu");
         }
-        if std::env::var_os("CADCRAFT_MENU_COUNTS").is_some() {
-            for (menu, entries) in &tree {
-                let mut ids = Vec::new();
-                item_ids(entries, &mut ids);
-                println!("{menu}: {} commands, {} before", ids.len(), menu_commands().iter().filter(|(_, top)| top == menu).count());
-            }
-        }
     }
 
     #[test]
@@ -612,6 +605,30 @@ mod tests {
         for (menu, entries) in menus::tree(&app) {
             check(&menu, &entries);
         }
+    }
+
+    /// Painting has a catch-all arm for the menu icons, so a variant without a drawing would
+    /// leave its row's slot empty: every icon the layout names must paint something.
+    #[test]
+    fn every_layout_icon_draws() {
+        let ctx = egui::Context::default();
+        let mut blank = Vec::new();
+        let mut seen = 0;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for row in all_rows() {
+                let (Row::Cmd { icon: Some(icon), .. } | Row::Sub { icon: Some(icon), .. }) = row else { continue };
+                let layer = egui::LayerId::new(egui::Order::Background, egui::Id::new(("layout icon", icon)));
+                let slot = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(18.0));
+                crate::icons::paint(&ui.ctx().layer_painter(layer), slot, icon, false);
+                seen += 1;
+                if ui.ctx().graphics(|g| g.get(layer).is_none_or(|shapes| shapes.is_empty())) {
+                    blank.push(icon);
+                }
+            }
+        });
+        output.textures_delta.clear();
+        assert!(seen > 100, "{seen} rows have an icon");
+        assert!(blank.is_empty(), "these icons paint nothing: {blank:?}");
     }
 
     /// A flattened row is translated part by part, so each part must be a string the catalogs
