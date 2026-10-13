@@ -685,6 +685,30 @@ fn editing_commands_leave_locked_layer_objects_alone() {
 }
 
 #[test]
+fn pedit_preselected_line_asks_to_convert() {
+    // Yes converts the pre-selected line and continues with the option prompt.
+    let mut s = Session::new();
+    let l = h(&s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap());
+    s.set_selection(vec![Handle::parse_hex(&l).unwrap()]);
+    s.cmdline("pedit").unwrap();
+    assert!(s.running.is_some());
+    assert!(matches!(kind(&s, &l), EntityKind::Line(_)), "nothing changes before the answer");
+    s.cmdline("y").unwrap();
+    assert!(matches!(kind(&s, &l), EntityKind::LwPolyline(_)));
+    s.cmdline("c").unwrap();
+    s.cmdline("").unwrap();
+    assert!(s.running.is_none());
+
+    // No ends the command and leaves the line alone.
+    let m = h(&s.execute("line", &json!({"points": [[0, 5], [10, 5]]})).unwrap());
+    s.set_selection(vec![Handle::parse_hex(&m).unwrap()]);
+    s.cmdline("pedit").unwrap();
+    s.cmdline("n").unwrap();
+    assert!(s.running.is_none());
+    assert!(matches!(kind(&s, &m), EntityKind::Line(_)));
+}
+
+#[test]
 fn offset_polyline_arc_bulge_follows_joined_endpoints() {
     let mut s = Session::new();
     // A diagonal line into a CCW semicircle centred on (10, 5); offsetting inward moves the arc start.
