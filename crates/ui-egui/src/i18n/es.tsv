@@ -1234,3 +1234,59 @@
 	Left device button: zoom extents. Right device button: calibrate.	Botón izquierdo del dispositivo: zoom a la extensión. Botón derecho: calibrar.
 	Hatch Pattern	Patrón de sombreado
 	Search for pattern	Buscar patrón
+
+# Android tablet controls and native file services.
+	Tablet Settings	Ajustes de tableta
+	Draw with pen only	Dibujar solo con el lápiz
+	Double tap to cancel	Doble toque para cancelar
+	Pen button to cancel	Botón del lápiz para cancelar
+	Compact controls	Controles compactos
+	Double tap delay (ms)	Intervalo del doble toque (ms)
+	Render cache (MB)	Caché de dibujo (MB)
+	Recovery interval (s)	Intervalo de recuperación (s)
+	Drawings	Dibujos
+	Open or save a drawing to see it here	Abre o guarda un dibujo para verlo aquí
+	Sample drawing	Dibujo de ejemplo
+	Export file	Exportar archivo
+	Export PDF	Exportar PDF
+	Share drawing	Compartir dibujo
+	Share PDF	Compartir PDF
+	Open linked drawing	Abrir dibujo vinculado
+	Open project folder	Abrir carpeta de proyecto
+	Command or value	Comando o valor
+	Drawing name	Nombre del dibujo
+	Choose drawing	Elegir dibujo
+	Drawing exported	Dibujo exportado
+	Linked drawing saved	Dibujo vinculado guardado
+	External save failed; local copy and backup kept	Falló el guardado externo; se conservaron la copia local y el respaldo
+	Read-only provider; opened a copy	Proveedor de solo lectura; se abrió una copia
+	File operation failed	Falló la operación de archivo
+	File saved	Archivo guardado
+	Save failed	Falló el guardado
+	Saving…	Guardando…
+	A file operation is already in progress	Ya hay una operación de archivo en curso
+	Recovery could not be saved	No se pudo guardar la recuperación
+	The drawing has not been saved in the app	El dibujo no se ha guardado en la aplicación
+	Could not prepare a shared file	No se pudo preparar el archivo para compartir
+	The provider did not return a writable file	El proveedor no devolvió un archivo con permiso de escritura
+	Choose a DXF or DWG drawing	Elige un dibujo DXF o DWG
+	Could not create the import folder	No se pudo crear la carpeta de importación
+	The provider did not return a readable file	El proveedor no devolvió un archivo legible
+	Could not remember the linked drawing	No se pudo recordar el dibujo vinculado
+	Could not create a backup folder	No se pudo crear la carpeta de respaldo
+	Could not read the original for backup	No se pudo leer el original para respaldarlo
+	Could not preserve the original backup	No se pudo conservar el respaldo del original
+	Could not create the project folder	No se pudo crear la carpeta de proyecto
+	Choose a folder containing DXF or DWG drawings	Elige una carpeta con dibujos DXF o DWG
+	Project folders are nested too deeply	Las carpetas del proyecto tienen demasiados niveles
+	Could not read the project folder	No se pudo leer la carpeta de proyecto
+	Project contains too many files or folders	El proyecto contiene demasiados archivos o carpetas
+	Could not create a project subfolder	No se pudo crear una subcarpeta de proyecto
+	Project contains duplicate file names	El proyecto contiene nombres de archivo duplicados
+	Could not read a project file	No se pudo leer un archivo del proyecto
+	This file exceeds the available memory budget	Este archivo supera el límite de memoria disponible
+	More	Más
+	Grid	Rejilla
+	Ortho	Ortogonal
+	Command	Comando
+	Keyboard	Teclado

@@ -1,24 +1,56 @@
-//! Platform-independent tablet shell, also runnable on a desktop for layout inspection.
+//! Tablet host: native file services, bounded workers and recovery over the shared CAD UI.
 #![forbid(unsafe_code)]
 
-use cadcraft_engine::Session;
-use cadcraft_ui_egui::{CadApp, Services};
+use crate::{
+    jobs::{self, Action},
+    recovery::{self, Loaded},
+};
+use cadcraft_engine::{Session, doc::Space};
+use cadcraft_ui_egui::{CadApp, Services, tablet::FileAction};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, mpsc::Receiver},
     time::{Duration, Instant},
 };
+
+#[derive(PartialEq, Eq)]
+struct Key {
+    uid: u64,
+    revision: u64,
+    pointer: usize,
+    dirty: bool,
+    title: String,
+    path: Option<String>,
+    view: [u64; 3],
+    space: Space,
+    mspace: Option<cadcraft_engine::doc::Handle>,
+    binary: bool,
+}
 
 pub struct Shell {
     pub cad: CadApp,
     dir: PathBuf,
-    checkpoint_at: Instant,
-    checkpoint: Option<std::thread::JoinHandle<Result<(), String>>>,
-    checkpoint_key: Vec<(u64, u64, bool, String, Option<String>)>,
+    writer: recovery::Writer,
+    loader: Option<Receiver<Loaded>>,
+    known: bool,
+    retained: Vec<Option<Value>>,
+    restored: HashMap<u64, (Arc<cadcraft_engine::doc::Drawing>, String)>,
+    restore_order: HashMap<u64, usize>,
+    checkpoint_key: Vec<Key>,
     checkpoint_active: usize,
+    checkpoint_prefs: (String, String),
+    saves: jobs::Worker,
+    saving: bool,
+    name_uid: Option<u64>,
+    files: Vec<PathBuf>,
+    files_at: Instant,
+    files_refresh: bool,
+    render: Option<eframe::egui_wgpu::RenderState>,
+    cache_mib: u32,
     #[cfg(target_os = "android")]
-    poll_at: Instant,
+    native_language: Option<&'static str>,
 }
 
 fn install_io() {
@@ -32,18 +64,21 @@ fn install_io() {
     });
 }
 
-/// A save-as creates a distinct file; QSAVE subsequently writes its remembered path.
-fn save_path(dir: &Path, name: &str) -> Option<String> {
+fn filename(name: &str, extension: &str) -> String {
     let name: String = name.chars().take(180).map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c }).collect();
-    let name = if name.is_empty() || name == "." || name == ".." { "Drawing.dxf" } else { &name };
-    let stem = Path::new(name).file_stem()?.to_string_lossy();
-    let ext = Path::new(name).extension().map(|e| e.to_string_lossy()).unwrap_or_else(|| "dxf".into());
+    let name = if name.is_empty() || name == "." || name == ".." { "Drawing".into() } else { name };
+    let stem = Path::new(&name).file_stem().map_or_else(|| "Drawing".into(), |s| s.to_string_lossy().into_owned());
+    format!("{stem}.{extension}")
+}
+
+fn save_path(dir: &Path, name: &str) -> Option<String> {
+    let extension = Path::new(name).extension().and_then(|s| s.to_str()).filter(|e| e.eq_ignore_ascii_case("dwg")).unwrap_or("dxf");
+    let name = filename(name, extension);
+    let stem = Path::new(&name).file_stem()?.to_string_lossy();
     let folder = dir.join("drawings");
-    if std::fs::create_dir_all(&folder).is_err() {
-        return None;
-    }
+    std::fs::create_dir_all(&folder).ok()?;
     for i in 0..10_000 {
-        let path = folder.join(if i == 0 { format!("{stem}.{ext}") } else { format!("{stem}-{i}.{ext}") });
+        let path = folder.join(if i == 0 { name.clone() } else { format!("{stem}-{i}.{extension}") });
         if !path.exists() {
             return Some(path.to_string_lossy().into_owned());
         }
@@ -52,22 +87,33 @@ fn save_path(dir: &Path, name: &str) -> Option<String> {
 }
 
 fn files(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for folder in [dir.join("drawings"), dir.join("imports")] {
-        if let Ok(entries) = std::fs::read_dir(folder) {
+    fn visit(dir: &Path, depth: usize, out: &mut Vec<PathBuf>, folders: &mut usize) {
+        if depth > 8 || out.len() >= 1000 || *folders >= 1000 {
+            return;
+        }
+        *folders += 1;
+        if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.take(1000).filter_map(Result::ok) {
                 let path = entry.path();
                 if path.is_dir() {
-                    if let Ok(children) = std::fs::read_dir(path) {
-                        out.extend(children.take(16).filter_map(Result::ok).map(|entry| entry.path()));
-                    }
-                } else {
+                    visit(&path, depth + 1, out, folders);
+                } else if path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("dxf") || e.eq_ignore_ascii_case("dwg") || e.eq_ignore_ascii_case("pdf"))
+                {
                     out.push(path);
+                }
+                if out.len() >= 1000 {
+                    break;
                 }
             }
         }
     }
-    out.retain(|path| path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("dxf") || e.eq_ignore_ascii_case("dwg")));
+    let mut out = Vec::new();
+    let mut folders = 0;
+    for name in ["drawings", "imports", "exports", "linked-backups"] {
+        visit(&dir.join(name), 0, &mut out, &mut folders);
+    }
     out.sort();
     out
 }
@@ -100,172 +146,544 @@ impl Shell {
                 cad.load_profile(&profile);
             }
         }
+        let prefs = dir.join("tablet-preferences.json");
+        if std::fs::metadata(&prefs).is_ok_and(|m| m.len() <= 1 << 20)
+            && let Ok(bytes) = std::fs::read(prefs)
+            && let Ok(data) = serde_json::from_slice::<Value>(&bytes)
+        {
+            if let Some(prefs) = data.get("prefs").and_then(Value::as_str) {
+                cad.load_prefs(prefs);
+            }
+            if let Some(profile) = data.get("profile").and_then(Value::as_str) {
+                cad.load_profile(profile);
+            }
+        }
         cadcraft_ui_egui::tablet::configure(&mut cad);
         cc.egui_ctx.options_mut(|o| o.input_options.max_click_dist = 12.0);
-        cadcraft_engine::autosave::set_savetime(1);
+        // Keep the legacy recovery list, but use one session writer for tablet snapshots.
+        // SAVETIME remains the user's stored setting rather than being overwritten at launch.
         cad.enable_autosave(&dir.join("autosave"));
+        cad.autosave = None;
+        cad.enable_background_open_notifications(cc.egui_ctx.clone());
         if let Some(rs) = &cc.wgpu_render_state {
             cad.set_wgpu(rs);
         }
-        if let Err(error) = restore(&mut cad, &dir) {
-            cad.set_status(format!("Recovery: {error}"));
+        let writer = recovery::Writer::start(dir.clone(), cc.egui_ctx.clone())?;
+        #[cfg(target_os = "android")]
+        crate::platform::register(cc.egui_ctx.clone(), writer.control.clone());
+        #[cfg(target_os = "android")]
+        let max_bytes = crate::platform::memory_budget().unwrap_or(64 << 20);
+        #[cfg(not(target_os = "android"))]
+        let max_bytes = 256 << 20;
+        cad.tablet_prefs.cache_mib = cad.tablet_prefs.cache_mib.min((max_bytes >> 22).clamp(8, 64) as u32);
+        let cache_mib = cad.tablet_prefs.cache_mib;
+        if let Some(rs) = &cc.wgpu_render_state {
+            cadcraft_ui_egui::gpu::set_cache_budget(rs, cache_mib);
         }
-        if cad.session.docs.is_empty() {
-            cad.session.new_drawing(false);
-        }
-        cad.enable_background_open();
+        let loader = recovery::load(dir.clone(), max_bytes, cc.egui_ctx.clone())?;
+        let saves = jobs::Worker::start(cc.egui_ctx.clone())?;
         Ok(Self {
             cad,
             dir,
-            checkpoint_at: Instant::now(),
-            checkpoint: None,
+            writer,
+            loader: Some(loader),
+            known: false,
+            retained: Vec::new(),
+            restored: HashMap::new(),
+            restore_order: HashMap::new(),
             checkpoint_key: Vec::new(),
-            checkpoint_active: 0,
+            checkpoint_active: usize::MAX,
+            checkpoint_prefs: (String::new(), String::new()),
+            saves,
+            saving: false,
+            name_uid: None,
+            files: Vec::new(),
+            files_at: Instant::now(),
+            files_refresh: true,
+            render: cc.wgpu_render_state.clone(),
+            cache_mib,
             #[cfg(target_os = "android")]
-            poll_at: Instant::now(),
+            native_language: None,
         })
     }
 
-    fn checkpoint(&mut self, force: bool) {
-        if self.checkpoint.as_ref().is_some_and(|h| !h.is_finished()) {
-            return;
-        }
-        if let Some(handle) = self.checkpoint.take() {
-            match handle.join() {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    self.checkpoint_key.clear();
-                    self.cad.set_status(format!("Recovery could not be saved: {error}"));
+    fn restore_tick(&mut self) {
+        while let Some(event) = self.loader.as_ref().and_then(|r| r.try_recv().ok()) {
+            match event {
+                Loaded::Index(records) => {
+                    self.retained = records.into_iter().map(Some).collect();
+                    self.known = true;
                 }
-                Err(_) => {
-                    self.checkpoint_key.clear();
-                    self.cad.set_status("Recovery could not be saved");
+                Loaded::Drawing { index, state, file } => {
+                    if let Some(record) = self.retained.get_mut(index) {
+                        *record = None;
+                    }
+                    self.restored.insert(state.uid, (state.doc.clone(), file));
+                    self.restore_order.insert(state.uid, index);
+                    self.cad.session.docs.push(*state);
+                    self.cad.ui.start_tab = false;
+                }
+                Loaded::Notice(message) => self.cad.set_status(message),
+                Loaded::Done => {
+                    let uid = self.cad.session.state().map(|s| s.uid).ok();
+                    self.cad.session.docs.sort_by_key(|s| self.restore_order.get(&s.uid).copied().unwrap_or(usize::MAX));
+                    if let Some(index) = self.cad.session.docs.iter().position(|s| Some(s.uid) == uid) {
+                        self.cad.session.active = index;
+                    }
+                    if self.cad.session.docs.is_empty() {
+                        self.cad.session.new_drawing(false);
+                    }
+                    self.known = true;
+                    self.loader = None;
+                    break;
                 }
             }
         }
-        if !force && self.checkpoint_at.elapsed() < Duration::from_secs(5) {
+    }
+
+    fn checkpoint(&mut self) {
+        while let Ok(result) = self.writer.notices.try_recv() {
+            if let Err(error) = result {
+                self.checkpoint_key.clear();
+                self.checkpoint_prefs = (String::new(), String::new());
+                self.cad.set_status(format!("{}: {error}", cadcraft_ui_egui::i18n::t("Recovery could not be saved")));
+            }
+        }
+        if !self.known {
             return;
         }
-        self.checkpoint_at = Instant::now();
-        let key: Vec<_> = self.cad.session.docs.iter().map(|d| (d.uid, d.revision, d.is_dirty(), d.title.clone(), d.path.clone())).collect();
-        if key == self.checkpoint_key && self.cad.session.active == self.checkpoint_active {
-            return;
-        }
-        let docs: Vec<_> = self
+        self.writer.control.set_interval(self.cad.tablet_prefs.recovery_seconds);
+        let key: Vec<_> = self
             .cad
             .session
             .docs
             .iter()
             .map(|d| {
-                let view = d.view();
-                (
-                    d.doc.clone(),
-                    json!({"title": d.title, "path": d.path, "dirty": d.is_dirty(),
-                "center": [view.center.x, view.center.y], "height": view.height}),
-                )
+                let view = d.paper_view();
+                Key {
+                    uid: d.uid,
+                    revision: d.revision,
+                    pointer: Arc::as_ptr(&d.doc) as usize,
+                    dirty: d.is_dirty(),
+                    title: d.title.clone(),
+                    path: d.path.clone(),
+                    view: [view.center.x.to_bits(), view.center.y.to_bits(), view.height.to_bits()],
+                    space: d.space.clone(),
+                    mspace: d.mspace,
+                    binary: d.binary_dxf,
+                }
             })
             .collect();
-        let dir = self.dir.clone();
-        let active = self.cad.session.active;
-        match std::thread::Builder::new().name("tablet-recovery".into()).spawn(move || checkpoint(&dir, docs, active)) {
-            Ok(handle) => {
-                self.checkpoint = Some(handle);
-                self.checkpoint_key = key;
-                self.checkpoint_active = active;
+        let prefs = (self.cad.prefs_json(), self.cad.profile_json());
+        if key == self.checkpoint_key && self.cad.session.active == self.checkpoint_active && prefs == self.checkpoint_prefs {
+            return;
+        }
+        self.restored.retain(|uid, (doc, _)| self.cad.session.docs.iter().any(|s| s.uid == *uid && Arc::ptr_eq(doc, &s.doc)));
+        let docs = self
+            .cad
+            .session
+            .docs
+            .iter()
+            .map(|d| {
+                let view = d.paper_view();
+                recovery::Document {
+                    uid: d.uid,
+                    drawing: d.doc.clone(),
+                    reuse: self.restored.get(&d.uid).map(|(_, file)| file.clone()),
+                    record: json!({"title": d.title, "path": d.path, "dirty": d.is_dirty(), "space": d.space, "mspace": d.mspace.map(|h| h.0),
+                    "center": [view.center.x, view.center.y], "height": view.height, "binaryDxf": d.binary_dxf}),
+                }
+            })
+            .collect();
+        self.writer.control.publish(recovery::Snapshot {
+            docs,
+            retained: self.retained.iter().flatten().cloned().collect(),
+            active: self.cad.session.active,
+            prefs: prefs.0.clone(),
+            profile: prefs.1.clone(),
+        });
+        self.checkpoint_key = key;
+        self.checkpoint_active = self.cad.session.active;
+        self.checkpoint_prefs = prefs;
+    }
+
+    fn request_name(&mut self) {
+        if self.saving || self.name_uid.is_some() {
+            self.cad.set_status(cadcraft_ui_egui::i18n::t("A file operation is already in progress"));
+            return;
+        }
+        let Ok(state) = self.cad.session.state() else { return };
+        let uid = state.uid;
+        let name = filename(&state.title, self.cad.ui.save_format.as_str());
+        self.name_uid = Some(uid);
+        #[cfg(target_os = "android")]
+        if let Err(error) = crate::platform::name(&name) {
+            self.name_uid = None;
+            self.cad.tablet_save_completed(uid, false);
+            self.cad.set_status(error);
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            self.name_uid = None;
+            self.start_job_for(Action::SaveAs, Some(name), uid);
+        }
+    }
+
+    fn start_job(&mut self, action: Action) {
+        if let Ok(state) = self.cad.session.state() {
+            self.start_job_for(action, None, state.uid);
+        }
+    }
+
+    fn start_job_for(&mut self, action: Action, name: Option<String>, uid: u64) {
+        if self.saving {
+            self.cad.tablet_save_completed(uid, false);
+            self.cad.set_status(cadcraft_ui_egui::i18n::t("A file operation is already in progress"));
+            return;
+        }
+        let Some(state) = self.cad.session.docs.iter().find(|d| d.uid == uid).cloned() else { return };
+        let path = if action == Action::Save {
+            state.path.clone().map(PathBuf::from)
+        } else if action == Action::SaveAs {
+            save_path(&self.dir, name.as_deref().unwrap_or(&state.title)).map(PathBuf::from)
+        } else {
+            let ext = if matches!(action, Action::Pdf | Action::SharePdf) {
+                "pdf"
+            } else {
+                state
+                    .path
+                    .as_deref()
+                    .and_then(|p| Path::new(p).extension())
+                    .and_then(|e| e.to_str())
+                    .filter(|e| e.eq_ignore_ascii_case("dwg"))
+                    .unwrap_or("dxf")
+            };
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+            let folder = self.dir.join("exports").join(stamp.to_string());
+            std::fs::create_dir_all(&folder).ok().map(|_| folder.join(filename(&state.title, ext)))
+        };
+        let Some(path) = path else {
+            self.cad.tablet_save_completed(uid, false);
+            self.cad.set_status("Could not create the save file");
+            return;
+        };
+        let job = jobs::Job {
+            action,
+            state,
+            path,
+            settings: self.cad.session.settings.clone(),
+            version: self.cad.ui.save_version.clone(),
+            viewport: self.cad.session.viewport_px,
+        };
+        match self.saves.submit(job) {
+            Ok(()) => {
+                self.saving = true;
+                self.cad.set_status(cadcraft_ui_egui::i18n::t("Saving…"));
             }
-            Err(error) => self.cad.set_status(format!("Recovery could not be saved: {error}")),
+            Err(error) => {
+                self.cad.tablet_save_completed(uid, false);
+                self.cad.set_status(error);
+            }
+        }
+    }
+
+    fn finish_jobs(&mut self) {
+        while let Ok(done) = self.saves.receive.try_recv() {
+            self.saving = false;
+            match done.result {
+                Ok((saved, path)) => {
+                    self.cad.set_status(format!(
+                        "{}: {}",
+                        cadcraft_ui_egui::i18n::t("File saved"),
+                        path.file_name().map_or_else(String::new, |s| s.to_string_lossy().into_owned())
+                    ));
+                    if matches!(done.action, Action::Save | Action::SaveAs) {
+                        if let Some(current) = self.cad.session.docs.iter_mut().find(|d| d.uid == done.uid) {
+                            jobs::acknowledge(current, &done.source, saved);
+                        }
+                        #[cfg(target_os = "android")]
+                        if let Err(error) = crate::platform::sync_linked(&path.to_string_lossy()) {
+                            self.cad.set_status(error);
+                        }
+                        self.cad.tablet_save_completed(done.uid, true);
+                    } else {
+                        #[cfg(target_os = "android")]
+                        {
+                            let name = path.file_name().map(|s| s.to_string_lossy()).unwrap_or_else(|| "Drawing.dxf".into());
+                            let result = if matches!(done.action, Action::Share | Action::SharePdf) {
+                                crate::platform::share(&path.to_string_lossy(), &name)
+                            } else {
+                                crate::platform::export(&path.to_string_lossy(), &name)
+                            };
+                            if let Err(error) = result {
+                                self.cad.set_status(error);
+                            }
+                        }
+                    }
+                    self.files_refresh = true;
+                }
+                Err(error) => {
+                    self.cad.tablet_save_completed(done.uid, false);
+                    self.cad.set_status(format!("{}: {error}", cadcraft_ui_egui::i18n::t("Save failed")));
+                }
+            }
+        }
+    }
+
+    fn file_action(&mut self) {
+        let Some(action) = self.cad.tablet_file_action.take() else { return };
+        match action {
+            FileAction::Save if self.cad.session.state().is_ok_and(|d| d.path.is_none()) => self.request_name(),
+            FileAction::Save => self.start_job(Action::Save),
+            FileAction::SaveAs => self.request_name(),
+            FileAction::Export => self.start_job(Action::Export),
+            FileAction::Pdf => self.start_job(Action::Pdf),
+            FileAction::Share => self.start_job(Action::Share),
+            FileAction::SharePdf => self.start_job(Action::SharePdf),
+            FileAction::Link | FileAction::Project => {
+                #[cfg(target_os = "android")]
+                if let Err(error) = crate::platform::pick_special(matches!(action, FileAction::Project)) {
+                    self.cad.set_status(error);
+                }
+                #[cfg(not(target_os = "android"))]
+                self.cad.set_status("This picker is available on Android");
+            }
+        }
+    }
+
+    pub fn trim_render_cache(&mut self) {
+        self.cad.canvas.trim_render_cache();
+        if let Some(rs) = &self.render {
+            cadcraft_ui_egui::gpu::trim_cache(rs);
         }
     }
 
     #[cfg(target_os = "android")]
     fn poll_documents(&mut self, ctx: &egui::Context) {
-        if std::mem::take(&mut self.cad.tablet_keyboard_requested)
-            && let Err(error) = crate::platform::input(&self.cad.cmd.buffer)
-        {
-            self.cad.set_status(format!("Keyboard: {error}"));
+        let language = self.cad.language();
+        if self.native_language != Some(language) {
+            let labels = cadcraft_ui_egui::i18n::with_language(language, || {
+                let keys = [
+                    "Command or value",
+                    "Drawing name",
+                    "Cancel",
+                    "Enter",
+                    "Save",
+                    "Open",
+                    "Export",
+                    "Keyboard",
+                    "Choose drawing",
+                    "Drawing exported",
+                    "Linked drawing saved",
+                    "External save failed; local copy and backup kept",
+                    "Read-only provider; opened a copy",
+                    "File operation failed",
+                    "The drawing has not been saved in the app",
+                    "Could not prepare a shared file",
+                    "The provider did not return a writable file",
+                    "Choose a DXF or DWG drawing",
+                    "Could not create the import folder",
+                    "The provider did not return a readable file",
+                    "Could not remember the linked drawing",
+                    "Could not create a backup folder",
+                    "Could not read the original for backup",
+                    "Could not preserve the original backup",
+                    "Could not create the project folder",
+                    "Choose a folder containing DXF or DWG drawings",
+                    "Project folders are nested too deeply",
+                    "Could not read the project folder",
+                    "Project contains too many files or folders",
+                    "Could not create a project subfolder",
+                    "Project contains duplicate file names",
+                    "Could not read a project file",
+                    "This file exceeds the available memory budget",
+                ];
+                let labels: serde_json::Map<String, Value> =
+                    keys.into_iter().map(|key| (key.into(), json!(cadcraft_ui_egui::i18n::t(key)))).collect();
+                Value::Object(labels).to_string()
+            });
+            if crate::platform::labels(&labels).is_ok() {
+                self.native_language = Some(language);
+            }
         }
-        if self.poll_at.elapsed() >= Duration::from_millis(250) {
-            self.poll_at = Instant::now();
-            match crate::platform::take("takeImportedPath") {
-                Ok(Some(path)) => self.cad.open_path(&path),
-                Ok(None) => {}
-                Err(error) => log::warn!("Android file picker: {error}"),
+        if std::mem::take(&mut self.cad.tablet_keyboard_requested) {
+            let prompt = self.cad.session.current_prompt();
+            let numeric = prompt.as_ref().is_some_and(|p| p.accept.number && !p.accept.point && p.keywords.is_empty());
+            let title = prompt
+                .map(|p| cadcraft_ui_egui::i18n::t(&p.message).to_owned())
+                .unwrap_or_else(|| cadcraft_ui_egui::i18n::t("Command or value").to_owned());
+            if let Err(error) = crate::platform::input(&self.cad.cmd.buffer, &title, numeric) {
+                self.cad.set_status(error);
+            }
+        }
+        if !crate::platform::has_events() {
+            return;
+        }
+        for i in 0..32 {
+            let mut any = false;
+            if let Ok(Some(path)) = crate::platform::take("takeImportedPath") {
+                self.cad.open_path(&path);
+                self.files_refresh = true;
+                any = true;
             }
             if let Ok(Some(message)) = crate::platform::take("takeNotice") {
                 self.cad.set_status(message);
+                any = true;
             }
             if let Ok(Some(command)) = crate::platform::take("takeCommand") {
                 self.cad.cmd.buffer.clear();
                 let _ = self.cad.cmdline(&command);
+                any = true;
             }
-        }
-        ctx.request_repaint_after(Duration::from_millis(250));
-    }
-
-    #[cfg(target_os = "android")]
-    fn export(&mut self) {
-        self.cad.start("qsave");
-        let path = self.cad.session.state().ok().filter(|d| !d.is_dirty()).and_then(|d| d.path.clone());
-        let Some(path) = path else {
-            self.cad.set_status("Save the drawing before exporting");
-            return;
-        };
-        let name = Path::new(&path).file_name().map(|n| n.to_string_lossy()).unwrap_or_else(|| "Drawing.dxf".into());
-        if let Err(error) = crate::platform::export(&path, &name) {
-            self.cad.set_status(format!("Export: {error}"));
+            if let Ok(Some(event)) = crate::platform::take("takeEvent") {
+                any = true;
+                if let Ok(event) = serde_json::from_str::<Value>(&event) {
+                    match event.get("kind").and_then(Value::as_str) {
+                        Some("name") => {
+                            if let Some(uid) = self.name_uid.take() {
+                                if let Some(name) = event.get("value").and_then(Value::as_str) {
+                                    self.start_job_for(Action::SaveAs, Some(name.into()), uid);
+                                } else {
+                                    self.cad.tablet_save_completed(uid, false);
+                                }
+                            }
+                        }
+                        Some("name-canceled") => {
+                            if let Some(uid) = self.name_uid.take() {
+                                self.cad.tablet_save_completed(uid, false);
+                            }
+                        }
+                        Some("trim") => self.trim_render_cache(),
+                        Some("locale") => {
+                            self.cad.system_languages.clear();
+                            if let Some(value) = event.get("value").and_then(Value::as_str) {
+                                self.cad.system_languages.push(value.into());
+                            }
+                            self.native_language = None;
+                        }
+                        Some("back") => {
+                            if egui::Popup::is_any_open(ctx) {
+                                egui::Popup::close_all(ctx);
+                            } else if self.cad.tablet_settings_open {
+                                self.cad.tablet_settings_open = false;
+                            } else if self.cad.ui.dialog.take().is_some() {
+                            } else if self.cad.closing.is_some() {
+                                self.cad.answer_close(cadcraft_ui_egui::closing::Choice::Cancel);
+                            } else if self.cad.session.running.is_some() {
+                                self.cad.session.cancel();
+                                self.cad.cmd.buffer.clear();
+                            } else {
+                                self.checkpoint();
+                                self.writer.control.flush();
+                                let _ = crate::platform::background();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if !any {
+                break;
+            }
+            if i == 31 {
+                crate::platform::wake(0);
+            }
         }
     }
 }
 
 impl eframe::App for Shell {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.cad.canvas.filter_tablet_input(ctx, raw, &self.cad.tablet_prefs);
         self.cad.raw_input_hook(raw);
         cadcraft_ui_egui::cmdline::capture_tab(ctx, raw);
     }
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        #[cfg(target_os = "android")]
-        self.poll_documents(ctx);
-        self.cad.logic(ctx);
-        self.checkpoint(!ctx.input(|i| i.focused));
-        ctx.request_repaint_after(Duration::from_secs(5));
-        if std::mem::take(&mut self.cad.quit_requested) {
+        cadcraft_ui_egui::i18n::with_language(self.cad.language(), || {
+            self.restore_tick();
+            self.finish_jobs();
             #[cfg(target_os = "android")]
-            if let Err(error) = crate::platform::background() {
-                self.cad.set_status(format!("Close: {error}"));
+            self.poll_documents(ctx);
+            self.file_action();
+            self.cad.logic(ctx);
+            self.checkpoint();
+            if !ctx.input(|i| i.focused) {
+                self.writer.control.flush();
             }
-            #[cfg(not(target_os = "android"))]
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
+            if self.cache_mib != self.cad.tablet_prefs.cache_mib {
+                self.cache_mib = self.cad.tablet_prefs.cache_mib;
+                if let Some(rs) = &self.render {
+                    cadcraft_ui_egui::gpu::set_cache_budget(rs, self.cache_mib);
+                }
+            }
+            if std::mem::take(&mut self.cad.quit_requested) {
+                self.writer.control.flush();
+                #[cfg(target_os = "android")]
+                let _ = crate::platform::background();
+                #[cfg(not(target_os = "android"))]
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        });
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::top("tablet-files").frame(egui::Frame::NONE.fill(cadcraft_ui_egui::theme::Tokens::get().chrome).inner_margin(6.0)).show(
-            ui,
-            |ui| {
-                ui.horizontal(|ui| {
-                    ui.menu_button("Drawings", |ui| {
-                        for path in files(&self.dir) {
-                            let label = path.file_name().map(|s| s.to_string_lossy()).unwrap_or_default();
-                            if ui.add_sized(egui::vec2(240.0, 44.0), egui::Button::new(label)).clicked() {
-                                self.cad.open_path(&path.to_string_lossy());
+        cadcraft_ui_egui::i18n::with_language(self.cad.language(), || {
+            egui::Panel::top("tablet-documents").frame(egui::Frame::NONE.inner_margin(6.0)).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.menu_button(cadcraft_ui_egui::i18n::t("Drawings"), |ui| {
+                        if self.files_refresh || self.files_at.elapsed() > Duration::from_secs(30) {
+                            self.files = files(&self.dir);
+                            self.files_at = Instant::now();
+                            self.files_refresh = false;
+                        }
+                        if self.files.is_empty() {
+                            ui.label(cadcraft_ui_egui::i18n::t("Open or save a drawing to see it here"));
+                        }
+                        for path in &self.files {
+                            let label = path.file_name().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+                            if ui.add_sized(egui::vec2(240.0, self.cad.tablet_prefs.height()), egui::Button::new(label)).clicked() {
+                                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+                                    #[cfg(target_os = "android")]
+                                    {
+                                        let name = path.file_name().map(|s| s.to_string_lossy()).unwrap_or_else(|| "Drawing.pdf".into());
+                                        let _ = crate::platform::export(&path.to_string_lossy(), &name);
+                                    }
+                                } else {
+                                    self.cad.open_path(&path.to_string_lossy());
+                                }
                                 ui.close();
                             }
                         }
-                        if ui.add_sized(egui::vec2(240.0, 44.0), egui::Button::new("Sample drawing")).clicked() {
+                        if ui
+                            .add_sized(
+                                egui::vec2(240.0, self.cad.tablet_prefs.height()),
+                                egui::Button::new(cadcraft_ui_egui::i18n::t("Sample drawing")),
+                            )
+                            .clicked()
+                        {
                             let _ = self.cad.run("ui.sample", json!({}));
                             ui.close();
                         }
                     });
-                    #[cfg(target_os = "android")]
-                    if ui.add_sized(egui::vec2(96.0, 44.0), egui::Button::new("Export file")).clicked() {
-                        self.export();
+                    for (label, command) in [("Export file", "ui.tablet.export"), ("Export PDF", "exportpdf")] {
+                        if ui
+                            .add_sized(egui::vec2(110.0, self.cad.tablet_prefs.height()), egui::Button::new(cadcraft_ui_egui::i18n::t(label)))
+                            .clicked()
+                        {
+                            self.cad.start(command);
+                        }
+                    }
+                    if self.loader.is_some() || self.saving {
+                        ui.spinner();
                     }
                     if let Ok(doc) = self.cad.session.state() {
                         ui.label(format!("{}{}", doc.title, if doc.is_dirty() { " *" } else { "" }));
                     }
                 });
-            },
-        );
-        self.cad.ui(ui);
+            });
+            self.cad.ui(ui);
+            self.file_action();
+            self.checkpoint();
+        });
     }
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(cadcraft_ui_egui::PREFS_KEY, self.cad.prefs_json());
@@ -278,93 +696,7 @@ impl eframe::App for Shell {
         false
     }
     fn on_exit(&mut self) {
-        if let Some(handle) = self.checkpoint.take() {
-            let _ = handle.join();
-        }
-        self.checkpoint_active = usize::MAX;
-        self.checkpoint(true);
-        if let Some(handle) = self.checkpoint.take() {
-            let _ = handle.join();
-        }
+        self.checkpoint();
+        self.writer.control.flush();
     }
-}
-
-fn checkpoint(dir: &Path, docs: Vec<(Arc<cadcraft_engine::doc::Drawing>, Value)>, active: usize) -> Result<(), String> {
-    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let recovery = dir.join("tablet-recovery");
-        std::fs::create_dir_all(&recovery)?;
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-        let generation = format!("snapshot-{stamp}");
-        let folder = recovery.join(&generation);
-        std::fs::create_dir(&folder)?;
-        let mut records = Vec::new();
-        for (i, (doc, mut record)) in docs.into_iter().enumerate() {
-            let name = format!("drawing-{i}.dxf");
-            std::fs::write(folder.join(&name), cadcraft_io::write(&doc, &name)?)?;
-            record["file"] = json!(format!("{generation}/{name}"));
-            records.push(record);
-        }
-        let tmp = recovery.join("session.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(&json!({"active": active, "drawings": records}))?)?;
-        std::fs::rename(&tmp, recovery.join("session.json"))?;
-        for entry in std::fs::read_dir(&recovery)?.take(1000).filter_map(Result::ok) {
-            if entry.file_name().to_string_lossy().starts_with("snapshot-") && entry.file_name() != generation.as_str() {
-                let _ = std::fs::remove_dir_all(entry.path());
-            }
-        }
-        Ok(())
-    })();
-    result.map_err(|e| e.to_string())
-}
-
-fn restore(cad: &mut CadApp, dir: &Path) -> Result<(), String> {
-    let recovery = dir.join("tablet-recovery");
-    let manifest = recovery.join("session.json");
-    if !manifest.exists() {
-        return Ok(());
-    }
-    if std::fs::metadata(&manifest).map_err(|e| e.to_string())?.len() > 1 << 20 {
-        return Err("Recovery index is too large".into());
-    }
-    let data: Value = serde_json::from_slice(&std::fs::read(manifest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    let records = data.get("drawings").and_then(Value::as_array).ok_or("Invalid recovery index")?;
-    if records.len() > 128 {
-        return Err("Recovery contains too many drawings; saved files remain in Drawings".into());
-    }
-    for record in records.iter().take(128) {
-        let Some(file) = record.get("file").and_then(Value::as_str) else { continue };
-        if !Path::new(file).components().all(|c| matches!(c, std::path::Component::Normal(_))) {
-            continue;
-        }
-        let path = recovery.join(file);
-        if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > CadApp::MAX_OPEN_BYTES {
-            continue;
-        }
-        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-        let doc = cadcraft_io::read(&bytes, "drawing.dxf").map_err(|e| e.to_string())?;
-        let title = record.get("title").and_then(Value::as_str).unwrap_or("Drawing");
-        let original = record.get("path").and_then(Value::as_str).map(str::to_owned);
-        cad.session.open_drawing(doc, title, original);
-        if let Ok(st) = cad.session.state_mut() {
-            if record.get("dirty").and_then(Value::as_bool) == Some(true) {
-                st.saved = Arc::new((*st.doc).clone());
-            }
-            if let (Some(x), Some(y), Some(height)) = (
-                record.pointer("/center/0").and_then(Value::as_f64),
-                record.pointer("/center/1").and_then(Value::as_f64),
-                record.get("height").and_then(Value::as_f64),
-            ) && x.is_finite()
-                && y.is_finite()
-                && height.is_finite()
-                && height > 0.0
-            {
-                st.set_view_quiet(cadcraft_engine::View { center: cadcraft_engine::geom::Vec2::new(x, y), height });
-            }
-        }
-    }
-    let active = data.get("active").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).unwrap_or(0);
-    if active < cad.session.docs.len() {
-        cad.session.active = active;
-    }
-    Ok(())
 }

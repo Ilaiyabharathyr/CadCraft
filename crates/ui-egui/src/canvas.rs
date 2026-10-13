@@ -112,6 +112,9 @@ pub struct CanvasState {
     /// Tablets keep the crosshair visible after a touch ends or a pen leaves hover range.
     tablet_cursor: Option<Pos2>,
     tablet_taps: crate::tablet::Taps,
+    tablet_pen_hover: bool,
+    /// Physical canvas contacts stay suppressed until lift after a pen cancels a gesture.
+    tablet_fingers: HashMap<(u64, u64), (Pos2, bool)>,
     /// Constraint glyphs for the parametric overlay (cached per drawing revision).
     pub param: crate::parametric::Cache,
     /// A selection window opened by a press-and-drag, to close where the button is let go.
@@ -165,6 +168,100 @@ impl Selection {
 }
 
 impl CanvasState {
+    /// The Android bridge emits pens as pointer events and fingers as touch events.
+    /// Cancel tracked finger contacts before egui processes input, including their release;
+    /// dropping releases would leave egui's multi-touch state stuck.
+    pub fn filter_tablet_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput, prefs: &crate::tablet::Preferences) {
+        if !prefs.pen_only {
+            self.tablet_fingers.clear();
+            self.tablet_pen_hover = false;
+            return;
+        }
+        let mut owned = Vec::new();
+        let touch_positions: Vec<_> = raw
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                egui::Event::Touch { pos, .. } => Some(*pos),
+                _ => None,
+            })
+            .collect();
+        let popup = egui::Popup::is_any_open(ctx);
+        for event in &raw.events {
+            if let egui::Event::Touch { device_id, id, phase, pos, .. } = event {
+                let key = (device_id.0, id.0);
+                let canvas =
+                    self.rect.is_some_and(|r| r.contains(*pos)) && ctx.layer_id_at(*pos).is_none_or(|layer| layer.order == egui::Order::Background);
+                if (self.tablet_fingers.contains_key(&key) || (canvas && !popup && *phase == egui::TouchPhase::Start))
+                    && (self.tablet_fingers.len() < 32 || self.tablet_fingers.contains_key(&key))
+                {
+                    let finger = self.tablet_fingers.entry(key).or_insert((*pos, false));
+                    finger.0 = *pos;
+                    owned.push((key, *pos, *phase));
+                }
+            }
+        }
+        if raw.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(pos) if !touch_positions.iter().any(|p| p.distance(*pos) < 0.1))) {
+            self.tablet_pen_hover = true;
+        }
+        if owned.is_empty() && raw.events.iter().any(|e| matches!(e, egui::Event::PointerGone)) {
+            self.tablet_pen_hover = false;
+        }
+        if self.tablet_pen_hover {
+            for finger in self.tablet_fingers.values_mut() {
+                finger.1 = true;
+            }
+        }
+        raw.events.retain_mut(|event| match event {
+            egui::Event::PointerMoved(pos) | egui::Event::PointerButton { pos, .. } => !owned.iter().any(|(_, p, _)| p.distance(*pos) < 0.1),
+            egui::Event::PointerGone => owned.is_empty(),
+            egui::Event::Touch { device_id, id, phase, .. } => {
+                if self.tablet_fingers.get(&(device_id.0, id.0)).is_some_and(|f| f.1) {
+                    *phase = egui::TouchPhase::Cancel;
+                }
+                true
+            }
+            _ => true,
+        });
+        for (key, (pos, suppressed)) in &self.tablet_fingers {
+            if *suppressed && !owned.iter().any(|(id, _, _)| id == key) {
+                raw.events.push(egui::Event::Touch {
+                    device_id: egui::TouchDeviceId(key.0),
+                    id: egui::TouchId(key.1),
+                    phase: egui::TouchPhase::Cancel,
+                    pos: *pos,
+                    force: None,
+                });
+            }
+        }
+        for (key, _, phase) in owned {
+            if matches!(phase, egui::TouchPhase::End | egui::TouchPhase::Cancel) {
+                self.tablet_fingers.remove(&key);
+            }
+        }
+    }
+
+    /// Release retained drawing meshes while preserving the model, selection and cursor.
+    pub fn trim_render_cache(&mut self) {
+        self.list = None;
+        self.source = None;
+        self.render_cache = Default::default();
+        self.parts.clear();
+        self.scenes.clear();
+        self.part_meshes.clear();
+        self.window = None;
+        self.prim_index = Default::default();
+        self.mesh_key = None;
+        self.mesh_slot = Default::default();
+        self.drag_key = None;
+        self.drag_slot = Default::default();
+        self.hl_key = None;
+        self.hl_slot = Default::default();
+        self.hl_infinite.clear();
+        self.vp_hl = None;
+        self.infinite.clear();
+    }
+
     pub(crate) fn selection_snapshot(&mut self, session: &cadcraft_engine::Session) -> Arc<Vec<Handle>> {
         self.selection.snapshot(session).0
     }
@@ -274,7 +371,8 @@ fn ensure_list(app: &mut CadApp, px: f64, views: &[(Bounds2, f64)]) {
         app.canvas.prim_index = PrimIndex::default();
         app.canvas.list_gen = app.canvas.list_gen.wrapping_add(1);
         // Retain a few recent tabs, with one total geometry budget rather than one per tab.
-        while app.canvas.scenes.len() > 3 || app.canvas.scenes.iter().map(Scene::bytes).sum::<usize>() > 64 << 20 {
+        let budget = if app.tablet_mode { (app.tablet_prefs.cache_mib as usize) << 20 } else { 64 << 20 };
+        while app.canvas.scenes.len() > 3 || app.canvas.scenes.iter().map(Scene::bytes).sum::<usize>() > budget {
             app.canvas.scenes.pop_front();
         }
     }
@@ -923,6 +1021,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let touch = ui.input(|i| i.multi_touch());
     if let Some(gesture) = &touch
         && rect.contains(gesture.start_pos)
+        && !(app.tablet_mode && app.tablet_prefs.pen_only && app.canvas.tablet_pen_hover)
     {
         app.canvas.touch_navigation = true;
         if app.canvas.drag_window {
@@ -960,7 +1059,18 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         let doc = app.session.state().map_or(0, |s| s.uid);
         let command = app.session.running.as_ref().map(|r| r.id.as_str());
-        let blocked = navigating
+        let cancelled = ui.input(|i| {
+            i.raw.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Touch { phase: egui::TouchPhase::Cancel, .. } | egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }
+                )
+            })
+        });
+        let barrel = app.tablet_prefs.barrel_cancel && inside && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra1));
+        let blocked = cancelled
+            || barrel
+            || navigating
             || !ui.input(|i| i.focused)
             || app.ui.dialog.is_some()
             || egui::Popup::is_any_open(ui.ctx())
@@ -969,14 +1079,21 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             || resp.dragged_by(egui::PointerButton::Primary)
             || scroll != egui::Vec2::ZERO
             || (ui.input(|i| i.zoom_delta()) - 1.0).abs() > 1e-4;
-        let tap = app.canvas.tablet_taps.update(
+        let delayed = app.canvas.tablet_taps.update(
             ui.ctx(),
             doc,
             command,
-            hover_pos.filter(|_| inside && pressed_primary).map(|p| (p, mods)),
-            inside && dbl_primary,
-            blocked,
+            hover_pos.filter(|_| app.tablet_prefs.double_tap_cancel && inside && pressed_primary).map(|p| (p, mods)),
+            app.tablet_prefs.double_tap_cancel && inside && dbl_primary,
+            blocked || !app.tablet_prefs.double_tap_cancel,
         );
+        let tap = if barrel {
+            crate::tablet::TapAction::Cancel
+        } else if !app.tablet_prefs.double_tap_cancel && !blocked && inside && pressed_primary {
+            hover_pos.map_or(crate::tablet::TapAction::None, |pos| crate::tablet::TapAction::Pick(pos, mods))
+        } else {
+            delayed
+        };
         // Canvas taps are delivered once confirmed; toolbar and tile clicks keep their handling.
         if inside {
             pressed_primary = false;
@@ -1496,7 +1613,12 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     // A pen's hover updates the live crosshair. Touch-up/hover-exit removes egui's pointer,
     // but a tablet still shows the last location (the centre before its first pointer event).
     let crosshair = if app.tablet_mode {
-        let pos = *app.canvas.tablet_cursor.get_or_insert(rect.center());
+        let cursor = app.canvas.tablet_cursor.get_or_insert(rect.center());
+        // Rotation and split-screen resizing can leave the last hover outside the new canvas.
+        if !rect.contains(*cursor) {
+            *cursor = if rect.width() > 16.0 && rect.height() > 16.0 { rect.shrink(8.0).clamp(*cursor) } else { rect.center() };
+        }
+        let pos = *cursor;
         Some(Pos2::new(pos.x.clamp(rect.left(), rect.right()), pos.y.clamp(rect.top(), rect.bottom())))
     } else {
         hover_pos.filter(|_| inside)

@@ -1233,3 +1233,11 @@
 	Hatch Pattern	Зразок штрихування
 	Search for pattern	Пошук зразка
 	Run Script...	Виконати сценарій...
+
+# Android tablet controls and native file services.
+	Tablet Settings	Налаштування планшета
+	Export file	Експорт файлу
+	Share drawing	Поділитися кресленням
+	Share PDF	Поділитися PDF
+	Open linked drawing	Відкрити зв’язане креслення
+	Open project folder	Відкрити теку проєкту

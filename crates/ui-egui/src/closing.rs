@@ -36,6 +36,7 @@ pub struct Closing {
     asking: Option<u64>,
     /// Quit the app once the queue is done (the window was closed).
     quit: bool,
+    saving: Option<u64>,
 }
 
 impl CadApp {
@@ -73,7 +74,7 @@ impl CadApp {
         }
         if self.closing.is_none() {
             let uids = self.session.docs.iter().map(|d| d.uid).collect();
-            self.closing = Some(Closing { queue: uids, asking: None, quit: true });
+            self.closing = Some(Closing { queue: uids, asking: None, quit: true, saving: None });
             self.advance_close();
         }
         true
@@ -88,6 +89,9 @@ impl CadApp {
     /// Answer the open close prompt (no-op without one).
     pub fn answer_close(&mut self, choice: Choice) {
         let Some(uid) = self.closing.as_ref().and_then(|c| c.asking) else { return };
+        if choice != Choice::Cancel && self.closing.as_ref().is_some_and(|c| c.saving.is_some()) {
+            return;
+        }
         let i = match (choice, self.doc_index(uid)) {
             (Choice::Cancel, _) => {
                 self.closing = None;
@@ -110,6 +114,13 @@ impl CadApp {
                 // QSAVE acts on the active drawing.
                 if self.session.active != i {
                     let _ = self.run("document.switch", json!({ "index": i }));
+                }
+                if self.tablet_mode {
+                    if let Some(c) = &mut self.closing {
+                        c.saving = Some(uid);
+                    }
+                    self.tablet_file_action = Some(crate::tablet::FileAction::Save);
+                    return;
                 }
                 let r = self.run("qsave", Value::Null);
                 let saved = r.is_ok() && self.doc_index(uid).and_then(|i| self.session.docs.get(i)).is_some_and(|d| !d.is_dirty());
@@ -135,12 +146,28 @@ impl CadApp {
         }
     }
 
+    /// Called after the tablet writer acknowledges the exact captured version.
+    pub fn tablet_save_completed(&mut self, uid: u64, success: bool) {
+        if !self.closing.as_ref().is_some_and(|c| c.saving == Some(uid)) {
+            return;
+        }
+        if let Some(i) = self.doc_index(uid)
+            && success
+            && self.session.docs.get(i).is_some_and(|d| !d.is_dirty())
+        {
+            self.close_front(i);
+            self.advance_close();
+        } else {
+            self.closing = None;
+        }
+    }
+
     fn begin_close(&mut self, uids: Vec<u64>) {
         if self.closing.is_some() {
             // A prompt is already open; it has to be answered first.
             return;
         }
-        self.closing = Some(Closing { queue: uids.into(), asking: None, quit: false });
+        self.closing = Some(Closing { queue: uids.into(), asking: None, quit: false, saving: None });
         self.advance_close();
     }
 
@@ -207,9 +234,13 @@ pub fn prompt(app: &mut CadApp, ctx: &egui::Context) {
         ui.add_space(4.0);
         ui.label(format!("Save changes to {title}?"));
         ui.label(RichText::new("Your changes will be lost if you don't save them.").color(t.text_dim));
+        if app.closing.as_ref().is_some_and(|c| c.saving.is_some()) {
+            ui.spinner();
+            ui.label(crate::i18n::t("Saving…"));
+        }
         ui.add_space(10.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let size = vec2(84.0, 22.0);
+            let size = vec2(84.0, if app.tablet_mode { app.tablet_prefs.height() } else { 22.0 });
             let save = ui.add(egui::Button::new(RichText::new("Save").color(t.text)).fill(t.accent).min_size(size));
             if save.clicked() {
                 choice = Some(Choice::Save);

@@ -317,6 +317,7 @@ struct Layer {
     breaks: Vec<[usize; 3]>,
     parts: std::collections::VecDeque<(u64, std::sync::Arc<Uploaded>)>,
     part_bytes: usize,
+    part_limit: usize,
 }
 
 struct Uploaded {
@@ -370,11 +371,11 @@ impl Layer {
             self.lines.extend_from_slice(&data.lines);
             self.tris.extend_from_slice(&data.tris);
             self.quads.extend_from_slice(&data.quads);
-            if data.bytes <= 64 << 20 {
+            if data.bytes <= self.part_limit {
                 self.part_bytes = self.part_bytes.saturating_add(data.bytes);
                 self.parts.push_back((id, data));
             }
-            while self.part_bytes > 64 << 20 || self.parts.len() > 4096 {
+            while self.part_bytes > self.part_limit || self.parts.len() > 4096 {
                 let Some((_, old)) = self.parts.pop_front() else { break };
                 self.part_bytes = self.part_bytes.saturating_sub(old.bytes);
             }
@@ -527,6 +528,7 @@ impl Resources {
                 breaks: Vec::new(),
                 parts: std::collections::VecDeque::new(),
                 part_bytes: 0,
+                part_limit: 64 << 20,
             }
         };
         let pipeline = |label: &str, vs: &str, topology: wgpu::PrimitiveTopology, buffer: wgpu::VertexBufferLayout<'static>| {
@@ -655,6 +657,32 @@ pub fn install(rs: &egui_wgpu::RenderState, faults: &Arc<GpuFaults>) -> GpuTarge
     rs.renderer.write().callback_resources.insert(res);
     log::info!("gpu canvas: target {:?}", rs.target_format);
     target
+}
+
+pub fn set_cache_budget(rs: &egui_wgpu::RenderState, mib: u32) {
+    if let Some(resources) = rs.renderer.write().callback_resources.get_mut::<Resources>() {
+        for layer in &mut resources.layers {
+            layer.part_limit = (mib.clamp(8, 64) as usize) << 20;
+            while layer.part_bytes > layer.part_limit {
+                let Some((_, old)) = layer.parts.pop_front() else { break };
+                layer.part_bytes = layer.part_bytes.saturating_sub(old.bytes);
+            }
+        }
+    }
+}
+
+pub fn trim_cache(rs: &egui_wgpu::RenderState) {
+    if let Some(resources) = rs.renderer.write().callback_resources.get_mut::<Resources>() {
+        for layer in &mut resources.layers {
+            layer.key = None;
+            layer.lines.clear();
+            layer.tris.clear();
+            layer.quads.clear();
+            layer.breaks.clear();
+            layer.parts.clear();
+            layer.part_bytes = 0;
+        }
+    }
 }
 
 impl egui_wgpu::CallbackTrait for CanvasCallback {

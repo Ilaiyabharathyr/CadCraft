@@ -33,7 +33,7 @@ workspace="$(python3 packaging/android/prepare_winit.py "$stage")"
     cargo ndk --platform 26 --target "$abi" --output-dir "$stage/lib" build --locked --lib -p cadcraft-android --profile android
 )
 java --module jdk.compiler/com.sun.tools.javac.Main --release 8 -classpath "$android_jar" -d "$stage/classes" \
-    packaging/android/java/io/github/storytold/cadcraft/MainActivity.java
+    packaging/android/java/io/github/storytold/cadcraft/*.java
 mapfile -t classes < <(find "$stage/classes" -name '*.class' -print)
 "$tools/d8" --min-api 26 --lib "$android_jar" --output "$stage/dex" "${classes[@]}"
 "$tools/aapt2" compile --dir "$stage/res" -o "$stage/resources.zip"

@@ -10,6 +10,7 @@ struct Job {
     path: String,
     settings: Box<Settings>,
     viewport: (f64, f64),
+    repaint: Option<egui::Context>,
 }
 
 struct Finished {
@@ -43,6 +44,9 @@ impl Worker {
                     if done.send(Finished { drawing, log: session.log }).is_err() {
                         break;
                     }
+                    if let Some(ctx) = job.repaint {
+                        ctx.request_repaint();
+                    }
                 }
             })
             .map_err(|e| format!("Open: could not start the file reader: {e}"))?;
@@ -57,6 +61,12 @@ impl CadApp {
         self.background_open = true;
     }
 
+    /// Tablet workers notify the event loop instead of polling for completed opens.
+    pub fn enable_background_open_notifications(&mut self, ctx: egui::Context) {
+        self.background_open = true;
+        self.open_repaint = Some(ctx);
+    }
+
     pub(super) fn queue_open(&mut self, path: &str) {
         if self.opening.is_none() {
             match Worker::start() {
@@ -64,7 +74,12 @@ impl CadApp {
                 Err(e) => return self.open_failed(e),
             }
         }
-        let job = Job { path: path.into(), settings: Box::new(self.session.settings.clone()), viewport: self.session.viewport_px };
+        let job = Job {
+            path: path.into(),
+            settings: Box::new(self.session.settings.clone()),
+            viewport: self.session.viewport_px,
+            repaint: self.open_repaint.clone(),
+        };
         let sent = self.opening.as_mut().map(|w| w.send.try_send(job).map(|()| w.pending += 1));
         match sent {
             Some(Ok(())) => self.set_status(format!("Opening {path}…")),
@@ -113,7 +128,7 @@ impl CadApp {
                 }
             }
         }
-        if self.opening.as_ref().is_some_and(|w| w.pending > 0) {
+        if self.open_repaint.is_none() && self.opening.as_ref().is_some_and(|w| w.pending > 0) {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
     }

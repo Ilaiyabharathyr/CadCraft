@@ -1,8 +1,12 @@
 //! Native tablet launcher. Drawing behaviour stays in CADCraft's shared engine and UI.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(any(target_os = "android", feature = "desktop-preview"))]
+mod jobs;
 #[cfg(target_os = "android")]
 mod platform;
+#[cfg(any(target_os = "android", feature = "desktop-preview"))]
+mod recovery;
 #[cfg(any(target_os = "android", feature = "desktop-preview"))]
 pub mod shell;
 
@@ -36,4 +40,13 @@ pub fn android_main(app: winit::platform::android::activity::AndroidApp) {
         Ok(Err(error)) => log::error!("CADCraft could not start: {error}"),
         Err(_) => log::error!("CADCraft's Android runner stopped unexpectedly; recovery files have been kept"),
     }
+}
+
+/// Wake the native UI, or flush its latest captured session on Android pause.
+/// SAFETY: the symbol and ABI match MainActivity's single nativeWake declaration.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+#[unsafe(export_name = "Java_io_github_storytold_cadcraft_MainActivity_nativeWake")]
+pub extern "system" fn native_wake(_env: jni::JNIEnv<'_>, _class: jni::objects::JClass<'_>, kind: jni::sys::jint) {
+    platform::wake(kind);
 }

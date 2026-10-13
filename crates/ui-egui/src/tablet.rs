@@ -9,6 +9,73 @@ use crate::{
     theme::Tokens,
 };
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Preferences {
+    pub pen_only: bool,
+    pub double_tap_cancel: bool,
+    pub double_tap_ms: u32,
+    pub barrel_cancel: bool,
+    pub compact: bool,
+    pub cache_mib: u32,
+    pub recovery_seconds: u64,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self { pen_only: false, double_tap_cancel: true, double_tap_ms: 300, barrel_cancel: true, compact: false, cache_mib: 24, recovery_seconds: 5 }
+    }
+}
+
+impl Preferences {
+    pub fn validate(&mut self) {
+        self.double_tap_ms = self.double_tap_ms.clamp(50, 500);
+        self.cache_mib = self.cache_mib.clamp(8, 64);
+        self.recovery_seconds = self.recovery_seconds.clamp(2, 60);
+    }
+    pub fn height(&self) -> f32 {
+        if self.compact { 44.0 } else { 48.0 }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum FileAction {
+    Save,
+    SaveAs,
+    Export,
+    Pdf,
+    Share,
+    SharePdf,
+    Link,
+    Project,
+}
+
+pub(crate) fn route(app: &mut CadApp, id: &str, params: &serde_json::Value) -> Option<Result<serde_json::Value, String>> {
+    if id.starts_with("ui.tablet.") && (!app.tablet_mode || !params.is_null()) {
+        return Some(Err("This command requires the tablet host and an interactive invocation".into()));
+    }
+    if !app.tablet_mode || !params.is_null() {
+        return None;
+    }
+    let action = match id {
+        "qsave" | "save" => FileAction::Save,
+        "saveas" | "ui.saveas" => FileAction::SaveAs,
+        "exportpdf" => FileAction::Pdf,
+        "ui.tablet.export" => FileAction::Export,
+        "ui.tablet.share" => FileAction::Share,
+        "ui.tablet.sharepdf" => FileAction::SharePdf,
+        "ui.tablet.link" => FileAction::Link,
+        "ui.tablet.project" => FileAction::Project,
+        "ui.tablet.settings" => {
+            app.tablet_settings_open = true;
+            return Some(Ok(serde_json::Value::Null));
+        }
+        _ => return None,
+    };
+    app.tablet_file_action = Some(action);
+    Some(Ok(serde_json::Value::Null))
+}
+
 /// The Android host opts in; an ordinary desktop session keeps its existing layout.
 pub fn configure(app: &mut CadApp) {
     app.tablet_mode = true;
@@ -88,10 +155,27 @@ impl Taps {
 }
 
 fn button(ui: &mut egui::Ui, text: &str) -> bool {
-    ui.add_sized(vec2(64.0, 44.0), Button::new(crate::i18n::t(text))).clicked()
+    ui.add_sized(vec2(72.0, ui.spacing().interact_size.y), Button::new(crate::i18n::t(text))).clicked()
 }
 
 pub fn chrome(app: &mut CadApp, ui: &mut egui::Ui) {
+    app.tablet_prefs.validate();
+    ui.ctx().options_mut(|o| o.input_options.max_double_click_delay = f64::from(app.tablet_prefs.double_tap_ms) / 1000.0);
+    if app.tablet_settings_open {
+        egui::Window::new(crate::i18n::t("Tablet Settings"))
+            .id(egui::Id::new("tablet-settings"))
+            .open(&mut app.tablet_settings_open)
+            .resizable(false)
+            .show(ui.ctx(), |ui| {
+                ui.checkbox(&mut app.tablet_prefs.pen_only, crate::i18n::t("Draw with pen only"));
+                ui.checkbox(&mut app.tablet_prefs.double_tap_cancel, crate::i18n::t("Double tap to cancel"));
+                ui.checkbox(&mut app.tablet_prefs.barrel_cancel, crate::i18n::t("Pen button to cancel"));
+                ui.checkbox(&mut app.tablet_prefs.compact, crate::i18n::t("Compact controls"));
+                ui.add(egui::Slider::new(&mut app.tablet_prefs.double_tap_ms, 50..=500).text(crate::i18n::t("Double tap delay (ms)")));
+                ui.add(egui::Slider::new(&mut app.tablet_prefs.cache_mib, 8..=64).text(crate::i18n::t("Render cache (MB)")));
+                ui.add(egui::Slider::new(&mut app.tablet_prefs.recovery_seconds, 2..=60).text(crate::i18n::t("Recovery interval (s)")));
+            });
+    }
     let t = Tokens::get();
     egui::Panel::top("tablet-tools").frame(egui::Frame::NONE.fill(t.chrome).inner_margin(6.0)).show(ui, |ui| {
         egui::ScrollArea::horizontal().id_salt("tablet-tool-scroll").show(ui, |ui| {
@@ -104,7 +188,7 @@ pub fn chrome(app: &mut CadApp, ui: &mut egui::Ui) {
                     (Icon::Redo, "redo", "Redo"),
                     (Icon::ZoomExtents, "zoom.extents", "Zoom Extents"),
                 ] {
-                    if icons::button(ui, icon, 44.0, label, false).clicked() {
+                    if icons::button(ui, icon, app.tablet_prefs.height(), label, false).clicked() {
                         app.start(command);
                     }
                 }
@@ -131,6 +215,13 @@ pub fn chrome(app: &mut CadApp, ui: &mut egui::Ui) {
                         ("Drafting Settings", "ui.dialog.dsettings"),
                         ("Options", "options"),
                         ("Save As", "ui.saveas"),
+                        ("Export file", "ui.tablet.export"),
+                        ("Export PDF", "exportpdf"),
+                        ("Share drawing", "ui.tablet.share"),
+                        ("Share PDF", "ui.tablet.sharepdf"),
+                        ("Open linked drawing", "ui.tablet.link"),
+                        ("Open project folder", "ui.tablet.project"),
+                        ("Tablet Settings", "ui.tablet.settings"),
                         ("Help", "ui.dialog.about"),
                     ] {
                         if button(ui, label) {
@@ -159,7 +250,7 @@ pub fn chrome(app: &mut CadApp, ui: &mut egui::Ui) {
                 for (name, value) in
                     [("Grid", app.session.settings.gridmode), ("Snap", app.session.settings.snapmode), ("Ortho", app.session.settings.orthomode)]
                 {
-                    if ui.add_sized(vec2(64.0, 44.0), Button::new(crate::i18n::t(name)).selected(value)).clicked() {
+                    if ui.add_sized(vec2(72.0, app.tablet_prefs.height()), Button::new(crate::i18n::t(name)).selected(value)).clicked() {
                         let var = match name {
                             "Grid" => "GRIDMODE",
                             "Snap" => "SNAPMODE",
@@ -173,14 +264,15 @@ pub fn chrome(app: &mut CadApp, ui: &mut egui::Ui) {
                 ui.label(status);
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let width = (ui.available_width() - if cfg!(target_os = "android") { 270.0 } else { 160.0 }).max(80.0);
             let response = ui.add_sized(
-                vec2(width, 44.0),
+                vec2(width.min(ui.available_width()), app.tablet_prefs.height()),
                 egui::TextEdit::singleline(&mut app.cmd.buffer).hint_text(crate::i18n::t("Command")).font(crate::theme::mono()),
             );
             let submit = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if cfg!(target_os = "android") && ui.add_sized(vec2(100.0, 44.0), Button::new(crate::i18n::t("Keyboard"))).clicked() {
+            if cfg!(target_os = "android") && ui.add_sized(vec2(100.0, app.tablet_prefs.height()), Button::new(crate::i18n::t("Keyboard"))).clicked()
+            {
                 app.tablet_keyboard_requested = true;
                 response.surrender_focus();
             }

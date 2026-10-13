@@ -7,6 +7,7 @@ Remove this bridge when the winit version used by eframe emits Android hover eve
 """
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -20,6 +21,8 @@ package = next(p for p in metadata["packages"] if p["name"] == "winit" and p["ve
 source = pathlib.Path(package["manifest_path"]).parent
 patched = stage / "winit-hover"
 workspace = stage / "workspace"
+old_module = patched / "src/platform_impl/android/mod.rs"
+previous = (old_module.read_bytes(), old_module.stat().st_atime_ns, old_module.stat().st_mtime_ns) if old_module.is_file() else None
 if patched.exists():
     shutil.rmtree(patched)
 shutil.copytree(source, patched)
@@ -63,7 +66,81 @@ hover = """                // Android pens report hover separately from touch. E
                 }
 
 """
-module.write_text(text.replace(marker, hover + marker))
+pen = """                // Preserve pen identity: pen contact is a pointer, fingers remain Touch.
+                let is_pen = |tool| matches!(tool, android_activity::input::ToolType::Stylus | android_activity::input::ToolType::Eraser);
+                let selected = motion_event.pointer_at_index(motion_event.pointer_index());
+                let selected_pen = is_pen(selected.tool_type());
+                let action = motion_event.action();
+                let pen = motion_event.pointers().find(|p| is_pen(p.tool_type()));
+                if let Some(pointer) = pen {
+                    let pen_action = match action {
+                        MotionAction::Down | MotionAction::PointerDown | MotionAction::Up | MotionAction::PointerUp => selected_pen,
+                        MotionAction::Move | MotionAction::Cancel | MotionAction::HoverEnter | MotionAction::HoverMove | MotionAction::HoverExit
+                        | MotionAction::ButtonPress | MotionAction::ButtonRelease => true,
+                        _ => false,
+                    };
+                    if pen_action {
+                        let (x, y) = (pointer.x(), pointer.y());
+                        if !x.is_finite() || !y.is_finite() { return input_status; }
+                        if action == MotionAction::HoverEnter {
+                            callback(event::Event::WindowEvent { window_id, event: event::WindowEvent::CursorEntered { device_id } }, self.window_target());
+                        }
+                        if action != MotionAction::HoverExit {
+                            callback(event::Event::WindowEvent { window_id, event: event::WindowEvent::CursorMoved {
+                                device_id, position: PhysicalPosition { x: x as f64, y: y as f64 },
+                            } }, self.window_target());
+                        }
+                        // API 33 FLAG_CANCELED (0x20) marks a rejected UP; release cannot place a point.
+                        let cancelled = action == MotionAction::Cancel || (matches!(action, MotionAction::Up | MotionAction::PointerUp) && motion_event.flags().0 & 0x20 != 0);
+                        if cancelled {
+                            for state in [event::ElementState::Pressed, event::ElementState::Released] {
+                                callback(event::Event::WindowEvent { window_id, event: event::WindowEvent::KeyboardInput {
+                                    device_id, is_synthetic: true, event: event::KeyEvent {
+                                        state, physical_key: crate::keyboard::PhysicalKey::Code(crate::keyboard::KeyCode::Escape),
+                                        logical_key: crate::keyboard::Key::Named(crate::keyboard::NamedKey::Escape),
+                                        location: crate::keyboard::KeyLocation::Standard, repeat: false, text: None, platform_specific: KeyEventExtra {},
+                                    },
+                                } }, self.window_target());
+                            }
+                        }
+                        let state = match action {
+                            MotionAction::Down | MotionAction::PointerDown => Some(event::ElementState::Pressed),
+                            MotionAction::Up | MotionAction::PointerUp | MotionAction::Cancel => Some(event::ElementState::Released),
+                            _ => None,
+                        };
+                        if let Some(state) = state {
+                            callback(event::Event::WindowEvent { window_id, event: event::WindowEvent::MouseInput { device_id, state, button: event::MouseButton::Left } }, self.window_target());
+                        }
+                        if matches!(action, MotionAction::ButtonPress | MotionAction::ButtonRelease) {
+                            let buttons = motion_event.button_state();
+                            if action == MotionAction::ButtonRelease || buttons.stylus_primary() || buttons.stylus_secondary() {
+                                let state = if action == MotionAction::ButtonPress { event::ElementState::Pressed } else { event::ElementState::Released };
+                                callback(event::Event::WindowEvent { window_id, event: event::WindowEvent::MouseInput { device_id, state, button: event::MouseButton::Back } }, self.window_target());
+                            }
+                        }
+                        if cancelled || action == MotionAction::HoverExit {
+                            callback(event::Event::WindowEvent { window_id, event: event::WindowEvent::CursorLeft { device_id } }, self.window_target());
+                        }
+                        if !matches!(action, MotionAction::Move | MotionAction::Cancel) { return input_status; }
+                    }
+                }
+
+"""
+text = text.replace(marker, pen + hover + marker)
+loop_marker = "                    for pointer in pointers {"
+if text.count(loop_marker) != 1:
+    raise SystemExit("The locked winit touch loop changed; review the pen bridge.")
+text = text.replace(loop_marker, loop_marker + """
+                        if is_pen(pointer.tool_type()) { continue; }
+                        let phase = if pointer.tool_type() == android_activity::input::ToolType::Palm
+                            || (matches!(motion_event.action(), MotionAction::Up | MotionAction::PointerUp) && motion_event.flags().0 & 0x20 != 0) {
+                            event::TouchPhase::Cancelled
+                        } else { phase };
+""")
+module.write_text(text)
+# An identical pinned bridge should not rebuild winit and all UI dependencies.
+if previous and previous[0] == text.encode():
+    os.utime(module, ns=(previous[1], previous[2]))
 paths = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=repo).decode().split("\0")
 workspace.mkdir(parents=True, exist_ok=True)
 for name in paths:

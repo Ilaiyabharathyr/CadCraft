@@ -2,6 +2,34 @@
 #![forbid(unsafe_code)]
 
 use jni::objects::{JClass, JObject, JString, JValue};
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
+
+static CALLBACK: OnceLock<Mutex<Option<(egui::Context, crate::recovery::Control)>>> = OnceLock::new();
+static EVENTS_PENDING: AtomicBool = AtomicBool::new(true);
+
+pub fn register(ctx: egui::Context, control: crate::recovery::Control) {
+    if let Ok(mut callback) = CALLBACK.get_or_init(|| Mutex::new(None)).lock() {
+        *callback = Some((ctx, control));
+    }
+}
+pub fn wake(kind: i32) {
+    EVENTS_PENDING.store(true, Ordering::Release);
+    if let Some(callback) = CALLBACK.get()
+        && let Ok(callback) = callback.lock()
+        && let Some((ctx, control)) = &*callback
+    {
+        if kind == 1 {
+            control.flush();
+        }
+        ctx.request_repaint();
+    }
+}
+pub fn has_events() -> bool {
+    EVENTS_PENDING.swap(false, Ordering::AcqRel)
+}
 
 fn call<R>(f: impl FnOnce(&mut jni::JNIEnv<'_>, &JObject<'_>) -> jni::errors::Result<R>) -> Result<R, String> {
     robius_android_env::with_activity(|env, context| {
@@ -37,10 +65,16 @@ pub fn background() -> Result<(), String> {
     call(|env, activity| env.call_method(activity, "background", "()V", &[]).map(|_| ()))
 }
 
-pub fn input(text: &str) -> Result<(), String> {
+pub fn input(text: &str, prompt: &str, numeric: bool) -> Result<(), String> {
     call(|env, activity| {
         let text = JObject::from(env.new_string(text)?);
-        env.call_method(activity, "enterCommand", "(Ljava/lang/String;)V", &[JValue::Object(&text)])?;
+        let prompt = JObject::from(env.new_string(prompt)?);
+        env.call_method(
+            activity,
+            "enterCommand",
+            "(Ljava/lang/String;Ljava/lang/String;Z)V",
+            &[JValue::Object(&text), JValue::Object(&prompt), JValue::Bool(u8::from(numeric))],
+        )?;
         Ok(())
     })
 }
@@ -62,5 +96,36 @@ pub fn take(method: &str) -> Result<Option<String>, String> {
         }
         let text = JString::from(value);
         Ok(Some(env.get_string(&text)?.into()))
+    })
+}
+
+fn string_call(method: &str, text: &str) -> Result<(), String> {
+    call(|env, activity| {
+        let text = JObject::from(env.new_string(text)?);
+        env.call_method(activity, method, "(Ljava/lang/String;)V", &[JValue::Object(&text)])?;
+        Ok(())
+    })
+}
+pub fn labels(text: &str) -> Result<(), String> {
+    string_call("setLabels", text)
+}
+pub fn name(text: &str) -> Result<(), String> {
+    string_call("nameDrawing", text)
+}
+pub fn sync_linked(path: &str) -> Result<(), String> {
+    string_call("syncLinkedDrawing", path)
+}
+pub fn memory_budget() -> Result<u64, String> {
+    call(|env, activity| env.call_method(activity, "memoryBudget", "()J", &[])?.j()).map(|n| n.clamp(32 << 20, 256 << 20) as u64)
+}
+pub fn pick_special(project: bool) -> Result<(), String> {
+    call(|env, activity| env.call_method(activity, if project { "pickProject" } else { "pickLinked" }, "()V", &[]).map(|_| ()))
+}
+pub fn share(path: &str, name: &str) -> Result<(), String> {
+    call(|env, activity| {
+        let path = JObject::from(env.new_string(path)?);
+        let name = JObject::from(env.new_string(name)?);
+        env.call_method(activity, "shareDrawing", "(Ljava/lang/String;Ljava/lang/String;)V", &[JValue::Object(&path), JValue::Object(&name)])?;
+        Ok(())
     })
 }

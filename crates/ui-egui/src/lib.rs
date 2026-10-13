@@ -182,6 +182,9 @@ pub struct CadApp {
     pub tablet_mode: bool,
     /// A request for the Android host's native command-entry keyboard.
     pub tablet_keyboard_requested: bool,
+    pub tablet_prefs: tablet::Preferences,
+    pub tablet_file_action: Option<tablet::FileAction>,
+    pub tablet_settings_open: bool,
     pub system_languages: Vec<String>,
     pub session: Session,
     pub ui: UiState,
@@ -227,6 +230,8 @@ pub struct CadApp {
     background_open: bool,
     #[cfg(not(target_arch = "wasm32"))]
     opening: Option<opening::Worker>,
+    #[cfg(not(target_arch = "wasm32"))]
+    open_repaint: Option<egui::Context>,
 }
 
 impl CadApp {
@@ -234,6 +239,9 @@ impl CadApp {
         CadApp {
             tablet_mode: false,
             tablet_keyboard_requested: false,
+            tablet_prefs: tablet::Preferences::default(),
+            tablet_file_action: None,
+            tablet_settings_open: false,
             system_languages: Vec::new(),
             session,
             ui: UiState::default(),
@@ -266,6 +274,8 @@ impl CadApp {
             background_open: false,
             #[cfg(not(target_arch = "wasm32"))]
             opening: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            open_repaint: None,
         }
     }
 
@@ -348,12 +358,21 @@ impl CadApp {
         if self.spacemouse.settings != spacemouse::Settings::default() {
             prefs["spacemouse"] = json!(self.spacemouse.settings);
         }
+        if self.tablet_mode {
+            prefs["tablet"] = json!(self.tablet_prefs);
+        }
         prefs.to_string()
     }
 
     /// Restore preferences saved by [`Self::prefs_json`]; unknown or malformed values are ignored.
     pub fn load_prefs(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<Value>(json) else { return };
+        if let Some(prefs) = v.get("tablet")
+            && let Ok(mut prefs) = serde_json::from_value::<tablet::Preferences>(prefs.clone())
+        {
+            prefs.validate();
+            self.tablet_prefs = prefs;
+        }
         if let Some(prefs) = v.get("spacemouse") {
             let _ = self.spacemouse.load_settings(prefs);
         }
@@ -456,7 +475,7 @@ impl CadApp {
         }
         if self.tablet_mode {
             ctx.style_mut_of(shown, |style| {
-                style.spacing.interact_size.y = 44.0;
+                style.spacing.interact_size.y = self.tablet_prefs.height();
                 style.spacing.button_padding = egui::vec2(8.0, 8.0);
             });
         }
