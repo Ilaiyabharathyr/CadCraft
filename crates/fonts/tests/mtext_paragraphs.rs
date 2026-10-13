@@ -125,6 +125,7 @@ fn reversed_columns_run_right_to_left() {
 
 #[test]
 fn hostile_paragraph_codes_do_not_panic() {
+    assert_eq!(cadcraft_fonts::ParaProps::default().length(2.0, u8::MAX, 3.0), 6.0);
     let huge_tabs = format!("\\pt{};a\tb", (0..100_000).map(|i| i.to_string()).collect::<Vec<_>>().join(","));
     let many = "\\pl1;x\\P".repeat(20_000);
     for s in [

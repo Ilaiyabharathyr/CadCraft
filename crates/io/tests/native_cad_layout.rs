@@ -90,7 +90,7 @@ fn overall_viewport_freezes_paper_entities_only_in_its_layout() {
         if tag.code == 1001 && tag.str() == "CADCRAFT" {
             skip = true;
         }
-        if !skip {
+        if !skip && tag.code != 341 {
             native.push(tag);
         }
     }

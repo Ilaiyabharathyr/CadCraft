@@ -59,7 +59,7 @@ pub enum ParaAlign {
 /// Paragraph properties set by `\p…;`. With `x`, lengths multiply the initial text height;
 /// without `x`, they are in drawing units. Properties stay in
 /// effect for the following paragraphs until another `\p` changes them.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParaProps {
     /// `i`: first-line indent, relative to the left indent (negative: a hanging indent).
     pub first: f64,
@@ -80,6 +80,12 @@ pub struct ParaProps {
     pub absolute_units: u8,
 }
 
+impl Default for ParaProps {
+    fn default() -> Self {
+        DEFAULT_PROPS.clone()
+    }
+}
+
 /// Upper bound on tab stops per paragraph (hostile contents).
 const MAX_TABS: usize = 64;
 /// Upper bound on distinct paragraph property sets per MTEXT.
@@ -88,7 +94,7 @@ const MAX_STATES: usize = 10_000;
 const MAX_COLUMNS: usize = 1_000;
 /// Default tab interval, in text heights, past the last tab stop.
 pub const DEFAULT_TAB: f64 = 4.0;
-/// Largest indent, tab position or spacing accepted, in text heights.
+/// Largest indent, tab position or spacing accepted.
 const MAX_UNITS: f64 = 10_000.0;
 
 fn units(s: &str) -> Option<f64> {
@@ -199,8 +205,9 @@ impl ParaProps {
         }
     }
 
-    fn length(&self, value: f64, bit: u8, height: f64) -> f64 {
-        if self.absolute_units & (1 << bit) != 0 { value } else { value * height }
+    /// Resolve a paragraph length to drawing units (bits: first, left, right, tabs, before, after).
+    pub fn length(&self, value: f64, bit: u8, height: f64) -> f64 {
+        if 1u8.checked_shl(u32::from(bit)).is_some_and(|mask| self.absolute_units & mask != 0) { value } else { value * height }
     }
 
     fn push_tab(&mut self, t: (f64, TabKind)) {
@@ -234,7 +241,11 @@ impl ParaProps {
             ParaAlign::Justify => Some("qj"),
             ParaAlign::Distributed => Some("qd"),
         };
-        relative.extend(q.map(String::from));
+        if absolute.is_empty() {
+            relative.extend(q.map(String::from));
+        } else {
+            absolute.extend(q.map(String::from));
+        }
         let items = if self.absolute_units & 8 != 0 { &mut absolute } else { &mut relative };
         for (i, (p, k)) in self.tabs.iter().enumerate() {
             let kind = match k {
@@ -293,7 +304,7 @@ impl ListStyle {
     }
 }
 
-/// Paragraphs as a list: a hanging indent of `indent` text heights with a tab stop there, and
+/// Paragraphs as a list: a hanging indent of `indent` drawing units with a tab stop there, and
 /// each paragraph its label and a tab (`\pxi-3,l3,t3;1.<tab>First\P2.<tab>Second`).
 pub fn list_contents(paragraphs: &[&str], style: ListStyle, indent: f64) -> String {
     let indent = if indent.is_finite() && indent > 0.0 { indent.min(MAX_UNITS) } else { 3.0 };
@@ -392,7 +403,7 @@ impl Paragraphs {
 }
 
 static DEFAULT_PROPS: ParaProps =
-    ParaProps { first: 0.0, left: 0.0, right: 0.0, align: ParaAlign::Default, tabs: Vec::new(), before: 0.0, after: 0.0, absolute_units: 0 };
+    ParaProps { first: 0.0, left: 0.0, right: 0.0, align: ParaAlign::Default, tabs: Vec::new(), before: 0.0, after: 0.0, absolute_units: 0b1111 };
 
 /// Contents or columns that need the paragraph layout.
 pub(super) fn needed(contents: &str, p: &MTextParams) -> bool {
@@ -589,7 +600,8 @@ pub(super) fn layout(contents: &str, p: &MTextParams, base: &Fmt) -> MTextLayout
         let lh = if l.max_h > 0.0 { l.max_h } else { h };
         let new_para = prev_para != Some(l.para);
         let before = if new_para && prev_para.is_some() { paras.props(l.para).length(paras.props(l.para).before, 4, h) } else { 0.0 };
-        let pitch = |first: bool| if first { lh } else { lh * 5.0 / 3.0 * ls + before };
+        let step_h = if p.line_spacing_exact { h } else { lh };
+        let pitch = |first: bool| if first { lh } else { step_h * 5.0 / 3.0 * ls + before };
         let hc = col_height(c);
         if !first_in_col && c + 1 < max_cols && (force || (hc > 0.0 && y + pitch(false) > hc + 1e-9)) {
             c += 1;
@@ -712,7 +724,7 @@ mod tests {
         assert_eq!(ListStyle::LowerLetter.label(0), "a.");
         assert_eq!(ListStyle::LowerLetter.label(26), "aa.");
         assert_eq!(ListStyle::UpperLetter.label(27), "AB.");
-        assert_eq!(list_contents(&["one", "two"], ListStyle::Number, 2.0), "\\pxi-2,l2,t2;1.\tone\\P2.\ttwo");
+        assert_eq!(list_contents(&["one", "two"], ListStyle::Number, 2.0), "\\pi-2,l2,t2;1.\tone\\P2.\ttwo");
     }
 
     #[test]

@@ -178,7 +178,9 @@ pub(crate) fn zoom(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => return Err(bad("zoom", "unknown mode")),
     }
-    s.touch();
+    // No `touch`: a zoom changes the view, not the drawing. The canvas follows the view by
+    // itself and regenerates in the background (AutoCAD redraws instead of regenerating);
+    // zooming an unlocked viewport changes the drawing, which shows on its own.
     Ok(Value::Null)
 }
 
@@ -265,7 +267,9 @@ fn run_view_set(s: &mut Session, p: &Value) -> Result<Value> {
     if h <= 0.0 {
         return Err(bad("view.set", "height must be positive"));
     }
-    s.state_mut()?.set_view(View { center: c, height: h });
+    if !s.state_mut()?.set_view(View { center: c, height: h }) {
+        return Err(bad("view.set", "the view is too large to show. Nothing was changed"));
+    }
     ok()
 }
 
@@ -282,6 +286,7 @@ fn run_layout_set(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (width, height) = s.viewport_px;
     let aspect = if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 { (width / height).clamp(1e-6, 1e6) } else { 1.5 };
+    s.pending_window = None;
     let st = s.state_mut()?;
     st.space = space.clone();
     st.mspace = None;
@@ -385,7 +390,6 @@ impl ZoomM {
         let extents = if ext.is_empty() { s.zoom_limits()? } else { ext };
         let all = extents.union(&DynBox::rect(frame.center, frame.height, aspect));
         fit(s, all.expand(all.height().max(all.width()) * 0.05))?;
-        s.touch();
         self.stage = ZoomStage::Dynamic(DynBox { screen, frame, extents, center: frame.center, height: frame.height, aspect, sizing: false });
         Ok(Step::Continue)
     }
@@ -423,7 +427,7 @@ impl Interactive for ZoomM {
                 .kw(&["All", "Center", "Dynamic", "Extents", "Previous", "Scale", "Window", "Object"])
                 .default("real time"),
             (true, None) => Prompt::new("Specify first corner", Accept::POINT),
-            (_, Some(a)) => Prompt::new("Specify opposite corner", Accept::POINT).base(a),
+            (_, Some(a)) => Prompt::new("Specify opposite corner", Accept::POINT).corner(a),
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
@@ -440,7 +444,6 @@ impl Interactive for ZoomM {
                     st.view_history.pop();
                 }
                 st.set_zoom_frame(View { center: b.center, height: b.height });
-                s.touch();
                 return Ok(Step::Done);
             }
             (ZoomStage::Dynamic(mut b), Input::Point(p)) => {
