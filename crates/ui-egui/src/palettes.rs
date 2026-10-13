@@ -836,6 +836,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     let linetypes: Vec<String> = d.linetypes.iter().map(|l| l.name.clone()).collect();
     let ids: Vec<String> = sel.iter().map(|h| h.hex()).collect();
     let mut set: Option<Value> = None;
+    let mut custom_set: Option<Value> = None;
     let group = |ui: &mut egui::Ui, title: &str| {
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
         ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), 2.0, t.chrome_dark);
@@ -1070,7 +1071,19 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
                 if let Some((_, props)) = custom.filter(|(_, p)| !p.is_empty()) {
                     group(ui, "Custom");
                     for p in &props {
-                        prop_row(ui, &p.name, |ui| read_only(ui, &p.value));
+                        prop_row(ui, &p.name, |ui| {
+                            let picked = match (p.editable, p.choices.is_empty()) {
+                                (true, false) => pick_menu(ui, &p.value, p.choices.iter().cloned()),
+                                (true, true) => edit_field(ui, ui.id().with(("dynprop", e.handle, &p.name)), p.value.clone()),
+                                (false, _) => {
+                                    read_only(ui, &p.value);
+                                    None
+                                }
+                            };
+                            if let Some(v) = picked.filter(|v| *v != p.value) {
+                                custom_set = Some(json!({ "handle": e.handle.hex(), "name": p.name, "value": v }));
+                            }
+                        });
                     }
                 }
             }
@@ -1081,4 +1094,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
         let _ = app.run("properties.set", p);
     }
     report_bad(app, bad);
+    if let Some(p) = custom_set {
+        let _ = app.run("blocks.reference.set", p);
+    }
 }

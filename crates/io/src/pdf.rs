@@ -84,6 +84,9 @@ pub struct PdfOptions {
     /// paper's portrait size (for printers, which feed portrait sheets and may not turn a
     /// landscape page themselves). Link annotations are left out of turned pages.
     pub portrait_media: bool,
+    /// Plot objects with their transparency (PDF alpha). `None` = the page setup's "Plot
+    /// transparency" (off for model space).
+    pub plot_transparency: Option<bool>,
 }
 
 impl Default for PdfOptions {
@@ -108,6 +111,7 @@ impl Default for PdfOptions {
             margins: None,
             hyperlinks: true,
             portrait_media: false,
+            plot_transparency: None,
         }
     }
 }
@@ -115,7 +119,7 @@ impl Default for PdfOptions {
 impl PdfOptions {
     /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, center?, offset?: [x,y] mm,
     /// lineweights?, compress?, title?, window?: [[x1, y1], [x2, y2]], margins?: [l, b, r, t] (mm),
-    /// hyperlinks?: bool}`.
+    /// hyperlinks?: bool, plotTransparency?: bool}`.
     pub fn from_json(v: &Value) -> PdfOptions {
         let num = |k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
         let paper_mm = match (num("width"), num("height")) {
@@ -144,6 +148,7 @@ impl PdfOptions {
             margins: margins(v.get("margins")),
             hyperlinks: v.get("hyperlinks").and_then(Value::as_bool).unwrap_or(true),
             portrait_media: v.get("portraitMedia").and_then(Value::as_bool).unwrap_or(false),
+            plot_transparency: v.get("plotTransparency").and_then(Value::as_bool),
         }
     }
 }
@@ -400,6 +405,7 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     let lineweights = o.lineweights.unwrap_or(if space.is_paper() { page.lineweights } else { true });
     let plot_style_table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(std::sync::Arc::new);
     let ropts = cadcraft_render::Options {
+        transparency: o.plot_transparency.unwrap_or(page.plot_transparency),
         tolerance: 0.001,
         min_dash: 0.0,
         text: true,
@@ -590,13 +596,17 @@ fn color(out: &mut String, c: Rgb, op: &str) {
 ///
 /// Primitives in `texts` (filled glyph outlines) are written as text instead: the glyph in its
 /// embedded font (`/F<font>`), placed by a text matrix.
+///
+/// Transparent primitives are drawn with a graphics state of their alpha (`/T<percent> gs`);
+/// the transparencies used are returned for the page's `/ExtGState` (see [`ext_gstates`]). A
+/// list without transparency writes no graphics states.
 fn content_stream(
     list: &cadcraft_render::DisplayList,
     map: &Map,
     clip_pt: &Bounds2,
     layers: &[u32],
     texts: &std::collections::HashMap<u32, (usize, &cadcraft_render::PlotText)>,
-) -> String {
+) -> (String, Vec<u8>) {
     let marked: std::collections::HashSet<u32> = layers.iter().copied().collect();
     let white = Rgb(255, 255, 255);
     let mut c = String::new();
@@ -622,6 +632,9 @@ fn content_stream(
     let mut layer: Option<u32> = None;
     // Inside a text object (`BT` … `ET`), with this font set.
     let mut text_font: Option<Option<usize>> = None;
+    // The transparency (percent) marks are drawn with, and those used on the page.
+    let mut alpha: u8 = 0;
+    let mut alphas: Vec<u8> = Vec::new();
     for (i, p) in list.prims.iter().enumerate() {
         let want = list.prim_layers.get(i).copied().filter(|l| marked.contains(l));
         let text = u32::try_from(i).ok().and_then(|i| texts.get(&i));
@@ -644,6 +657,16 @@ fn content_stream(
         if raw.iter().any(|q| !q.is_finite()) {
             continue;
         }
+        // A wipeout's mask always hides what is under it.
+        let t = if p.kind == Kind::Mask { 0 } else { p.transparency.min(cadcraft_render::MAX_TRANSPARENCY) };
+        if t != alpha {
+            flush(&mut c, &mut pending);
+            let _ = writeln!(c, "/T{t} gs");
+            if !alphas.contains(&t) {
+                alphas.push(t);
+            }
+            alpha = t;
+        }
         let w = f64::from(p.lw) * PT_PER_MM;
         let w = if w.is_finite() && w > 0.0 { w.min(100.0) } else { 0.0 };
         match p.kind {
@@ -664,6 +687,13 @@ fn content_stream(
                 };
                 if pts.len() < 2 {
                     continue;
+                }
+                // A transparent primitive is stroked on its own (one path is painted once), so
+                // where primitives overlap they build up, as in PNG plots and on screen. Block
+                // contents and viewport contents share their reference's handle, so this goes
+                // by primitive, not by object.
+                if t > 0 {
+                    flush(&mut c, &mut pending);
                 }
                 if stroke != Some(rgb) || width != Some(w) {
                     flush(&mut c, &mut pending);
@@ -733,7 +763,23 @@ fn content_stream(
         c.push_str("EMC\n");
     }
     c.push_str("Q\n");
-    c
+    (c, alphas)
+}
+
+/// The page resources' graphics states for transparencies `alphas` (percent): `/T<percent>`
+/// sets the stroke and fill alpha (`/CA`, `/ca`). Empty when there are none.
+fn ext_gstates(alphas: &[u8]) -> String {
+    if alphas.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(" /ExtGState <<");
+    for t in alphas {
+        let mut a = String::new();
+        num(&mut a, f64::from(100 - u32::from((*t).min(cadcraft_render::MAX_TRANSPARENCY))) / 100.0);
+        let _ = write!(out, " /T{t} << /Type /ExtGState /CA {a} /ca {a} >>");
+    }
+    out.push_str(" >>");
+    out
 }
 
 /// Write one glyph as text: opens a text object and sets the font when needed, then places the
@@ -855,21 +901,21 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
     let mut ocgs: Vec<(u32, usize)> = Vec::new();
     let mut kids = Vec::new();
     // Page dictionaries are completed once the fonts are written: (page, its fonts, the rest).
-    let mut page_dicts: Vec<(usize, Vec<usize>, String, String)> = Vec::new();
+    let mut page_dicts: Vec<(usize, Vec<usize>, String, String, String)> = Vec::new();
     for p in pages {
         let page = objs.reserve();
         let texts = fonts.texts(&p.list);
         // A landscape sheet on portrait media: turned a quarter turn counterclockwise, so the
         // sheet's bottom edge runs up the page's right edge.
         let turned = o.portrait_media && p.media.x > p.media.y;
-        let mut body = content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts);
+        let (mut marks, alphas) = content_stream(&p.list, &p.map, &p.clip_pt, &p.layers, &texts);
         if turned {
             let mut cm = String::from("q 0 1 -1 0 ");
             num(&mut cm, p.media.y);
             cm.push_str(" 0 cm\n");
-            body = format!("{cm}{body}\nQ\n");
+            marks = format!("{cm}{marks}\nQ\n");
         }
-        let content = objs.add(stream(body.as_bytes(), o.compress, ""));
+        let content = objs.add(stream(marks.as_bytes(), o.compress, ""));
         let mut used: Vec<usize> = texts.values().map(|(f, _)| *f).collect();
         used.sort_unstable();
         used.dedup();
@@ -899,15 +945,16 @@ fn assemble(d: &Drawing, pages: &[SheetPage], fonts: &fonts::Fonts, o: &PdfOptio
         let mut mb = String::new();
         pt(&mut mb, if turned { Vec2::new(p.media.y, p.media.x) } else { p.media });
         let annots = if annots.is_empty() { String::new() } else { format!(" /Annots [{}]", refs(annots)) };
-        page_dicts.push((page, used, props, format!("/MediaBox [0 0 {mb}] /Contents {content} 0 R{annots}")));
+        page_dicts.push((page, used, props, ext_gstates(&alphas), format!("/MediaBox [0 0 {mb}] /Contents {content} 0 R{annots}")));
         kids.push(page);
     }
     let font_ids = if fonts.is_empty() { Vec::new() } else { fonts.write(&mut objs, o.compress) };
-    for (page, used, props, rest) in page_dicts {
+    for (page, used, props, gstates, rest) in page_dicts {
         let mut res = String::new();
         if !props.is_empty() {
             let _ = write!(res, " /Properties <<{props} >>");
         }
+        res.push_str(&gstates);
         let f: Vec<String> = used.iter().filter_map(|i| Some(format!("/F{i} {} 0 R", font_ids.get(*i)?))).collect();
         if !f.is_empty() {
             let _ = write!(res, " /Font << {} >>", f.join(" "));

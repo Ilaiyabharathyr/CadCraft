@@ -1,5 +1,7 @@
-//! Blocks: BLOCK, INSERT, ATTDEF, ATTEDIT (programmatic), WBLOCK, BASE, PURGE, block listing.
+//! Blocks: BLOCK, INSERT, ATTDEF, ATTEDIT (programmatic), WBLOCK, BASE, PURGE, block listing, the
+//! Block Editor.
 
+pub(crate) mod bedit;
 mod purge;
 
 use std::sync::Arc;
@@ -14,6 +16,7 @@ use super::*;
 use crate::{Accept, EngineError, Input, Interactive, Prompt, Result, Session, Step};
 
 mod attedit;
+mod dyngrip;
 mod extract;
 pub(crate) mod refedit;
 
@@ -51,6 +54,16 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handle (a block reference)} → {definition, values (by parameter graph id), properties: [{name, value, choices}]} | null (not a dynamic block reference)")
             .enabled(has_doc)
             .noundo(),
+        CommandSpec::new("blocks.reference.set", "Set Dynamic Property", run_reference_set)
+            .params("{handle (a dynamic block reference), name (a custom property as Properties names it: a visibility state, a lookup, a distance or \"Position1 X\"), value (lengths in drawing units)} → {properties}")
+            .enabled(has_doc),
+        CommandSpec::new("blocks.reference.grips", "Dynamic Block Grips", dyngrip::run_grips)
+            .params("{handle} → [{node, part: base|end|at, shape: linear|point|list, at: [x,y], dir: [x,y], property, choices?}] (empty: not a dynamic block reference)")
+            .enabled(has_doc)
+            .noundo(),
+        CommandSpec::new("blocks.reference.grip", "Drag Dynamic Grip", dyngrip::run_grip)
+            .params("{handle, node (the parameter's graph id), part: base|end|at, to: [x,y] (drawing coordinates)} → {properties}: a distance's arrow changes the distance (snapped to its values), a position's square moves it")
+            .enabled(has_doc),
         CommandSpec::new("purge", "Purge", purge::run)
             .alias(&["pu", "-purge"])
             .params("{type?: all|blocks|dimstyles|groups|layers|linetypes|mleaderstyles|tablestyles|textstyles|zerolength|emptytext (default all: every named type), names?: \"A*,B\" (default *)} → purged")
@@ -65,6 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
     .into_iter()
     .chain(xref::specs())
     .chain(refedit::specs())
+    .chain(bedit::specs())
     .collect()
 }
 
@@ -193,6 +207,8 @@ pub(crate) fn insert_with(
                 constant: false,
                 prompt: String::new(),
                 props: Default::default(),
+                multiline: ad.multiline.as_ref().map(|ml| ml.transformed(&m)),
+                modes: ad.modes.for_reference(),
             });
         }
     }
@@ -265,6 +281,8 @@ fn attdef_kind(s: &Session, tag: &str, prompt: &str, default: &str, at: Vec2, he
         constant: false,
         prompt: prompt.into(),
         props: Default::default(),
+        multiline: None,
+        modes: Default::default(),
     })
 }
 
@@ -366,6 +384,29 @@ fn run_reference(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(Value::Null);
     };
     Ok(json!({ "definition": r.definition, "values": r.values, "properties": properties }))
+}
+
+/// Change a custom property of a dynamic block reference (one undo step).
+fn run_reference_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "blocks.reference.set";
+    let h = super::curves::handle_param(p, "handle").ok_or_else(|| bad(cmd, "`handle` is required"))?;
+    let name = str_param(p, "name").ok_or_else(|| bad(cmd, "`name` is required"))?;
+    let value = match p.get("value") {
+        Some(Value::String(v)) => v.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => return Err(bad(cmd, "`value` is required")),
+    };
+    if !matches!(s.doc()?.entity(h).map(|e| &e.kind), Some(EntityKind::Insert(_))) {
+        return Err(bad(cmd, "`handle` is not a block reference"));
+    }
+    if super::curves::is_locked(s, h) {
+        return Err(bad(cmd, "the reference is on a locked layer"));
+    }
+    let mut d = s.doc()?.clone();
+    cadcraft_doc::dynblock::set_property(&mut d, h, name, &value).map_err(|e| bad(cmd, e))?;
+    let properties = cadcraft_doc::dynblock::custom_properties(&d, h).map(|(_, p)| p).unwrap_or_default();
+    *s.doc_mut()? = d;
+    Ok(json!({ "properties": properties }))
 }
 
 // ---------------- interactive ----------------
