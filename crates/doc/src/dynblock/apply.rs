@@ -776,9 +776,10 @@ fn record_values(
 
 /// Record the direct change of parameter `p` to `v` in a reference's history (groups `tags`):
 /// after its header (`280 1`, `1070 3`), an entry per change: `1071` the id, `300` what, then
-/// the value. A visibility state or lookup value goes by the property's name (`1` the text); a
-/// dragged grip as `GRIPLOC` with how far it is from where the dynamic block has it
-/// (`11/21/31`); only the grips the change moves (from `old`). An entry for the same id is
+/// the value. A visibility state or lookup value goes by the property's name (`1` the text), as
+/// does a distance (`40`, in block units: typed in Properties, it replaces its grips' drags); a
+/// position as the drag of its grip, `GRIPLOC` with how far it is from where the dynamic block
+/// has it (`11/21/31`), when the change moves it (from `old`). An entry for the same id is
 /// replaced; a grip back in its place has none.
 fn write_history(tags: &mut Vec<RawTag>, p: &super::Parameter, old: Option<&Val>, v: &Val) {
     let grip = |id: i32, moved: Vec3| {
@@ -801,17 +802,20 @@ fn write_history(tags: &mut Vec<RawTag>, p: &super::Parameter, old: Option<&Val>
             .map(|(g, (_, is, home))| grip(*g, *is - *home))
             .collect()
     };
-    let (ob, oe) = match old {
-        Some(Val::Points(b, e)) => (Some(*b), Some(*e)),
-        Some(Val::Point(q)) => (Some(*q), None),
-        _ => (None, None),
+    let was = match old {
+        Some(Val::Point(q)) => Some(*q),
+        _ => None,
     };
     let changes: Vec<(i32, Vec<RawTag>)> = match (&p.kind, v) {
         (ParameterKind::Visibility { label, .. } | ParameterKind::Lookup { label, .. }, Val::Text(t)) => {
             vec![(p.node, vec![tag(1071, p.node.to_string()), tag(300, label.clone()), tag(1, t.clone())])]
         }
-        (ParameterKind::Linear { base, end, .. }, Val::Points(b, e)) => grips(&[(ob.unwrap_or(*base), *b, *base), (oe.unwrap_or(*end), *e, *end)]),
-        (ParameterKind::Point { at, .. }, Val::Point(q)) => grips(&[(ob.unwrap_or(*at), *q, *at)]),
+        (ParameterKind::Linear { label, .. }, Val::Points(b, e)) => {
+            let mut c: Vec<(i32, Vec<RawTag>)> = p.grips.iter().filter(|g| **g != 0).map(|g| (*g, Vec::new())).collect();
+            c.push((p.node, vec![tag(1071, p.node.to_string()), tag(300, label.clone()), tag(40, (*e - *b).len().to_string())]));
+            c
+        }
+        (ParameterKind::Point { at, .. }, Val::Point(q)) => grips(&[(was.unwrap_or(*at), *q, *at)]),
         _ => return,
     };
     // The header, then the entries (each from its 1071).

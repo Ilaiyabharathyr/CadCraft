@@ -747,7 +747,7 @@ fn connections_are_read_in_either_group_order() {
 #[test]
 fn parameters_in_a_stretch_selection_are_carried_along() {
     // A point parameter (Position1 at (35, 0), inside the stretch frame) in the stretch's selection.
-    let point = "0 BLOCKPOINTPARAMETER\n5 68\n330 61\n100 AcDbEvalExpr\n90 7\n98 33\n99 232\n100 AcDbBlockElement\n300 Point\n98 33\n99 232\n1071 0\n100 AcDbBlockParameter\n280 1\n281 0\n100 AcDbBlock1PtParameter\n1010 35\n1020 0\n1030 0\n93 0\n170 0\n171 0\n100 AcDbBlockPointParameter\n303 Position1\n304\n1011 35\n1021 4\n1031 0\n";
+    let point = "0 BLOCKPOINTPARAMETER\n5 68\n330 61\n100 AcDbEvalExpr\n90 7\n98 33\n99 232\n100 AcDbBlockElement\n300 Point\n98 33\n99 232\n1071 0\n100 AcDbBlockParameter\n280 1\n281 0\n100 AcDbBlock1PtParameter\n1010 35\n1020 0\n1030 0\n93 12\n170 0\n171 0\n100 AcDbBlockPointParameter\n303 Position1\n304\n1011 35\n1021 4\n1031 0\n";
     let src = FIXTURE
         .replace("71 1\n330 30\n1010 40", "71 2\n330 30\n330 68\n1010 40")
         .replace("91 5\n93 32\n95 6\n360 67", "91 5\n93 32\n95 6\n360 67\n92 -1\n92 -1\n92 -1\n92 -1\n91 6\n93 32\n95 7\n360 68")
@@ -773,6 +773,15 @@ fn parameters_in_a_stretch_selection_are_carried_along() {
     let ps = cadcraft_doc::dynblock::custom_properties(&d, r).unwrap().1;
     let pos: Vec<(&str, &str)> = ps.iter().filter(|p| p.name.starts_with("Position1")).map(|p| (p.name.as_str(), p.value.as_str())).collect();
     assert_eq!(pos, [("Position1 X", "29.0000"), ("Position1 Y", "0.0000")]);
+    // A position set directly is recorded as the drag of its grip (12), from where Door has it.
+    cadcraft_doc::dynblock::set_property(&mut d, r, "Position1 X", "20").unwrap();
+    let x = d.foreign.entities.get(&r).and_then(|x| x.xdict).unwrap();
+    let cache = dict_entry(&d, x, "AcDbBlockRepresentation").and_then(|rep| dict_entry(&d, rep, "AppDataCache")).unwrap();
+    let history = dict_entry(&d, cache, "ACAD_ENHANCEDBLOCKHISTORY").unwrap();
+    let tags: Vec<(i32, String)> =
+        d.foreign.objects.iter().find(|o| o.handle == history).unwrap().tags.iter().map(|t| (t.code, t.value.clone())).collect();
+    let grip = tags.iter().position(|t| *t == (1071, "12".to_string())).expect("grip entry");
+    assert_eq!(tags[grip + 1..grip + 3], [(300, "GRIPLOC".to_string()), (11, "-15".to_string())]);
 }
 
 /// The object entry `key` of dictionary `dict` refers to.
@@ -806,22 +815,20 @@ fn a_change_is_recorded_in_the_references_history_and_data() {
     assert_eq!(cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"), pairs(&[(1070, "3"), (1071, "1"), (300, "Visibility1"), (1, "Closed")]));
     assert_eq!(d.block(&block_of(&d, "80")).unwrap().units, 0, "anonymous copies have no units");
 
-    // A distance: the end grip's move from where Door has it (36 → 30).
+    // A distance as typed in Properties: by name, in block units; it replaces a drag of its
+    // grips. Entries are replaced, not added.
     cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Width", "30").unwrap();
-    let grip = pairs(&[(1071, "9"), (300, "GRIPLOC"), (11, "-6"), (21, "0"), (31, "0")]);
-    let mut want = pairs(&[(1070, "3"), (1071, "1"), (300, "Visibility1"), (1, "Closed")]);
-    want.extend(grip.clone());
-    assert_eq!(cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"), want);
-    // Back where Door has it: no entry; the visibility entry is replaced, not added.
-    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Width", "36").unwrap();
+    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Width", "32").unwrap();
     cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Visibility1", "Open").unwrap();
-    assert_eq!(cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"), pairs(&[(1070, "3"), (1071, "1"), (300, "Visibility1"), (1, "Open")]));
+    let want = pairs(&[(1070, "3"), (1071, "2"), (300, "Width"), (40, "32"), (1071, "1"), (300, "Visibility1"), (1, "Open")]);
+    assert_eq!(cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"), want);
 
-    // A reference with data and no history gets one (Width 30 → 32 in block units: the end
-    // grip is 4 short of Door's 36); both survive a save.
+    // A reference with data and no history gets one (81 is scaled 2: 64 is 32 in block units);
+    // both survive a save.
     cadcraft_doc::dynblock::set_property(&mut d, h("81"), "Width", "64").unwrap();
     let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
-    let saved = pairs(&[(1070, "3"), (1071, "9"), (300, "GRIPLOC"), (11, "-4.0"), (21, "0.0"), (31, "0.0")]);
+    let saved = pairs(&[(1070, "3"), (1071, "2"), (300, "Width"), (40, "32.0")]);
     assert_eq!(cache_entry(&again, "81", "ACAD_ENHANCEDBLOCKHISTORY"), saved);
-    assert_eq!(cache_entry(&again, "80", "ACAD_ENHANCEDBLOCKHISTORY"), cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"));
+    let saved = pairs(&[(1070, "3"), (1071, "2"), (300, "Width"), (40, "32.0"), (1071, "1"), (300, "Visibility1"), (1, "Open")]);
+    assert_eq!(cache_entry(&again, "80", "ACAD_ENHANCEDBLOCKHISTORY"), saved);
 }
