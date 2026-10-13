@@ -183,6 +183,57 @@ fn layout_viewport_frozen_layer_and_id1() {
     assert!(!build(&d, &Space::Model, &Options::default()).prims.is_empty());
 }
 
+/// The points of each primitive drawn through a viewport.
+fn viewport_points(l: &DisplayList) -> Vec<Vec<Vec2>> {
+    l.prims.iter().filter(|p| p.handle == VIEWPORT_CONTENT).map(|p| l.points(p).to_vec()).collect()
+}
+
+#[test]
+fn viewport_contents_can_be_left_out_and_built_for_any_area() {
+    let d = layout_with_viewport(vp(Vec2::new(5.0, 4.0), 4.0, 4.0, Vec2::new(5.0, 5.0), 8.0, 2));
+    let paper = Space::Paper("Layout1".into());
+    let h = d.space(&paper).unwrap().iter().find(|e| matches!(e.kind, EntityKind::Viewport(_))).unwrap().handle;
+    let opts = Options { tolerance: 0.01, ..Default::default() };
+    // Left out of the layout: only the border remains.
+    let skipped = build(&d, &paper, &Options { skip_viewport: Some(h), ..opts.clone() });
+    assert!(viewport_points(&skipped).is_empty());
+    assert!(skipped.prims.iter().any(|p| p.handle == h));
+    // Built for the viewport's own rectangle: what the layout draws there.
+    let rect = Bounds2::new(Vec2::new(3.0, 2.0), Vec2::new(7.0, 6.0));
+    let full = build(&d, &paper, &opts);
+    assert!(!viewport_points(&full).is_empty());
+    assert_eq!(viewport_points(&viewport_content(&d, &paper, h, rect, &opts)), viewport_points(&full));
+    // Built for a larger area, clipped to it instead of the viewport: the line y=0 (paper y=1.5,
+    // below the viewport) is there.
+    let wide = viewport_content(&d, &paper, h, rect.expand(2.0), &opts);
+    assert!(viewport_points(&wide).iter().any(|pts| pts.iter().all(|q| (q.y - 1.5).abs() < 1e-9)));
+    // Not a viewport, or an empty or non-finite area: nothing.
+    assert!(viewport_content(&d, &paper, Handle(0xDEAD), rect, &opts).prims.is_empty());
+    assert!(viewport_content(&d, &paper, h, Bounds2::EMPTY, &opts).prims.is_empty());
+    let nan = Bounds2::new(Vec2::new(f64::NAN, 0.0), Vec2::new(1.0, 1.0));
+    assert!(viewport_content(&d, &paper, h, nan, &opts).prims.is_empty());
+}
+
+#[test]
+fn viewport_contents_built_on_all_cores_match_one_thread() {
+    // Enough model objects for the parallel path; plots build on one thread.
+    let mut d = layout_with_viewport(vp(Vec2::new(5.0, 4.0), 8.0, 6.0, Vec2::new(30.0, 30.0), 60.0, 2));
+    for i in 0..1200 {
+        let (x, y) = (f64::from(i % 40) * 1.5, f64::from(i / 40) * 2.0);
+        let line = EntityKind::Line(cadcraft_doc::Line { a: Vec3::new(x, y, 0.0), b: Vec3::new(x + 1.0, y + 1.5, 0.0) });
+        d.add(&Space::Model, Common::default(), line).unwrap();
+    }
+    let paper = Space::Paper("Layout1".into());
+    let screen = build(&d, &paper, &Options::default());
+    let plot = build_plot(&d, &paper, &Options::default());
+    let pts = |l: &DisplayList| -> Vec<Vec<Vec2>> {
+        let border: Vec<Handle> = d.space(&paper).unwrap().iter().map(|e| e.handle).collect();
+        l.prims.iter().filter(|p| !border.contains(&p.handle)).map(|p| l.points(p).to_vec()).collect()
+    };
+    assert!(pts(&screen).len() > 1000);
+    assert_eq!(pts(&screen), pts(&plot));
+}
+
 #[test]
 fn hostile_viewports_do_not_panic() {
     for v in [
@@ -460,6 +511,18 @@ fn scattered_dot_pattern_reads_solid_once_dots_fill_the_pixels() {
     assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, 0.125));
 }
 
+/// Same polylines up to float noise: the view-limited path rotates into the family frame and back,
+/// so a start point can differ by ~1e-16 between platforms (#804). Structure must match exactly.
+fn assert_lines_close(a: &[Vec<Vec2>], b: &[Vec<Vec2>], what: &str) {
+    assert_eq!(a.len(), b.len(), "{what}: line count");
+    for (i, (ra, rb)) in a.iter().zip(b).enumerate() {
+        assert_eq!(ra.len(), rb.len(), "{what}: run {i} length");
+        for (pa, pb) in ra.iter().zip(rb) {
+            assert!((pa.x - pb.x).abs() < 1e-9 && (pa.y - pb.y).abs() < 1e-9, "{what}: run {i}: {pa:?} vs {pb:?}");
+        }
+    }
+}
+
 #[test]
 fn normal_zoom_pattern_is_unchanged() {
     // Lines and dash repeats a few pixels long or more: the level of detail changes nothing.
@@ -469,10 +532,12 @@ fn normal_zoom_pattern_is_unchanged() {
         let full = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, 0.0, None);
         assert!(!full.is_empty(), "{pattern}");
         assert!(!crate::hatch::reads_solid(&cadcraft_doc::Drawing::new_imperial(), &h, px), "{pattern}");
-        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, None), full, "{pattern}");
+        let same_res = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, None);
+        assert_lines_close(&same_res, &full, pattern);
         // A view covering the whole hatch changes nothing either.
         let all = Bounds2::new(Vec2::new(-1.0, -1.0), Vec2::new(7.0, 5.0));
-        assert_eq!(crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, Some(&all)), full, "{pattern}");
+        let in_view = crate::hatch::pattern_lines(&cadcraft_doc::Drawing::new_imperial(), &h, &loops, px, Some(&all));
+        assert_lines_close(&in_view, &full, pattern);
     }
 }
 
@@ -582,4 +647,53 @@ fn max_scale_is_the_most_stretched_axis() {
     let r = Mat3::rotate(0.7).then(Mat3::scale(2.0, 2.0));
     assert!((max_scale(&r) - 2.0).abs() < 1e-12);
     assert!((max_scale(&Mat3::IDENTITY) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn mtext_exact_spacing_ignores_taller_lines() {
+    // #711: a doubled middle line pushes the next baseline down with At least, not with Exactly.
+    let mtext = |contents: &str, line_spacing: f64, line_spacing_exact: bool| cadcraft_doc::MText {
+        insert: Vec3::ZERO,
+        height: 1.0,
+        width: 10.0,
+        attach: 1,
+        rotation: 0.0,
+        style: "Standard".into(),
+        contents: contents.into(),
+        line_spacing,
+        line_spacing_exact,
+        columns: None,
+    };
+    let d = Drawing::new_imperial();
+    let height = |contents: &str, ls: f64, exact: bool| layout_mtext_entity(&d, &mtext(contents, ls, exact)).bounds.height();
+    // The plain layout and the paragraph layout (`\p`) both honour the style.
+    for mixed in ["A\\P{\\H2x;BB}\\PCC", "\\pxi1;A\\P{\\H2x;BB}\\PCC"] {
+        assert!((height(mixed, 1.0, false) - (1.0 + 2.0 * 5.0 / 3.0 + 5.0 / 3.0)).abs() < 1e-9, "{mixed}: at least");
+        assert!((height(mixed, 1.0, true) - (1.0 + 2.0 * 5.0 / 3.0)).abs() < 1e-9, "{mixed}: exactly");
+        assert!((height(mixed, 2.0, true) - (1.0 + 2.0 * 5.0 / 3.0 * 2.0)).abs() < 1e-9, "{mixed}: exactly, factor 2");
+    }
+    for exact in [false, true] {
+        assert!((height("A\\PBB\\PCC", 1.0, exact) - (1.0 + 2.0 * 5.0 / 3.0)).abs() < 1e-9, "uniform lines, exact {exact}");
+    }
+}
+
+#[test]
+fn table_cell_text_height_scales_with_the_table() {
+    let height = |table_h: f64, own: Option<f64>| {
+        let d = Drawing::new_imperial();
+        let st = crate::table_style_of(&d, &cadcraft_doc::Table::default());
+        let cell = cadcraft_doc::TableCell { text: "a".into(), text_height: own, ..Default::default() };
+        let t = cadcraft_doc::Table {
+            col_widths: vec![500.0],
+            row_heights: vec![500.0],
+            cells: vec![vec![cell]],
+            text_height: table_h * st.text_height,
+            ..Default::default()
+        };
+        crate::table_geometry(&d, &t).texts.first().map(|x| x.height)
+    };
+    let base = height(1.0, None).unwrap();
+    assert_eq!(height(1.0, Some(150.0)), Some(150.0));
+    assert_eq!(height(2.0, Some(150.0)), Some(300.0));
+    assert_eq!(height(2.0, None), Some(base * 2.0));
 }
