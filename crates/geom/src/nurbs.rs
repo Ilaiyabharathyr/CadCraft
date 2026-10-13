@@ -49,15 +49,16 @@ fn gauss(a: f64, b: f64, f: impl Fn(f64) -> f64) -> f64 {
     GAUSS.iter().map(|(x, w)| w * f(m + h * x)).sum::<f64>() * h
 }
 
-/// Most halvings `adaptive_gauss` makes of one panel.
-const MAX_GAUSS_DEPTH: usize = 12;
+/// Most halvings `adaptive_gauss` makes of one panel: with `param_at_length`'s 60 bisections
+/// this bounds the work a hostile spline can ask for.
+const MAX_GAUSS_DEPTH: usize = 10;
 
 /// `gauss` over [a, b], halving until the two halves agree with the whole: a fixed panel count
 /// is far off on a tight bend, and the arc-length inverse must agree with the measure.
 fn adaptive_gauss(a: f64, b: f64, whole: f64, f: &impl Fn(f64) -> f64, depth: usize) -> f64 {
     let m = (a + b) / 2.0;
     let (l, r) = (gauss(a, m, f), gauss(m, b, f));
-    if depth == 0 || !(l + r).is_finite() || (l + r - whole).abs() <= 1e-13 * (l + r).abs() {
+    if depth == 0 || !(l + r).is_finite() || (l + r - whole).abs() <= 1e-10 * (l + r).abs() {
         return l + r;
     }
     adaptive_gauss(a, m, l, f, depth - 1) + adaptive_gauss(m, b, r, f, depth - 1)
