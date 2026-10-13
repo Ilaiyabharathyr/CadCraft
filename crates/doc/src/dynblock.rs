@@ -61,6 +61,10 @@ pub struct Parameter {
     /// The parameter's properties appear in a reference's Properties palette.
     pub show_properties: bool,
     pub kind: ParameterKind,
+    /// Graph ids of its grips: a two-point parameter's base and end grips (0 for none), a
+    /// one-point parameter's grip. A reference's history records grip drags by these.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub grips: Vec<i32>,
 }
 
 /// What a parameter is, with its definition geometry in block coordinates.
@@ -326,7 +330,8 @@ pub fn dynamic_block(d: &Drawing, name: &str) -> Option<DynamicBlock> {
         let kind = o.kind.to_ascii_uppercase();
         if kind.ends_with("PARAMETER") {
             let show_properties = Cursor::new(section(&secs, "AcDbBlockParameter")).int(280) != 0;
-            out.parameters.push(Parameter { node, handle: o.handle, element, show_properties, kind: parameter(&kind, &secs) });
+            let grips = grips(&secs);
+            out.parameters.push(Parameter { node, handle: o.handle, element, show_properties, kind: parameter(&kind, &secs), grips });
         } else if kind.ends_with("ACTION") {
             out.actions.push(action(o.handle, node, element, &kind, &secs));
         } else {
@@ -334,6 +339,22 @@ pub fn dynamic_block(d: &Drawing, name: &str) -> Option<DynamicBlock> {
         }
     }
     Some(out)
+}
+
+/// A parameter's grip ids: after a two-point parameter's points, the grip count (170) and the
+/// base and end grips (91); after a one-point parameter's point, its grip (93).
+fn grips(secs: &[(&str, &[RawTag])]) -> Vec<i32> {
+    let two = section(secs, "AcDbBlock2PtParameter");
+    if !two.is_empty() {
+        let mut c = Cursor::new(two);
+        c.point(1010);
+        c.point(1011);
+        let n = c.count(170).min(2);
+        return (0..n).map(|_| c.int(91)).collect();
+    }
+    let mut c = Cursor::new(section(secs, "AcDbBlock1PtParameter"));
+    c.point(1010);
+    c.next(93).and_then(|v| v.trim().parse().ok()).into_iter().collect()
 }
 
 fn parameter(kind: &str, secs: &[(&str, &[RawTag])]) -> ParameterKind {

@@ -774,3 +774,53 @@ fn parameters_in_a_stretch_selection_are_carried_along() {
     let pos: Vec<(&str, &str)> = ps.iter().filter(|p| p.name.starts_with("Position1")).map(|p| (p.name.as_str(), p.value.as_str())).collect();
     assert_eq!(pos, [("Position1 X", "29.0000"), ("Position1 Y", "0.0000")]);
 }
+
+/// The object entry `key` of dictionary `dict` refers to.
+fn dict_entry(d: &cadcraft_doc::Drawing, dict: Handle, key: &str) -> Option<Handle> {
+    let o = d.foreign.objects.iter().find(|o| o.handle == dict)?;
+    let at = o.tags.iter().position(|t| t.code == 3 && t.value == key)?;
+    o.tags.get(at + 1).and_then(|t| Handle::parse_hex(&t.value))
+}
+
+/// The groups of the reference's AppDataCache entry `key` (an object or a dictionary's keys).
+fn cache_entry(d: &cadcraft_doc::Drawing, insert: &str, key: &str) -> Vec<(i32, String)> {
+    let x = d.foreign.entities.get(&h(insert)).and_then(|x| x.xdict).expect("xdict");
+    let cache = dict_entry(d, x, "AcDbBlockRepresentation").and_then(|r| dict_entry(d, r, "AppDataCache")).expect("cache");
+    let Some(e) = dict_entry(d, cache, key) else { return Vec::new() };
+    let o = d.foreign.objects.iter().find(|o| o.handle == e).expect("object");
+    o.tags.iter().filter(|t| !matches!(t.code, 5 | 102 | 330 | 100 | 280)).map(|t| (t.code, t.value.clone())).collect()
+}
+
+#[test]
+fn a_change_is_recorded_in_the_references_history_and_data() {
+    // Width's grips are graph ids 8 (base) and 9 (end).
+    let src = with_references().replace("170\n4\n91\n0\n91\n0\n", "170\n4\n91\n8\n91\n9\n");
+    let mut d = read_dxf(src.as_bytes()).unwrap();
+    assert_eq!(dynamic_block(&d, "Door").unwrap().parameters.iter().find(|p| p.node == 2).unwrap().grips, [8, 9]);
+    let pairs = |v: &[(i32, &str)]| v.iter().map(|(c, s)| (*c, s.to_string())).collect::<Vec<_>>();
+
+    // Door's own reference: new data with a record for each one the other references have.
+    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Visibility1", "Closed").unwrap();
+    let keys: Vec<String> = cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKDATA").into_iter().filter(|(c, _)| *c == 3).map(|(_, k)| k).collect();
+    assert_eq!(keys, ["1", "2", "3", "4"]);
+    assert_eq!(cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"), pairs(&[(1070, "3"), (1071, "1"), (300, "Visibility1"), (1, "Closed")]));
+    assert_eq!(d.block(&block_of(&d, "80")).unwrap().units, 0, "anonymous copies have no units");
+
+    // A distance: the end grip's move from where Door has it (36 → 30).
+    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Width", "30").unwrap();
+    let grip = pairs(&[(1071, "9"), (300, "GRIPLOC"), (11, "-6"), (21, "0"), (31, "0")]);
+    let mut want = pairs(&[(1070, "3"), (1071, "1"), (300, "Visibility1"), (1, "Closed")]);
+    want.extend(grip.clone());
+    assert_eq!(cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"), want);
+    // Back where Door has it: no entry; the visibility entry is replaced, not added.
+    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Width", "36").unwrap();
+    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Visibility1", "Open").unwrap();
+    assert_eq!(cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"), pairs(&[(1070, "3"), (1071, "1"), (300, "Visibility1"), (1, "Open")]));
+
+    // A reference with data and no history gets one; both survive a save.
+    cadcraft_doc::dynblock::set_property(&mut d, h("81"), "Width", "60").unwrap();
+    let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
+    let saved = pairs(&[(1070, "3"), (1071, "9"), (300, "GRIPLOC"), (11, "-6.0"), (21, "0.0"), (31, "0.0")]);
+    assert_eq!(cache_entry(&again, "81", "ACAD_ENHANCEDBLOCKHISTORY"), saved);
+    assert_eq!(cache_entry(&again, "80", "ACAD_ENHANCEDBLOCKHISTORY"), cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"));
+}

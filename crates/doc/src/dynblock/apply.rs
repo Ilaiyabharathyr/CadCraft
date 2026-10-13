@@ -298,7 +298,7 @@ pub fn set_property(d: &mut Drawing, insert: Handle, name: &str, value: &str) ->
         }
         _ => return Err(format!("CADCraft can't change {name} yet.")),
     }
-    apply(d, insert, &r.definition, &r.values, &plan.set)
+    apply(d, insert, &r.definition, &r.values, &plan.set, p.node)
 }
 
 /// The change of each parameter value an action can follow, by parameter graph id and the
@@ -365,7 +365,14 @@ fn in_frame(frame: &[Vec2], p: Vec2) -> bool {
 /// Give `insert` a new anonymous block with the plan's values applied (visibility states, and
 /// the stretch and move actions of the changed parameters, with the parameters in their selections
 /// carried along), and record the new values on it.
-fn apply(d: &mut Drawing, insert: Handle, definition: &str, values: &BTreeMap<i32, Value>, set: &BTreeMap<i32, Val>) -> Result<(), String> {
+fn apply(
+    d: &mut Drawing,
+    insert: Handle,
+    definition: &str,
+    values: &BTreeMap<i32, Value>,
+    set: &BTreeMap<i32, Val>,
+    direct: i32,
+) -> Result<(), String> {
     let m = dynamic_block(d, definition).ok_or("Not a dynamic block reference.")?;
     let EntityKind::Insert(ins) = &d.entity(insert).ok_or("No such object.")?.kind else { return Err("Not a block reference.".into()) };
     let ins = ins.clone();
@@ -439,7 +446,9 @@ fn apply(d: &mut Drawing, insert: Handle, definition: &str, values: &BTreeMap<i3
     let shown_copy: HashMap<Handle, bool> = shown.iter().filter_map(|(dh, v)| copy_of(dh).map(|c| (c, *v))).collect();
     // The new anonymous block.
     let name = d.anonymous_block_name("*U");
-    let mut b = Block { name: name.clone(), anonymous: true, xref_path: None, array: None, entities: crate::EntityStore::new(), ..(*src).clone() };
+    // AutoCAD's anonymous copies have no units of their own.
+    let mut b =
+        Block { name: name.clone(), anonymous: true, xref_path: None, array: None, units: 0, entities: crate::EntityStore::new(), ..(*src).clone() };
     let mut copies: HashMap<Handle, Handle> = HashMap::new();
     for e in src.entities.iter() {
         copies.insert(e.handle, d.new_handle());
@@ -492,7 +501,9 @@ fn apply(d: &mut Drawing, insert: Handle, definition: &str, values: &BTreeMap<i3
                 }
             }
             x.xdict = None;
-            x.reactors.clear();
+            // Reactors within the block (an associative hatch's outline) follow to the copies;
+            // ones outside it are not ours.
+            x.reactors = x.reactors.iter().filter_map(|r| copies.get(r).copied()).collect();
             f.entities.insert(*new_h, x);
         }
     }
@@ -520,7 +531,7 @@ fn apply(d: &mut Drawing, insert: Handle, definition: &str, values: &BTreeMap<i3
         }
     })
     .map_err(|e| e.to_string())?;
-    record_values(d, insert, def_record, &m, &new);
+    record_values(d, insert, def_record, &m, &new, direct);
     drop_if_unused(d, &old);
     Ok(())
 }
@@ -552,53 +563,121 @@ fn refill_hatches(b: &mut Block) {
     }
 }
 
-/// Record values `set` (by parameter graph id) in `insert`'s representation data, creating it when
-/// the reference has none. A new value record copies a record of the same parameter from any
-/// reference in the drawing when there is one (AutoCAD's own layout), else a minimal one.
-fn record_values(d: &mut Drawing, insert: Handle, def_record: Option<Handle>, m: &DynamicBlock, set: &BTreeMap<i32, Val>) {
-    let xdict = d.foreign.entities.get(&insert).and_then(|x| x.xdict);
-    let rep = xdict.and_then(|x| entry(d, x, "AcDbBlockRepresentation"));
-    let data = rep.and_then(|r| entry(d, r, "AppDataCache")).and_then(|c| entry(d, c, "ACAD_ENHANCEDBLOCKDATA"));
-    // Templates: any reference's value record for each parameter (the values dictionaries are the
-    // ACAD_ENHANCEDBLOCKDATA entries of the drawing's dictionaries).
-    let mut templates: HashMap<String, Vec<RawTag>> = HashMap::new();
-    for o in d.foreign.objects.iter().filter(|o| o.kind.eq_ignore_ascii_case("DICTIONARY")) {
-        let Some(values) = entry(d, o.handle, "ACAD_ENHANCEDBLOCKDATA") else { continue };
+/// The value records of the references to the dynamic block whose record is `def_record` (from
+/// any one of them, by graph id): AutoCAD's layout of each record, class ids included.
+fn templates(d: &Drawing, def_record: Handle) -> HashMap<String, Vec<RawTag>> {
+    let objects: HashMap<Handle, &ForeignObject> = d.foreign.objects.iter().map(|o| (o.handle, o)).collect();
+    let mut out: HashMap<String, Vec<RawTag>> = HashMap::new();
+    for rep in d.foreign.objects.iter().filter(|o| o.kind.eq_ignore_ascii_case("DICTIONARY")) {
+        // A representation dictionary whose data names this dynamic block.
+        let Some(rd) = entry(d, rep.handle, "AcDbRepData").and_then(|h| objects.get(&h)) else { continue };
+        if !rd.tags.iter().any(|t| t.code == 340 && Handle::parse_hex(&t.value) == Some(def_record)) {
+            continue;
+        }
+        let Some(values) = entry(d, rep.handle, "AppDataCache").and_then(|c| entry(d, c, "ACAD_ENHANCEDBLOCKDATA")) else { continue };
         for (k, h) in entries(d, values) {
-            if let Some(x) = d.foreign.objects.iter().find(|x| x.handle == h && x.kind.eq_ignore_ascii_case("XRECORD")) {
-                templates.entry(k).or_insert_with(|| x.tags.clone());
+            if let Some(x) = objects.get(&h).filter(|x| x.kind.eq_ignore_ascii_case("XRECORD")) {
+                out.entry(k).or_insert_with(|| x.tags.clone());
             }
         }
     }
-    let at = |node: i32| match m.parameters.iter().find(|p| p.node == node).map(|p| &p.kind) {
-        Some(ParameterKind::Visibility { at, .. } | ParameterKind::Lookup { at, .. } | ParameterKind::Point { at, .. }) => *at,
+    out
+}
+
+/// A dictionary object `h` owned by `owner` with `entries`.
+fn dictionary(h: Handle, owner: Handle, entries: &[(&str, Handle)]) -> ForeignObject {
+    let mut tags = vec![tag(5, h.hex()), tag(330, owner.hex()), tag(100, "AcDbDictionary"), tag(280, "1"), tag(281, "1")];
+    for (k, v) in entries {
+        tags.push(tag(3, *k));
+        tags.push(tag(360, v.hex()));
+    }
+    ForeignObject { handle: h, kind: "DICTIONARY".into(), tags }
+}
+
+/// `tags` (a template's groups) as new record `h` owned by `owner`: the template's handle, owner
+/// and reactors are not ours (inside reactor brackets, 102, everything goes).
+fn own(mut tags: Vec<RawTag>, h: Handle, owner: Handle) -> Vec<RawTag> {
+    let mut inside = false;
+    tags.retain(|t| {
+        if t.code == 102 {
+            inside = t.value.starts_with('{');
+            return false;
+        }
+        !(inside || t.code == 5 || t.code == 330)
+    });
+    let at = tags.iter().position(|t| t.code == 100).unwrap_or(0);
+    tags.insert(at, tag(330, owner.hex()));
+    tags.insert(0, tag(5, h.hex()));
+    tags
+}
+
+/// Record values `set` (by parameter graph id) in `insert`'s representation data, and the direct
+/// change (of parameter `direct`) in its history, creating them when the reference has none. A
+/// new reference's data gets a record for everything other references of the dynamic block have
+/// (AutoCAD keeps one for each parameter and stretch action), with its own values; with no other
+/// reference to copy, a changed value gets a minimal record.
+fn record_values(d: &mut Drawing, insert: Handle, def_record: Option<Handle>, m: &DynamicBlock, set: &BTreeMap<i32, Val>, direct: i32) {
+    let xdict = d.foreign.entities.get(&insert).and_then(|x| x.xdict);
+    let rep = xdict.and_then(|x| entry(d, x, "AcDbBlockRepresentation"));
+    let cache = rep.and_then(|r| entry(d, r, "AppDataCache"));
+    let data = cache.and_then(|c| entry(d, c, "ACAD_ENHANCEDBLOCKDATA"));
+    let templates = def_record.map(|r| templates(d, r)).unwrap_or_default();
+    let param = |node: i32| m.parameters.iter().find(|p| p.node == node).map(|p| &p.kind);
+    let at = |node: i32| match param(node) {
+        Some(
+            ParameterKind::Visibility { at, .. }
+            | ParameterKind::Lookup { at, .. }
+            | ParameterKind::Point { at, .. }
+            | ParameterKind::BasePoint { at },
+        ) => *at,
         _ => Vec3::ZERO,
     };
     let mut objects: Vec<ForeignObject> = Vec::new();
-    let data = match data {
-        Some(h) => h,
-        None => {
+    let mut fresh: Vec<(String, Vec<RawTag>)> = Vec::new();
+    let (cache, data) = match (cache, data) {
+        (Some(c), Some(h)) => (c, h),
+        _ => {
             // Create the representation: reference xdict ▸ AcDbBlockRepresentation ▸ AcDbRepData
             // (the dynamic block's record) and AppDataCache ▸ ACAD_ENHANCEDBLOCKDATA.
             let Some(rec) = def_record else { return };
             let xd = xdict.unwrap_or_else(|| d.new_handle());
             let (rep, rd, cache, data) = (d.new_handle(), d.new_handle(), d.new_handle(), d.new_handle());
-            let dict = |h: Handle, owner: Handle, entries: &[(&str, Handle)]| {
-                let mut tags = vec![tag(5, h.hex()), tag(330, owner.hex()), tag(100, "AcDbDictionary"), tag(280, "1"), tag(281, "1")];
-                for (k, v) in entries {
-                    tags.push(tag(3, *k));
-                    tags.push(tag(360, v.hex()));
-                }
-                ForeignObject { handle: h, kind: "DICTIONARY".into(), tags }
-            };
-            objects.push(dict(rep, xd, &[("AcDbRepData", rd), ("AppDataCache", cache)]));
+            objects.push(dictionary(rep, xd, &[("AcDbRepData", rd), ("AppDataCache", cache)]));
             objects.push(ForeignObject {
                 handle: rd,
                 kind: "ACDB_BLOCKREPRESENTATION_DATA".into(),
                 tags: vec![tag(5, rd.hex()), tag(330, rep.hex()), tag(100, "AcDbBlockRepresentationData"), tag(70, "1"), tag(340, rec.hex())],
             });
-            objects.push(dict(cache, rep, &[("ACAD_ENHANCEDBLOCKDATA", data)]));
-            objects.push(dict(data, cache, &[]));
+            objects.push(dictionary(cache, rep, &[("ACAD_ENHANCEDBLOCKDATA", data)]));
+            objects.push(dictionary(data, cache, &[]));
+            // Every record the other references have, with this reference's values: its
+            // parameters' positions and defaults (lookups as Properties shows them); action
+            // records as they are.
+            let lookups: HashMap<String, String> = super::custom_properties(d, insert)
+                .map(|(_, ps)| ps.into_iter().map(|p| (p.name.to_ascii_uppercase(), p.value)).collect())
+                .unwrap_or_default();
+            let mut keys: Vec<&String> = templates.keys().collect();
+            keys.sort();
+            for k in keys {
+                let (Ok(node), Some(t)) = (k.parse::<i32>(), templates.get(k)) else { continue };
+                let mut tags = t.clone();
+                match param(node) {
+                    Some(ParameterKind::Visibility { .. } | ParameterKind::Point { .. } | ParameterKind::BasePoint { .. }) => {
+                        write_value(&mut tags, &Val::Point(at(node)));
+                    }
+                    Some(ParameterKind::Lookup { label, .. }) => {
+                        write_value(&mut tags, &Val::Point(at(node)));
+                        if let Some(v) = lookups.get(&label.to_ascii_uppercase()) {
+                            write_value(&mut tags, &Val::Text(v.clone()));
+                        }
+                    }
+                    _ => {}
+                }
+                if let Some(v) = current(m, &BTreeMap::new(), node) {
+                    write_value(&mut tags, &v);
+                }
+                fresh.push((k.clone(), tags));
+            }
             let f = std::sync::Arc::make_mut(&mut d.foreign);
             match f.objects.iter_mut().find(|o| Some(o.handle) == xdict) {
                 Some(x) => {
@@ -606,11 +685,11 @@ fn record_values(d: &mut Drawing, insert: Handle, def_record: Option<Handle>, m:
                     x.tags.push(tag(360, rep.hex()));
                 }
                 None => {
-                    objects.push(dict(xd, insert, &[("AcDbBlockRepresentation", rep)]));
+                    objects.push(dictionary(xd, insert, &[("AcDbBlockRepresentation", rep)]));
                     f.entities.entry(insert).or_default().xdict = Some(xd);
                 }
             }
-            data
+            (cache, data)
         }
     };
     let existing: HashMap<String, Handle> = match objects.iter().find(|o| o.handle == data) {
@@ -618,8 +697,19 @@ fn record_values(d: &mut Drawing, insert: Handle, def_record: Option<Handle>, m:
         None => entries(d, data).into_iter().collect(),
     };
     let mut add: Vec<(String, Handle)> = Vec::new();
+    for (key, mut tags) in fresh {
+        if let Some(v) = key.parse::<i32>().ok().and_then(|n| set.get(&n)) {
+            write_value(&mut tags, v);
+        }
+        let h = d.new_handle();
+        objects.push(ForeignObject { handle: h, kind: "XRECORD".into(), tags: own(tags, h, data) });
+        add.push((key, h));
+    }
     for (node, v) in set {
         let key = node.to_string();
+        if add.iter().any(|(k, _)| *k == key) {
+            continue;
+        }
         match existing.get(&key) {
             Some(h) => {
                 let f = std::sync::Arc::make_mut(&mut d.foreign);
@@ -633,22 +723,30 @@ fn record_values(d: &mut Drawing, insert: Handle, def_record: Option<Handle>, m:
                     let p = at(*node);
                     vec![tag(100, "AcDbXrecord"), tag(280, "1"), tag(10, p.x.to_string()), tag(20, p.y.to_string()), tag(30, p.z.to_string())]
                 });
-                // Its own handle, owned by the values dictionary; the template's handle, owner and
-                // reactors are not ours. Inside reactor brackets (102) everything goes.
-                let mut inside = false;
-                tags.retain(|t| {
-                    if t.code == 102 {
-                        inside = t.value.starts_with('{');
-                        return false;
-                    }
-                    !(inside || t.code == 5 || t.code == 330)
-                });
-                let at = tags.iter().position(|t| t.code == 100).unwrap_or(0);
-                tags.insert(at, tag(330, data.hex()));
-                tags.insert(0, tag(5, h.hex()));
                 write_value(&mut tags, v);
-                objects.push(ForeignObject { handle: h, kind: "XRECORD".into(), tags });
+                objects.push(ForeignObject { handle: h, kind: "XRECORD".into(), tags: own(tags, h, data) });
                 add.push((key, h));
+            }
+        }
+    }
+    // The history: AutoCAD replays it over the dynamic block (when the block is redefined), so
+    // it must say what was done to this reference.
+    let history = entry(d, cache, "ACAD_ENHANCEDBLOCKHISTORY").filter(|h| d.foreign.objects.iter().any(|o| o.handle == *h));
+    let mut new_history = None;
+    if let (Some(v), Some(p)) = (set.get(&direct), m.parameters.iter().find(|p| p.node == direct)) {
+        match history {
+            Some(h) => {
+                let f = std::sync::Arc::make_mut(&mut d.foreign);
+                if let Some(x) = f.objects.iter_mut().find(|o| o.handle == h) {
+                    write_history(&mut x.tags, p, v);
+                }
+            }
+            None => {
+                let h = d.new_handle();
+                let mut tags = vec![tag(5, h.hex()), tag(330, cache.hex()), tag(100, "AcDbXrecord"), tag(280, "1"), tag(1070, "3")];
+                write_history(&mut tags, p, v);
+                objects.push(ForeignObject { handle: h, kind: "XRECORD".into(), tags });
+                new_history = Some(h);
             }
         }
     }
@@ -660,6 +758,54 @@ fn record_values(d: &mut Drawing, insert: Handle, def_record: Option<Handle>, m:
             x.tags.push(tag(360, h.hex()));
         }
     }
+    if let (Some(h), Some(x)) = (new_history, f.objects.iter_mut().find(|o| o.handle == cache)) {
+        x.tags.push(tag(3, "ACAD_ENHANCEDBLOCKHISTORY"));
+        x.tags.push(tag(360, h.hex()));
+    }
+}
+
+/// Record the direct change of parameter `p` to `v` in a reference's history (groups `tags`):
+/// after its header (`280 1`, `1070 3`), an entry per change: `1071` the id, `300` what, then
+/// the value. A visibility state or lookup value goes by the property's name (`1` the text); a
+/// dragged grip as `GRIPLOC` with how far it is from where the dynamic block has it
+/// (`11/21/31`). An entry for the same id is replaced; a grip back in its place has none.
+fn write_history(tags: &mut Vec<RawTag>, p: &super::Parameter, v: &Val) {
+    let grip = |id: i32, moved: Vec3| {
+        let home = moved.x.abs() < 1e-9 && moved.y.abs() < 1e-9 && moved.z.abs() < 1e-9;
+        let e = vec![
+            tag(1071, id.to_string()),
+            tag(300, "GRIPLOC"),
+            tag(11, moved.x.to_string()),
+            tag(21, moved.y.to_string()),
+            tag(31, moved.z.to_string()),
+        ];
+        (id, if home { Vec::new() } else { e })
+    };
+    let grips =
+        |moves: &[Vec3]| -> Vec<(i32, Vec<RawTag>)> { p.grips.iter().zip(moves).filter(|(g, _)| **g != 0).map(|(g, m)| grip(*g, *m)).collect() };
+    let changes: Vec<(i32, Vec<RawTag>)> = match (&p.kind, v) {
+        (ParameterKind::Visibility { label, .. } | ParameterKind::Lookup { label, .. }, Val::Text(t)) => {
+            vec![(p.node, vec![tag(1071, p.node.to_string()), tag(300, label.clone()), tag(1, t.clone())])]
+        }
+        (ParameterKind::Linear { base, end, .. }, Val::Points(b, e)) => grips(&[*b - *base, *e - *end]),
+        (ParameterKind::Point { at, .. }, Val::Point(q)) => grips(&[*q - *at]),
+        _ => return,
+    };
+    // The header, then the entries (each from its 1071).
+    let start = tags.iter().position(|t| t.code == 1071).unwrap_or(tags.len());
+    let mut entries: Vec<Vec<RawTag>> = Vec::new();
+    for t in tags.drain(start..) {
+        if t.code == 1071 || entries.is_empty() {
+            entries.push(Vec::new());
+        }
+        if let Some(e) = entries.last_mut() {
+            e.push(t);
+        }
+    }
+    let id = |e: &[RawTag]| e.first().filter(|t| t.code == 1071).and_then(|t| t.value.trim().parse::<i32>().ok());
+    entries.retain(|e| !changes.iter().any(|(c, _)| id(e) == Some(*c)));
+    entries.extend(changes.into_iter().map(|(_, e)| e).filter(|e| !e.is_empty()));
+    tags.extend(entries.into_iter().flatten());
 }
 
 /// Write value `v` into a value record's groups: its text (group 1), or its points in order over
