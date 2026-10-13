@@ -48,3 +48,8 @@ sync_github_name = true
 
 [people.Losminek]
 sync_github_name = true
+
+[people.holmbom]
+real_name = "Erik Holmbom"
+display_name = "Erik Holmbom"
+sync_github_name = false

@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Czech catalog added: reference/literal coverage, Czech plurals and menu headings) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (Swedish catalog added: complete catalog, menu headings, native-speaker terminology review; previously minor: Czech catalog added) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How far CADCraft's interface and drawing text are from AutoCAD's languages. Summarised in
 [ROADMAP.md](../ROADMAP.md#languages); work items in [gaps.md](gaps.md#localization).
@@ -66,8 +66,9 @@ plus native review by a human; extending the catalog to the remaining English-on
 | Vietnamese | vi | 0 (0%) | 0% | Latin with stacked diacritics: renders per code point, untested | no | none | 3–5 h |
 | Ukrainian | uk | 989 catalog rows (≈ 100% of the catalog; ≈ 80% of all UI strings, estimated: engine diagnostics and uncatalogued text stay English) | dialogs and tooltips yes; command reference searchable in Ukrainian | Cyrillic: yes (bundled egui fonts) | translated by a contributor; no second review | partial | 2–4 h |
 | Czech | cs | 1,202 catalog rows; reference catalog and marked UI literals covered | dialogs and tooltips yes; contextual menu headings; command reference searchable in Czech | Latin: yes (bundled egui proportional and monospace fonts; Czech letters and quotes tested) | AI-assisted by @Losminek; independent review pass; not yet proofread by a native speaker | complete current catalog; English-only interface gaps remain | native review + shared English-only UI work |
+| Swedish | sv | 1,235 catalog rows; reference catalog, marked UI literals and menu headings covered (no gaps reported) | dialogs and tooltips yes; contextual menu headings; command reference searchable in Swedish | Latin: yes (bundled egui proportional and monospace fonts; å ä ö é and Swedish quotes tested) | AI-assisted (Claude Code) by @holmbom; terminology and the running app reviewed by a native speaker | complete current catalog; English-only interface gaps remain | line-by-line proofreading + shared English-only UI work |
 
-Other languages shipped: Ukrainian, Brazilian Portuguese, German, Czech, Russian and French. Czech covers the
+Other languages shipped: Ukrainian, Brazilian Portuguese, German, Czech, Russian, French and Swedish. Czech and Swedish cover the
 reference catalog and marked UI literals; engine diagnostics and uncatalogued text remain English. AutoCAD for Mac ships 7
 non-English languages (zh-Hans, es, fr, ja, de, ko, it); of those, CADCraft now ships German,
 and additionally Ukrainian, which AutoCAD for Mac doesn't ship.
@@ -80,6 +81,7 @@ each language, which needs humans. Translations parallelise fully once the catal
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Swedish added: 1,235 rows, one/other plurals, menu headings, locale/preferences/menu/font/render tests; no gaps in the marked UI literals; terminology and the running app reviewed by a native speaker |
 | 2026-10-11 | minor | Czech added: 1,202 rows, one/few/other plurals, locale/preferences/menu/font/render tests; independent review pass; native proofreading pending |
 | 2026-10-11 | minor | German catalog landed: `de` preference and catalog, per-language plural rules; non-English languages 1 → 2; total hours 60–100 → 55–95 |
 | 2026-10-10 | minor | Right-to-left drawing text: bidi and Arabic-script shaping in TEXT and MTEXT (#287) |
