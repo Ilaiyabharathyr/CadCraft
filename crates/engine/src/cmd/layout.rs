@@ -260,10 +260,10 @@ fn run_delete(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_rename(s: &mut Session, p: &Value) -> Result<Value> {
-    let from = match (str_param(p, "from"), s.layout_space()) {
+    let from = match (str_param(p, "from"), s.layout_space().layout()) {
         (Some(f), _) => f.to_string(),
-        (None, Space::Paper(n)) => n,
-        (None, Space::Model) => return Err(bad("layout.rename", "`from` is required in the Model tab")),
+        (None, Some(n)) => n.to_string(),
+        (None, None) => return Err(bad("layout.rename", "`from` is required in the Model tab")),
     };
     let from = layout_name("layout.rename", s.doc()?, &from)?;
     let to = str_param(p, "to").ok_or_else(|| bad("layout.rename", "`to` is required"))?;
@@ -372,10 +372,8 @@ fn target_layout(s: &Session, cmd: &str, p: &Value) -> Result<Space> {
     if let Some(n) = str_param(p, "layout") {
         return Ok(Space::Paper(layout_name(cmd, s.doc()?, n)?));
     }
-    match s.layout_space() {
-        Space::Model => Err(bad(cmd, "** Command not allowed in Model Tab ** (switch to a layout or pass `layout`)")),
-        sp => Ok(sp),
-    }
+    let sp = s.layout_space();
+    if sp.is_paper() { Ok(sp) } else { Err(bad(cmd, "** Command not allowed in Model Tab ** (switch to a layout or pass `layout`)")) }
 }
 
 /// Split a rectangle into `count` viewport rectangles (AutoCAD's VPORTS arrangements).
@@ -636,10 +634,9 @@ fn run_pagesetup(s: &mut Session, p: &Value) -> Result<Value> {
         "displayPlotStyles",
     ];
     let changes = keys.iter().any(|k| p.get(k).is_some());
-    let name = match (str_param(p, "layout"), s.space()) {
-        (Some(n), _) => Some(layout_name(cmd, s.doc()?, n)?),
-        (None, Space::Paper(n)) => Some(n),
-        (None, Space::Model) => None,
+    let name = match str_param(p, "layout") {
+        Some(n) => Some(layout_name(cmd, s.doc()?, n)?),
+        None => s.space().layout().map(str::to_string),
     };
     let Some(name) = name else {
         if changes {
@@ -784,10 +781,9 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         }
     }
     let bytes = hook(s.doc()?, &space, &opts).map_err(|e| bad(cmd, e))?;
-    let layout = match (&sheets, &space) {
-        (Some(names), _) => names.first().cloned().unwrap_or_default(),
-        (None, Space::Model) => "Model".to_string(),
-        (None, Space::Paper(n)) => n.clone(),
+    let layout = match &sheets {
+        Some(names) => names.first().cloned().unwrap_or_default(),
+        None => space.tab_name().to_string(),
     };
     let pages = sheets.as_ref().map_or(1, Vec::len);
     match str_param(p, "path") {
@@ -812,10 +808,15 @@ fn run_plot(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
 /// Layouts plot their sheet (`layout`).
 fn plot_window(s: &Session, p: &Value, cmd: &str, space: &Space) -> Result<Option<Bounds2>> {
     let area = str_param(p, "plotArea").map(str::to_ascii_lowercase);
-    let w = match (space, area.as_deref()) {
-        (_, None) | (Space::Model, Some("extents")) | (Space::Paper(_), Some("layout")) => return Ok(None),
-        (Space::Paper(_), Some(_)) => return Err(bad(cmd, "a layout plots its whole sheet: `plotArea` must be layout")),
-        (Space::Model, Some("display")) => {
+    if space.is_paper() {
+        return match area.as_deref() {
+            None | Some("layout") => Ok(None),
+            Some(_) => Err(bad(cmd, "a layout plots its whole sheet: `plotArea` must be layout")),
+        };
+    }
+    let w = match area.as_deref() {
+        None | Some("extents") => return Ok(None),
+        Some("display") => {
             let st = s.state()?;
             let v = st.views.iter().find(|(sp, _)| *sp == Space::Model).map(|(_, v)| *v).unwrap_or_default();
             let (px, py) = s.viewport_px;
@@ -823,13 +824,13 @@ fn plot_window(s: &Session, p: &Value, cmd: &str, space: &Space) -> Result<Optio
             let half = Vec2::new(v.height * aspect / 2.0, v.height / 2.0);
             Bounds2::new(v.center - half, v.center + half)
         }
-        (Space::Model, Some("limits")) => {
+        Some("limits") => {
             let d = s.doc()?;
             let lo = d.header.point("LIMMIN").map(|p| p.xy()).unwrap_or(Vec2::ZERO);
             let hi = d.header.point("LIMMAX").map(|p| p.xy()).unwrap_or(Vec2::new(12.0, 9.0));
             Bounds2::new(lo, hi)
         }
-        (Space::Model, Some("window")) => {
+        Some("window") => {
             let corners = p.get("window").and_then(Value::as_array);
             let a = corners.and_then(|c| c.first()).and_then(point_value);
             let b = corners.and_then(|c| c.get(1)).and_then(point_value);
@@ -838,7 +839,7 @@ fn plot_window(s: &Session, p: &Value, cmd: &str, space: &Space) -> Result<Optio
             };
             Bounds2::new(a, b)
         }
-        (Space::Model, Some(_)) => return Err(bad(cmd, "`plotArea` must be extents, display, limits or window (layouts: layout)")),
+        Some(_) => return Err(bad(cmd, "`plotArea` must be extents, display, limits or window (layouts: layout)")),
     };
     let ok = w.min.is_finite() && w.max.is_finite() && w.width() > 1e-9 && w.height() > 1e-9;
     if ok { Ok(Some(w)) } else { Err(bad(cmd, "the plot area is empty")) }

@@ -300,10 +300,7 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         x = x.max(r.left() + if app.ui.show_toolsets { 232.0 } else { 60.0 });
         // Layout tabs.
         let mut tabs: Vec<String> = vec!["Model".into()];
-        let cur = app.session.state().map(|s| match &s.space {
-            cadcraft_doc::Space::Model => "Model".to_string(),
-            cadcraft_doc::Space::Paper(n) => n.clone(),
-        });
+        let cur = app.session.state().map(|s| s.space.tab_name().to_string());
         if let Ok(st) = app.session.state() {
             let mut ls: Vec<_> = st.doc.layouts.iter().collect();
             ls.sort_by_key(|l| l.tab_order);
