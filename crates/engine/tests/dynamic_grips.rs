@@ -117,3 +117,13 @@ fn an_end_no_action_follows_has_no_grip() {
     let (mut s, h) = session_with(|src| with_base_grip(src).replace("301 EndXDelta\n302 EndYDelta", "301 BaseXDelta\n302 BaseYDelta"));
     assert_eq!(parts(&mut s, h), [(1, "at".to_string()), (2, "base".to_string())]);
 }
+
+#[test]
+fn a_state_that_lists_a_parameter_shows_its_grips() {
+    // Open lists Width but not its grip: the grip shows (as AutoCAD shows it); Closed lists
+    // neither, and the grip doesn't.
+    let (mut s, h) = session_with(|src| src.replace("95 2\n333 63\n333 68\n", "95 1\n333 63\n"));
+    assert_eq!(parts(&mut s, h), [(1, "at".to_string()), (2, "end".to_string())]);
+    s.execute("blocks.reference.set", &json!({ "handle": h.hex(), "name": "Visibility1", "value": "Closed" })).unwrap();
+    assert_eq!(parts(&mut s, h), [(1, "at".to_string())]);
+}

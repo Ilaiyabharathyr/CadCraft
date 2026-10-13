@@ -135,8 +135,15 @@ pub fn grips(d: &Drawing, insert: Handle) -> Vec<DynGrip> {
             break;
         }
     }
+    // A grip shows in the current visibility state when the state lists it, or lists its
+    // parameter (AutoCAD shows a listed parameter's grips though the grips aren't listed).
+    let param_handle: HashMap<i32, Handle> = m.parameters.iter().map(|p| (p.node, p.handle)).collect();
     let shown = |node: i32, id: i32| {
-        id != 0 && (Some(node) == visibility_node || shown_in_state.as_ref().is_none_or(|a| objects.get(&id).is_some_and(|h| a.contains(h))))
+        id != 0
+            && (Some(node) == visibility_node
+                || shown_in_state
+                    .as_ref()
+                    .is_none_or(|a| objects.get(&id).is_some_and(|h| a.contains(h)) || param_handle.get(&node).is_some_and(|h| a.contains(h))))
     };
     let choices: HashMap<String, Vec<String>> =
         custom_properties(d, insert).map(|(_, ps)| ps.into_iter().map(|p| (p.name.to_ascii_uppercase(), p.choices)).collect()).unwrap_or_default();
