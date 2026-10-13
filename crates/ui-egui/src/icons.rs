@@ -153,6 +153,22 @@ pub enum Icon {
     Paste,
     SelectAll,
     Globe,
+    Regen,
+    NamedViews,
+    Viewports,
+    Ucs,
+    Theme,
+    Accessibility,
+    Xref,
+    DataLink,
+    Layout,
+    LayerState,
+    ColorWheel,
+    Linetype,
+    TextStyle,
+    DimStyle,
+    Units,
+    Rename,
 }
 
 #[derive(Clone, Copy)]
@@ -934,6 +950,8 @@ pub fn paint_tinted(p: &Painter, rect: Rect, icon: Icon, dim: bool, tint: Option
             pen.poly(&[(20.0, 10.0), (16.5, 15.5), (20.0, 15.5), (17.0, 21.0)], false, a);
         }
         Template | Pdf | Wrench | Quit | Cut | ClipCopy | Paste | SelectAll | Globe => menu_icon(&Pen { g: 20.0, ..pen }, icon),
+        Regen | NamedViews | Viewports | Ucs | Theme | Accessibility | Xref | DataLink | Layout | LayerState | ColorWheel | Linetype | TextStyle
+        | DimStyle | Units | Rename => menu_icon(&Pen { g: 20.0, ..pen }, icon),
         // MENU-ARMS
     }
 }
@@ -1007,6 +1025,115 @@ fn menu_icon(m: &Pen, icon: Icon) {
                     .collect();
                 m.poly(&side, false, a);
             }
+        }
+        Regen => {
+            // A circular arrow.
+            m.arc(9.8, 10.0, 6.0, 30.0, 332.0, b);
+            m.poly(&[(16.0, 3.0), (16.0, 7.0), (12.0, 7.0)], false, a);
+        }
+        NamedViews => {
+            // A camera.
+            m.rect(3.0, 6.0, 10.0, 8.0, b);
+            m.poly(&[(13.0, 9.0), (17.0, 7.0), (17.0, 13.0), (13.0, 11.0)], false, a);
+        }
+        Viewports => {
+            // A window split in four.
+            m.rect(3.0, 4.0, 14.0, 12.0, b);
+            m.la(10.0, 4.0, 10.0, 16.0);
+            m.la(3.0, 10.0, 17.0, 10.0);
+        }
+        Ucs => {
+            // The X and Y axes with arrowheads.
+            m.l(4.0, 16.0, 4.0, 5.0);
+            m.poly(&[(2.5, 7.0), (4.0, 5.0), (5.5, 7.0)], false, b);
+            m.la(4.0, 16.0, 15.0, 16.0);
+            m.poly(&[(13.0, 14.5), (15.0, 16.0), (13.0, 17.5)], false, a);
+        }
+        Theme => {
+            // A disc, half shaded.
+            m.c(10.0, 10.0, 7.0, b);
+            m.l(10.0, 3.0, 10.0, 17.0);
+            m.la(12.5, 3.6, 12.5, 16.4);
+            m.la(15.0, 5.2, 15.0, 14.8);
+        }
+        Accessibility => {
+            // A figure with open arms.
+            m.c(10.0, 4.5, 1.0, a);
+            m.l(5.0, 7.0, 15.0, 7.0);
+            m.l(10.0, 7.0, 10.0, 11.5);
+            m.l(10.0, 11.5, 7.0, 16.5);
+            m.l(10.0, 11.5, 13.0, 16.5);
+        }
+        Xref => {
+            // Two chain links.
+            m.poly(&[(7.0, 9.0), (5.0, 11.0), (4.3, 12.5), (4.6, 14.2), (5.8, 15.4), (7.5, 15.7), (9.0, 15.0), (11.0, 13.0)], false, b);
+            m.poly(&[(13.0, 11.0), (15.0, 9.0), (15.7, 7.5), (15.4, 5.8), (14.2, 4.6), (12.5, 4.3), (11.0, 5.0), (9.0, 7.0)], false, b);
+            m.la(8.0, 12.0, 12.0, 8.0);
+        }
+        DataLink => {
+            // A sheet of cells.
+            m.rect(4.0, 4.0, 12.0, 12.0, b);
+            m.la(4.0, 8.0, 16.0, 8.0);
+            m.l(4.0, 12.0, 16.0, 12.0);
+            m.l(9.0, 4.0, 9.0, 16.0);
+        }
+        Layout => {
+            // A sheet with a viewport and a title line.
+            m.rect(3.0, 4.0, 14.0, 12.0, b);
+            m.rect(12.0, 6.0, 3.0, 4.0, a);
+            m.l(5.0, 13.0, 10.0, 13.0);
+        }
+        LayerState => {
+            // Stacked layers with a plus.
+            m.poly(&[(10.0, 3.0), (17.0, 7.0), (10.0, 11.0), (3.0, 7.0)], true, b);
+            m.poly(&[(3.0, 11.0), (10.0, 15.0), (12.5, 13.6)], false, b);
+            m.la(14.0, 15.5, 18.0, 15.5);
+            m.la(16.0, 13.5, 16.0, 17.5);
+        }
+        ColorWheel => {
+            // A wheel in three sectors.
+            m.c(10.0, 10.0, 7.0, b);
+            m.l(10.0, 3.0, 10.0, 10.0);
+            m.l(10.0, 10.0, 3.95, 13.5);
+            m.la(10.0, 10.0, 16.05, 13.5);
+        }
+        Linetype => {
+            // A continuous, a dashed and a dotted line.
+            m.l(3.0, 6.0, 17.0, 6.0);
+            for (x0, x1) in [(3.0, 6.0), (8.0, 12.0), (14.0, 17.0)] {
+                m.la(x0, 10.0, x1, 10.0);
+            }
+            for x in [3.0, 6.0, 9.0, 12.0, 15.0] {
+                m.l(x, 14.0, x + 1.0, 14.0);
+            }
+        }
+        TextStyle => {
+            // A letter on a baseline.
+            m.poly(&[(5.0, 15.0), (10.0, 3.0), (15.0, 15.0)], false, b);
+            m.l(7.0, 11.0, 13.0, 11.0);
+            m.la(4.0, 18.0, 16.0, 18.0);
+        }
+        DimStyle => {
+            // A dimension line with open arrowheads.
+            m.l(3.0, 6.0, 3.0, 14.0);
+            m.l(17.0, 6.0, 17.0, 14.0);
+            m.la(3.0, 10.0, 17.0, 10.0);
+            m.poly(&[(5.0, 8.0), (3.0, 10.0), (5.0, 12.0)], false, a);
+            m.poly(&[(15.0, 8.0), (17.0, 10.0), (15.0, 12.0)], false, a);
+        }
+        Units => {
+            // A ruler.
+            m.rect(3.0, 8.0, 14.0, 5.0, b);
+            for (x, y) in [(6.0, 10.0), (9.0, 11.0), (12.0, 10.0), (15.0, 11.0)] {
+                m.la(x, 8.0, x, y);
+            }
+        }
+        Rename => {
+            // A name field with a text cursor.
+            m.rect(3.0, 7.0, 11.0, 6.0, b);
+            m.la(16.0, 5.0, 16.0, 15.0);
+            m.la(15.0, 5.0, 17.0, 5.0);
+            m.la(15.0, 15.0, 17.0, 15.0);
         }
         // MENU-ICONS
         _ => {}
