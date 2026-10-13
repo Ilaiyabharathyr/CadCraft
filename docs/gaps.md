@@ -146,7 +146,7 @@ Detail: [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-13 | minor | Dimension shortcut menu: Remove Style Overrides (`dimoverride.clear`), Dimension Style ▸ with Save as New Style (`dimstyle.saveas`), Precision ▸, Align Text ▸; U14 narrowed to Quick Properties and unmodelled rows |
+| 2026-10-13 | minor | Dimension shortcut menu: Remove Style Overrides (`dimoverride.clear`), Dimension Style ▸ with Save as New Style (`dimstyle.saveas`), Precision ▸, Align Text ▸; U14 narrowed to Quick Properties and unmodelled rows (#1008) |
 | 2026-10-13 | minor | Properties palette draws the text, mtext and dimension rows the engine describes: every dimension style setting as an override of the selected dimensions, style, justification and line spacing rows, several objects of one type at once with *VARIES*; U14 narrowed to the shortcut menu, Quick Properties and unmodelled rows (#994) |
 | 2026-10-13 | minor | U14 added: the Properties palette's text, mtext and dimension rows; `properties.describe` and the `properties.set` keys behind them landed (engine side, #954). Dimension and text style edits now redraw dimensions read from files |
 | 2026-10-12 | minor | Object transparency (entity, ByLayer, ByBlock) is drawn: on screen (TRANSPARENCYDISPLAY, on by default), in PNG/SVG exports, and in plots when the page setup's "Plot transparency" is on (PDF alpha, PNG blending, SVG opacity; PLOTTRANSPARENCYOVERRIDE): F14 narrowed |
