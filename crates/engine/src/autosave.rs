@@ -109,6 +109,9 @@ pub enum Job {
 struct Tracked {
     /// The drawing as last autosaved (a weak pointer: compared, never kept alive).
     written: Option<Weak<Drawing>>,
+    /// The drawing outside the Block Editor as last autosaved (the same as `written` when the
+    /// editor is closed): saving the editor's changes into the block changes only this.
+    host: Option<Weak<Drawing>>,
     /// Its autosave file, once written (or adopted).
     file: Option<String>,
     /// When a change not yet autosaved was first seen (seconds).
@@ -122,8 +125,9 @@ pub struct Autosaver {
     docs: HashMap<u64, Tracked>,
     /// Drawings whose autosave is being written right now.
     busy: HashSet<u64>,
+    /// Writes in progress; each tells whether its file was written.
     #[cfg(not(target_arch = "wasm32"))]
-    running: Vec<(u64, std::thread::JoinHandle<()>)>,
+    running: Vec<(u64, std::thread::JoinHandle<bool>)>,
     #[cfg(not(target_arch = "wasm32"))]
     start: std::time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
@@ -149,8 +153,9 @@ impl Autosaver {
     /// Recovery, whose current state it holds): later autosaves overwrite it, and it is deleted
     /// once the drawing is saved or closed.
     pub fn adopt(&mut self, s: &Session, uid: u64, path: &str) {
-        let written = s.docs.iter().find(|d| d.uid == uid).map(|d| Arc::downgrade(&d.doc));
-        self.docs.insert(uid, Tracked { written, file: Some(path.to_string()), since: None });
+        let st = s.docs.iter().find(|d| d.uid == uid);
+        let (written, host) = (st.map(|d| Arc::downgrade(&d.doc)), st.map(|d| Arc::downgrade(d.drawing())));
+        self.docs.insert(uid, Tracked { written, host, file: Some(path.to_string()), since: None });
     }
 
     /// The autosave files this app has written or adopted.
@@ -162,6 +167,12 @@ impl Autosaver {
     /// `dir`: write drawings changed `minutes` ago or earlier and not autosaved since, delete the
     /// files of drawings that were saved (no unsaved changes left) or closed.
     pub fn plan(&mut self, s: &Session, now: f64, minutes: u32, dir: &str) -> Vec<Job> {
+        self.plan_with(s, now, minutes, dir, false)
+    }
+
+    /// [`Autosaver::plan`], with `urgent` writing every drawing with changes not yet autosaved
+    /// now instead of `minutes` after the change (autosave still off when `minutes` is 0).
+    fn plan_with(&mut self, s: &Session, now: f64, minutes: u32, dir: &str, urgent: bool) -> Vec<Job> {
         let mut jobs = Vec::new();
         let live: HashSet<u64> = s.docs.iter().map(|d| d.uid).collect();
         let busy = &self.busy;
@@ -187,13 +198,14 @@ impl Autosaver {
                 *t = Tracked::default();
                 continue;
             }
-            let changed = t.written.as_ref().is_none_or(|w| !std::ptr::eq(w.as_ptr(), Arc::as_ptr(&st.doc)));
+            let same = |w: &Option<Weak<Drawing>>, d: &Arc<Drawing>| w.as_ref().is_some_and(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(d)));
+            let changed = !same(&t.written, &st.doc) || !same(&t.host, st.drawing());
             if !changed {
                 t.since = None;
                 continue;
             }
             let since = *t.since.get_or_insert(now);
-            if minutes == 0 || dir.trim().is_empty() || now - since < f64::from(minutes) * 60.0 {
+            if minutes == 0 || dir.trim().is_empty() || (!urgent && now - since < f64::from(minutes) * 60.0) {
                 continue;
             }
             let path = t
@@ -202,8 +214,10 @@ impl Autosaver {
                 .unwrap_or_else(|| std::path::Path::new(dir).join(file_name(&st.title, &self.instance, st.uid)).to_string_lossy().to_string());
             t.file = Some(path.clone());
             t.written = Some(Arc::downgrade(&st.doc));
+            t.host = Some(Arc::downgrade(st.drawing()));
             t.since = None;
-            jobs.push(Job::Write { uid: st.uid, path, doc: st.doc.clone() });
+            // In the Block Editor: the drawing with the editor's unsaved changes in the block.
+            jobs.push(Job::Write { uid: st.uid, path, doc: st.recovery_drawing() });
         }
         jobs
     }
@@ -335,20 +349,47 @@ mod native {
         /// Returns how long until the next autosave is due, so the host can wake up for it.
         pub fn tick(&mut self, s: &Session) -> Option<Duration> {
             let now = self.start.elapsed().as_secs_f64();
-            let busy = &mut self.busy;
-            self.running.retain(|(uid, h)| {
-                let running = !h.is_finished();
-                if !running {
-                    busy.remove(uid);
-                }
-                running
-            });
+            self.reap();
             let dir = savefilepath();
             let minutes = savetime();
             let jobs = self.plan(s, now, minutes, &dir);
             self.perform(jobs);
             self.heartbeat(&dir, now);
             self.next_due(now, minutes).map(Duration::from_secs_f64)
+        }
+
+        /// Autosave every drawing with changes not yet autosaved right away, without waiting for
+        /// SAVETIME (the app may not survive what just happened, e.g. a GPU error). Returns how
+        /// many drawings are being written.
+        pub fn save_now(&mut self, s: &Session) -> usize {
+            let now = self.start.elapsed().as_secs_f64();
+            let jobs = self.plan_with(s, now, savetime(), &savefilepath(), true);
+            let writes = jobs.iter().filter(|j| matches!(j, Job::Write { .. })).count();
+            self.perform(jobs);
+            // The lock file marks the files as this running app's (Drawing Recovery skips them).
+            self.last_beat = None;
+            self.heartbeat(&savefilepath(), now);
+            writes
+        }
+
+        /// Take in the writes that have finished ([`Autosaver::tick`] does this first). A drawing
+        /// whose write failed is no longer counted as autosaved: the next plan restarts its clock,
+        /// so it is tried again SAVETIME later even if it doesn't change.
+        pub fn reap(&mut self) {
+            let (done, running) = std::mem::take(&mut self.running).into_iter().partition::<Vec<_>, _>(|(_, h)| h.is_finished());
+            self.running = running;
+            for (uid, h) in done {
+                self.busy.remove(&uid);
+                if !h.join().unwrap_or(false) {
+                    self.unwritten(uid);
+                }
+            }
+        }
+
+        fn unwritten(&mut self, uid: u64) {
+            if let Some(t) = self.docs.get_mut(&uid) {
+                t.written = None;
+            }
         }
 
         /// Carry out jobs from [`Autosaver::plan`]: writes on a background thread, deletes now.
@@ -362,15 +403,24 @@ mod native {
                             continue;
                         };
                         let spawned = std::thread::Builder::new().name("autosave".into()).spawn(move || match write_file(write, &doc, &path) {
-                            Ok(()) => log::info!("autosaved {path}"),
-                            Err(e) => log::warn!("autosave {path}: {e}"),
+                            Ok(()) => {
+                                log::info!("autosaved {path}");
+                                true
+                            }
+                            Err(e) => {
+                                log::warn!("autosave {path}: {e}");
+                                false
+                            }
                         });
                         match spawned {
                             Ok(h) => {
                                 self.busy.insert(uid);
                                 self.running.push((uid, h));
                             }
-                            Err(e) => log::warn!("autosave: {e}"),
+                            Err(e) => {
+                                log::warn!("autosave: {e}");
+                                self.unwritten(uid);
+                            }
                         }
                     }
                 }

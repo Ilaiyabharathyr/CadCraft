@@ -60,7 +60,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Format", "Multileader Style..."])
             .alias(&["mls"])
             .params("{name, arrowSize?, textHeight?, landingGap?, dogleg?, textStyle?, annotative?, current?} → styles"),
-        CommandSpec::new("ddptype", "Point Style...", run_ptype).menu(&["Format", "Point Style..."]).params("{pdmode, pdsize}"),
+        CommandSpec::new("ddptype", "Point Style...", run_ptype)
+            .menu(&["Format", "Point Style..."])
+            .alias(&["ptype"])
+            .params("{pdmode, pdsize}"),
         CommandSpec::new("rename", "Rename...", run_rename)
             .menu(&["Format", "Rename..."])
             .alias(&["ren", "-rename"])
@@ -338,6 +341,12 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                                 q.y = r.y;
                             }
                             t.rotation = cadcraft_geom::norm_angle(t.rotation + turn);
+                            if let Some(ml) = &mut a.multiline {
+                                let r = ml.mtext.insert.xy().rotate_about(base, turn);
+                                ml.mtext.insert.x = r.x;
+                                ml.mtext.insert.y = r.y;
+                                ml.mtext.rotation = cadcraft_geom::norm_angle(ml.mtext.rotation + turn);
+                            }
                         }
                     }
                     if let Some(x) = num("scale").filter(|x| *x != 0.0) {
@@ -350,6 +359,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                                 if let EntityKind::Text(t) = k {
                                     a.text = t;
                                 }
+                                a.transform_multiline(&m);
                             }
                         }
                         i.scale = Vec3::new(x, x, x);
@@ -371,6 +381,8 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                             h.pattern_lines = super::hatch::lines_for(v);
                         }
                         h.pattern = v.to_ascii_uppercase();
+                        // The old pattern's definition lines no longer apply.
+                        h.pattern_lines.clear();
                         h.solid = h.pattern == "SOLID";
                         if !h.solid {
                             // A named pattern replaces the gradient fill; the renderer draws the gradient first when it is set.

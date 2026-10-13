@@ -4,8 +4,10 @@
 use cadcraft_doc::*;
 use cadcraft_geom::Vec3;
 
+/// Saved as 2007 DXF: older versions have no MULTILEADER (they get LEADER + MTEXT / INSERT).
 fn roundtrip(d: &Drawing) -> (String, Drawing) {
-    let text = cadcraft_io::write_dxf(d);
+    let opts = cadcraft_io::SaveOptions { version: Some(cadcraft_io::Version::R2007), binary: false };
+    let text = String::from_utf8(cadcraft_io::write_with(d, "x.dxf", &opts).unwrap()).unwrap();
     let back = cadcraft_io::read_dxf(text.as_bytes()).unwrap();
     (text, back)
 }
@@ -96,6 +98,8 @@ fn spline_leader_with_block_content_and_attributes() {
             constant: false,
             prompt: "Number".into(),
             props: Default::default(),
+            multiline: None,
+            modes: Default::default(),
         }),
     ));
     d.blocks.insert(blk.name.clone(), std::sync::Arc::new(blk));
@@ -108,7 +112,16 @@ fn spline_leader_with_block_content_and_attributes() {
     k.transform(&xf);
     let EntityKind::Text(mut placed) = k else { unreachable!() };
     placed.value = "42".into();
-    ins.attribs.push(Attrib { tag: "NUM".into(), text: placed, invisible: false, constant: false, prompt: String::new(), props: Default::default() });
+    ins.attribs.push(Attrib {
+        tag: "NUM".into(),
+        text: placed,
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+        multiline: None,
+        modes: Default::default(),
+    });
     let m = MLeader {
         leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, 5.0, 0.0), Vec3::new(8.0, 4.0, 0.0)]],
         landing: Vec3::new(10.0, 3.0, 0.0),

@@ -6,7 +6,8 @@
 //!   Pan/Zoom, Quick Select, Find, Properties and Options.
 //! - **While a command runs** ([`command_entries`]): a quick right-click is Enter; holding the
 //!   button for [`HOLD_SECS`] opens Enter, Cancel, Recent Input, the prompt's options, Snap
-//!   Overrides and Pan/Zoom instead (AutoCAD's time-sensitive right-click).
+//!   Overrides and Pan/Zoom instead (AutoCAD's time-sensitive right-click). With that turned off
+//!   in OPTIONS (`timeSensitiveRightClick`), every right-click opens the menu.
 //! - **Shift/Ctrl+right-click** ([`snap_entries`]): the object snap menu. Its items type the point
 //!   modifiers and snap overrides (`_from`, `_endp`, `_non`…) at the current point prompt.
 //!
@@ -96,6 +97,10 @@ pub fn entries(app: &CadApp) -> Vec<Vec<Entry>> {
         .collect();
     first.extend(sub("Recent Commands", recent));
     push(&mut groups, first);
+    // In the Block Editor: save the block or go back to the drawing.
+    if app.session.state().is_ok_and(|st| st.block_edit.is_some()) {
+        push(&mut groups, items(app, &["bsave", "bsaveas", "bclose"]));
+    }
     let mut clip: Vec<Entry> = sub("Clipboard", items(app, CLIPBOARD)).into_iter().collect();
     clip.extend(sub("Isolate", items(app, ISOLATE)));
     push(&mut groups, clip);
@@ -217,7 +222,7 @@ pub fn choose(app: &mut CadApp, id: &str) {
 /// prompts; command names are the history's).
 pub fn note_input(app: &mut CadApp, text: &str) {
     let t = text.trim();
-    if app.session.running.is_none() || t.is_empty() {
+    if !app.session.prompting() || t.is_empty() {
         return;
     }
     let recent = &mut app.cmd.recent_input;
@@ -302,7 +307,8 @@ struct Press(f64, egui::Pos2);
 
 /// The canvas's right button while a command runs (Shift/Ctrl+right-click is the snap menu's): a
 /// quick click is Enter — returns `true` when the caller should send it — and a click held for
-/// [`HOLD_SECS`] opens the command menu ([`command_entries`]) at the pointer. Call it every frame
+/// [`HOLD_SECS`] opens the command menu ([`command_entries`]) at the pointer (any click does with
+/// the time-sensitive right-click turned off). Call it every frame
 /// with whether the pointer is on the canvas and whether a right-click ended there; it also shows
 /// the menu while it is open.
 pub fn in_command(app: &mut CadApp, ui: &egui::Ui, inside: bool, right_clicked: bool) -> bool {
@@ -318,14 +324,15 @@ pub fn in_command(app: &mut CadApp, ui: &egui::Ui, inside: bool, right_clicked: 
     {
         ctx.data_mut(|d| d.insert_temp(press_id, Press(now, p)));
     }
-    let running = app.session.running.is_some() && !app.canvas.snap_menu;
+    let running = app.session.prompting() && !app.canvas.snap_menu;
     let mut open = false;
     if released && let Some(Press(t0, p0)) = ctx.data_mut(|d| d.remove_temp::<Press>(press_id)) {
         // A drag isn't a click; a click held long enough asks for the menu.
         let still = pos.is_some_and(|p| p.distance(p0) <= 6.0);
-        open = running && still && now - t0 >= HOLD_SECS;
+        let held = now - t0 >= HOLD_SECS || !app.options.time_sensitive_right_click;
+        open = running && still && held;
     }
-    let enter = running && inside && right_clicked && !open;
+    let enter = running && inside && right_clicked && !open && app.options.time_sensitive_right_click;
     if !running {
         return false;
     }

@@ -5,8 +5,9 @@
 //! cadcraft-cli convert IN.dxf OUT.(dxf|svg|png) [--window x0,y0,x1,y1 | --view extents|current]
 //! cadcraft-cli run [FILE|--sample|--metric] [--script TEXT|--script-file F.scr] [--cmd 'id {json}']... [--save OUT] [--export OUT.png] [--window ... | --view ...]
 //! cadcraft-cli commands [FILTER]                   command catalog (JSON)
-//! cadcraft-cli mcp [--connect HOST:PORT]           MCP server on stdio (headless or bridged to the app)
+//! cadcraft-cli mcp [--connect HOST:PORT [--lazy] [--launch]]  MCP server on stdio (headless or bridged to the app)
 //! cadcraft-cli perf [N]                            timing table on a synthetic N-entity drawing
+//! cadcraft-cli perf FILE                           canvas display-list build of a drawing, zoomed in step by step
 //! cadcraft-cli sample (bracket|floorplan) OUT       write a built-in sample drawing
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -59,8 +60,8 @@ const USAGE: &str = "usage:
   cadcraft-cli convert IN.dxf OUT.(dxf|dwg|svg|png|pdf) [FRAMING]
   cadcraft-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadcraft-cli commands [FILTER]
-  cadcraft-cli mcp [--connect HOST:PORT]
-  cadcraft-cli perf [N]
+  cadcraft-cli mcp [--connect HOST:PORT [--lazy] [--launch]]
+  cadcraft-cli perf [N | FILE]
   cadcraft-cli sample (bracket|floorplan) OUT.(dxf|dwg|svg|png)
   cadcraft-cli --version
 
@@ -171,6 +172,11 @@ fn install_io() {
     cadcraft_engine::cmd::file::set_write_as(|d, name, o| {
         cadcraft_io::write_with(d, name, &cadcraft_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
+    // AutoLISP's entget, entmake and entmod see entities as DXF groups.
+    cadcraft_engine::cmd::file::set_entity_codec(cadcraft_engine::cmd::file::EntityCodec {
+        groups: cadcraft_io::entity_groups,
+        entity: cadcraft_io::entity_from_groups,
+    });
 }
 
 fn open(s: &mut Session, path: &str) -> Result<(), String> {
@@ -266,8 +272,22 @@ fn convert(args: &[String]) -> Result<(), String> {
     check_framed_output(framing, Some(o))?;
     let mut s = Session::empty();
     open(&mut s, i)?;
+    if let Some(m) = skipped_message(s.doc().map_err(|e| e.to_string())?, i) {
+        eprintln!("{m}");
+    }
     let window = export_window(&s, framing, None)?;
     export_framed(&s, o, window)
+}
+
+/// The warning for the records of `path` the reader could not place, or `None` when there are none.
+fn skipped_message(d: &cadcraft_engine::doc::Drawing, path: &str) -> Option<String> {
+    let n = d.skipped_records.values().fold(0usize, |a, n| a.saturating_add(*n));
+    if n == 0 {
+        return None;
+    }
+    let list: Vec<String> = d.skipped_records.iter().map(|(section, n)| format!("{section}: {n}")).collect();
+    let records = if n == 1 { "record" } else { "records" };
+    Some(format!("{path}: {n} {records} could not be read and are left out ({})", list.join(", ")))
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -393,11 +413,55 @@ fn synthetic(n: usize, side: f64) -> Result<cadcraft_engine::doc::Drawing, Strin
     Ok(dr)
 }
 
+/// `perf FILE`: the display list built as the canvas builds it (a 1600 x 1000 px view at the
+/// drawing's centre: tolerance, dash level of detail and view window from the zoom band), at
+/// zoom extents and zoomed in 4x at a time, next to the full-detail build plots use.
+fn perf_file(path: &str) -> Result<(), String> {
+    use cadcraft_engine::geom::{Bounds2, Vec2};
+    use cadcraft_engine::render::{Options, build};
+    use std::time::Instant;
+    let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
+    let mut s = Session::empty();
+    let t = Instant::now();
+    open(&mut s, path)?;
+    let open_ms = ms(t);
+    let st = s.state().map_err(|e| e.to_string())?;
+    let (d, space) = (&st.doc, &st.space);
+    let ext = d.extents(space);
+    let size = ext.width().max(ext.height());
+    if ext.is_empty() || !(size.is_finite() && size > 0.0) {
+        return Err("perf: the drawing is empty".into());
+    }
+    outln!("open {open_ms:.0} ms, {} entities, extents {:.1} x {:.1}", d.entity_count(), ext.width(), ext.height());
+    outln!("{:>8} {:>10} {:>10}", "zoom", "build ms", "prims");
+    let mut finest = Options::default();
+    for k in 0..5 {
+        let zoom = 4f64.powi(k);
+        let h = size / zoom;
+        let pixel = 2f64.powi((h / 1000.0).max(1e-300).log2().floor() as i32);
+        let half = Vec2::new(h * 0.8, h * 0.5);
+        let visible = Bounds2::new(ext.center() - half, ext.center() + half);
+        let screen = Options { tolerance: pixel * 0.5, min_dash: pixel * 2.0, view: Some(visible.expand(h * 0.8)), ..Default::default() };
+        let t = Instant::now();
+        let n = build(d, space, &screen).prims.len();
+        outln!("{:>7}x {:>10.1} {n:>10}", zoom, ms(t));
+        finest = screen;
+    }
+    // Plots: every pattern line, everywhere (last, so its large list doesn't weigh on the above).
+    let t = Instant::now();
+    let n = build(d, space, &Options { min_dash: 0.0, view: None, ..finest }).prims.len();
+    outln!("{:>8} {:>10.1} {n:>10}", "full", ms(t));
+    Ok(())
+}
+
 fn perf(args: &[String]) -> Result<(), String> {
     use cadcraft_engine::doc::Space;
     use cadcraft_engine::geom::{Bounds2, Vec2};
     use cadcraft_engine::{select, snap};
     use std::time::Instant;
+    if let Some(path) = args.first().filter(|a| a.parse::<usize>().is_err()) {
+        return perf_file(path);
+    }
     let n: usize = match args.first() {
         Some(a) => a.parse().map_err(|_| format!("perf: bad entity count {a}"))?,
         None => 200_000,
@@ -479,37 +543,47 @@ fn perf(args: &[String]) -> Result<(), String> {
 enum McpTarget {
     /// An in-process drawing session (no `--connect`).
     Headless,
-    /// The running app's control channel at `HOST:PORT`.
-    Connect(String),
+    /// The running app's control channel at `HOST:PORT`; `lazy`: reached at the first call;
+    /// `launch`: opened then if it isn't running.
+    Connect { addr: String, lazy: bool, launch: bool },
 }
 
 /// Parses the arguments after `mcp`. `--connect` must be followed by a `HOST:PORT`; a missing,
 /// empty or flag-like value is an error, never a silent fall back to a headless session (#103).
 fn parse_mcp_args(args: &[String]) -> Result<McpTarget, String> {
-    let mut target = McpTarget::Headless;
+    let mut addr: Option<String> = None;
+    let (mut lazy, mut launch) = (false, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--connect" => {
-                let addr = it
+                let a = it
                     .next()
                     .map(|v| v.trim())
                     .filter(|v| !v.is_empty() && !v.starts_with('-'))
                     .ok_or("--connect needs HOST:PORT (the app's --control port, e.g. 127.0.0.1:7979)")?;
-                if target != McpTarget::Headless {
+                if addr.is_some() {
                     return Err("--connect given more than once".into());
                 }
-                target = McpTarget::Connect(addr.to_string());
+                addr = Some(a.to_string());
             }
+            "--lazy" => lazy = true,
+            "--launch" => launch = true,
             other => return Err(format!("mcp: unknown argument {other}\n{USAGE}")),
         }
     }
-    Ok(target)
+    match addr {
+        // `--launch` connects at the first call too (the app opens then).
+        Some(addr) => Ok(McpTarget::Connect { addr, lazy: lazy || launch, launch }),
+        None if lazy || launch => Err("--lazy and --launch need --connect HOST:PORT".into()),
+        None => Ok(McpTarget::Headless),
+    }
 }
 
 fn mcp(args: &[String]) -> Result<(), String> {
     let backend: Box<dyn cadcraft_mcp::Backend> = match parse_mcp_args(args)? {
-        McpTarget::Connect(addr) => match cadcraft_mcp::Remote::connect(&addr) {
+        McpTarget::Connect { addr, lazy: true, launch } => Box::new(cadcraft_mcp::Remote::lazy(&addr, launch)),
+        McpTarget::Connect { addr, .. } => match cadcraft_mcp::Remote::connect(&addr) {
             Ok(r) => Box::new(r),
             Err(e) => return Err(format!("cadcraft-cli: cannot connect to {addr}: {e}")),
         },
@@ -535,8 +609,14 @@ mod mcp_args_tests {
 
     #[test]
     fn mcp_connect_with_address_selects_remote() {
-        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), Ok(McpTarget::Connect("127.0.0.1:7979".into())));
-        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), Ok(McpTarget::Connect("localhost:7979".into())));
+        let to = |addr: &str, lazy, launch| Ok(McpTarget::Connect { addr: addr.into(), lazy, launch });
+        assert_eq!(parse_mcp_args(&args(&["--connect", "127.0.0.1:7979"])), to("127.0.0.1:7979", false, false));
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979"])), to("localhost:7979", false, false));
+        assert_eq!(parse_mcp_args(&args(&["--lazy", "--connect", "localhost:7979"])), to("localhost:7979", true, false));
+        assert_eq!(parse_mcp_args(&args(&["--connect", "localhost:7979", "--launch"])), to("localhost:7979", true, true));
+        // Without an app to reach they mean nothing: never a headless session.
+        assert!(parse_mcp_args(&args(&["--lazy"])).is_err());
+        assert!(parse_mcp_args(&args(&["--launch"])).is_err());
     }
 
     #[test]

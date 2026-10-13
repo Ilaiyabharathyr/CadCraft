@@ -273,6 +273,8 @@ fn block_definition_properties_and_constant_attdefs_roundtrip() {
         constant,
         prompt: String::new(),
         props: Default::default(),
+        multiline: None,
+        modes: Default::default(),
     };
     for (i, a) in [attdef("COMPANY", false, true), attdef("SECRET", true, true), attdef("SHEET", false, false)].into_iter().enumerate() {
         b.entities.push(Entity::new(Handle(0x500 + i as u64), EntityKind::AttDef(a)));
@@ -625,6 +627,130 @@ fn viewport_frozen_layers_roundtrip() {
     assert!(frozen.contains(&(3, Vec::new())), "{frozen:?}");
 }
 
+/// A layout with viewport 2 frozen on `Walls` and `A B` (both real layers), and its written DXF as
+/// (code, value) pairs.
+fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {
+    let mut d = sample();
+    d.layers.push(Layer { name: "A B".into(), ..Layer::default() });
+    let paper = Space::Paper("Layout1".into());
+    let vp = EntityKind::Viewport(Viewport {
+        center: Vec3::new(5.0, 4.0, 0.0),
+        width: 8.0,
+        height: 6.0,
+        view_center: Vec2::new(5.0, 2.5),
+        view_height: 12.0,
+        id: 2,
+        locked: false,
+        frozen_layers: vec!["Walls".into(), "A B".into()],
+        layer_colors: Vec::new(),
+        clip: None,
+        on: true,
+    });
+    d.add(&paper, Common::default(), vp).unwrap();
+    let text = write_dxf(&d);
+    let lines: Vec<&str> = text.lines().collect();
+    let pairs = lines.chunks(2).map(|c| (c[0].trim().to_string(), c.get(1).copied().unwrap_or("").to_string())).collect();
+    (d, pairs)
+}
+
+/// The pair range of the VIEWPORT record whose group 69 is `id`.
+fn vp_record(p: &[(String, String)], id: &str) -> std::ops::Range<usize> {
+    let starts: Vec<usize> = (0..p.len()).filter(|&i| p[i].0 == "0").collect();
+    for w in starts.windows(2) {
+        let r = w[0]..w[1];
+        if p[w[0]].1 == "VIEWPORT" && p[r.clone()].iter().any(|(c, v)| c == "69" && v.trim() == id) {
+            return r;
+        }
+    }
+    panic!("no VIEWPORT {id}");
+}
+
+fn layer_handle(p: &[(String, String)], name: &str) -> String {
+    let starts: Vec<usize> = (0..p.len()).filter(|&i| p[i].0 == "0").collect();
+    for w in starts.windows(2) {
+        let rec = &p[w[0]..w[1]];
+        if rec[0].1 == "LAYER" && rec.iter().any(|(c, v)| c == "2" && v == name) {
+            return rec.iter().find(|(c, _)| c == "5").unwrap().1.clone();
+        }
+    }
+    panic!("no LAYER {name}");
+}
+
+fn viewport_frozen(d: &Drawing, id: u32) -> Vec<String> {
+    d.layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .find_map(|e| match &e.kind {
+            EntityKind::Viewport(v) if v.id == id => Some(v.frozen_layers.clone()),
+            _ => None,
+        })
+        .expect("viewport")
+}
+
+fn join(p: &[(String, String)]) -> String {
+    p.iter()
+        .map(|(c, v)| {
+            format!(
+                "{c}
+{v}
+"
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn viewport_frozen_layers_written_as_341_handles() {
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    let rec = &p[r];
+    let h341: Vec<&str> = rec.iter().filter(|(c, _)| c == "341").map(|(_, v)| v.as_str()).collect();
+    assert_eq!(h341, vec![layer_handle(&p, "Walls").as_str(), layer_handle(&p, "A B").as_str()]);
+    let last341 = rec.iter().rposition(|(c, _)| c == "341").unwrap();
+    let x = rec.iter().position(|(c, _)| c == "1001").expect("xdata");
+    assert!(last341 < x, "341 must precede the xdata");
+}
+
+#[test]
+fn viewport_frozen_layers_read_from_341_without_xdata() {
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    // Strip the CADCraft xdata, and add a 341 to a handle that names no layer.
+    let x = p[r.clone()].iter().position(|(c, _)| c == "1001").unwrap() + r.start;
+    let mut q: Vec<(String, String)> = p[..r.start].to_vec();
+    let mut head = p[r.start..x].to_vec();
+    head.push(("341".into(), "FFFFF".into()));
+    q.extend(head);
+    q.extend(p[r.end..].iter().cloned());
+    let back = read_dxf(join(&q).as_bytes()).unwrap();
+    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+}
+
+#[test]
+fn viewport_frozen_xdata_wins_over_341() {
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    // Point every 341 at layer 0: the xdata list must still be what is read.
+    let zero = layer_handle(&p, "0");
+    let mut q = p.clone();
+    for t in &mut q[r] {
+        if t.0 == "341" {
+            t.1 = zero.clone();
+        }
+    }
+    let back = read_dxf(join(&q).as_bytes()).unwrap();
+    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+}
+
+#[test]
+fn viewport_frozen_layers_survive_dwg() {
+    let (d, _) = frozen_vp_dxf();
+    let dwg = write(&d, "t.dwg").unwrap();
+    let back = read(&dwg, "t.dwg").unwrap();
+    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+    // Survives via the CADCraft xdata: the DWG converter does not yet carry group 341 itself.
+}
+
 #[test]
 fn viewport_layer_colors_roundtrip() {
     let mut d = sample();
@@ -854,6 +980,41 @@ fn oversized_dwg_and_dxf_are_rejected_early() {
     let text = "not a group code\nx\n".repeat(60);
     let e = cadcraft_dxf::parse_with_limit(text.as_bytes(), 50).unwrap_err();
     assert_eq!(e.to_string(), "drawing too large: 60 DXF group codes, more than the 50 CADCraft reads");
+}
+
+/// Issue #800: one unreadable object record doesn't fail the whole DWG. The reader skips it, the
+/// rest opens, and the drawing's read notes say how many records were left out and of which
+/// types, so a partial read never passes for a complete one. A complete read has no notes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn damaged_dwg_opens_partially_and_says_what_it_left_out() {
+    let mut dxf = String::from("0\nSECTION\n2\nENTITIES\n");
+    for i in 0..200 {
+        dxf += &format!("0\nLINE\n8\n0\n10\n{i}\n20\n0\n11\n{i}\n21\n10\n");
+    }
+    dxf += "0\nENDSEC\n0\nEOF\n";
+    let d = read(dxf.as_bytes(), "lines.dxf").unwrap();
+    let dwg = crate::write_with(&d, "lines.dwg", &crate::SaveOptions { version: Some(crate::Version::R2000), binary: false }).unwrap();
+    let whole = read(&dwg, "lines.dwg").unwrap();
+    assert_eq!((whole.entity_count(), whole.read_notes.len()), (200, 0));
+
+    // Damage a few bytes at a time across the objects area: every damaged copy that still reads
+    // as a DWG either reads whole or notes what it left out.
+    let mut partial = 0;
+    for at in (dwg.len() / 4..dwg.len() * 3 / 5).step_by(97) {
+        let mut b = dwg.clone();
+        b[at..at + 6].iter_mut().for_each(|x| *x ^= 0xA5);
+        let Ok(d) = read(&b, "damaged.dwg") else { continue };
+        if d.entity_count() < 200 {
+            assert_eq!(d.read_notes.len(), 1, "{} lines read, no note", d.entity_count());
+        }
+        if let [note] = d.read_notes.as_slice() {
+            assert!(note.starts_with("DWG: ") && note.contains(" couldn't be read and "), "{note}");
+            assert!(note.ends_with("saving over the original file would lose it") || note.ends_with("would lose them"), "{note}");
+            partial += 1;
+        }
+    }
+    assert!(partial > 0, "no damaged copy read partially");
 }
 
 #[test]
@@ -1145,15 +1306,29 @@ fn intl_sample() -> Drawing {
         }),
     )
     .unwrap();
-    let def =
-        Attrib {
-            tag: "图号".into(), text: intl_text("默认"), invisible: false, constant: false, prompt: String::new(), props: Default::default()
-        };
+    let def = Attrib {
+        tag: "图号".into(),
+        text: intl_text("默认"),
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+        multiline: None,
+        modes: Default::default(),
+    };
     let mut b = Block::new(&block);
     b.entities.push(Entity::new(Handle(0x50), EntityKind::AttDef(def)));
     d.blocks.insert(block.clone(), std::sync::Arc::new(b));
-    let att =
-        Attrib { tag: "图号".into(), text: intl_text(INTL), invisible: false, constant: false, prompt: String::new(), props: Default::default() };
+    let att = Attrib {
+        tag: "图号".into(),
+        text: intl_text(INTL),
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: Default::default(),
+        multiline: None,
+        modes: Default::default(),
+    };
     d.add(
         &Space::Model,
         on,
@@ -1251,6 +1426,8 @@ fn hostile_extension_data_never_panics() {
         // Tables: enormous or negative counts, cells without bodies, spans past the edge.
         ent("0\nACAD_TABLE\n2\n*T1\n100\nAcDbTable\n91\n999999999\n92\n999999999\n171\n1\n0\nACAD_TABLE\n100\nAcDbTable\n91\n-4\n92\n3\n171\n"),
         ent("0\nACAD_TABLE\n100\nAcDbTable\n91\n2\n92\n2\n141\nnan\n142\n-1\n171\n1\n173\n1\n175\n99999\n176\n-3\n1\nx\n171\n171\n171\n171\n171\n2\nzzz\n1001\nCADCRAFT\n1000\nTABLE\n1040\n-1\n"),
+        // Cell text heights (140): junk, huge, unbalanced value block.
+        ent("0\nACAD_TABLE\n100\nAcDbTable\n91\n1\n92\n3\n171\n1\n140\nnan\n171\n1\n140\n-5\n301\nCELL_VALUE\n140\n1e308\n171\n1\n304\nACVALUE_END\n140\n1e999\n1\nx\n"),
         // DIMASSOC pointing at nothing, or at a non-dimension.
         format!(
             "{}{}",
@@ -1379,7 +1556,10 @@ fn mleader_is_written_as_multileader() {
         block: None,
     };
     d.add(&Space::Model, Default::default(), EntityKind::MLeader(m.clone())).unwrap();
-    let back = roundtrip(&d);
+    // MULTILEADER is a 2007 entity (R2000/2004 files get LEADER + MTEXT).
+    let back =
+        crate::read(&crate::write_with(&d, "x.dxf", &crate::SaveOptions { version: Some(crate::Version::R2007), binary: false }).unwrap(), "x.dxf")
+            .unwrap();
     assert!(back.model.iter().any(|e| matches!(&e.kind, EntityKind::MLeader(x) if *x == m)));
     assert!(!back.model.iter().any(|e| matches!(e.kind, EntityKind::Leader(_) | EntityKind::MText(_))));
 }
@@ -1407,6 +1587,8 @@ fn attdef_prompt_survives_dxf_roundtrip() {
             constant: false,
             prompt: prompt.into(),
             props: Default::default(),
+            multiline: None,
+            modes: Default::default(),
         })
     };
     d.add(&Space::Model, Default::default(), attdef("Enter value")).unwrap();
@@ -1820,4 +2002,374 @@ fn mirrored_mtext_extrusion_keeps_its_footprint() {
     assert!((t.rotation - std::f64::consts::PI).abs() < 1e-12, "{}", t.rotation);
     let b = cadcraft_render::build(&d, &Space::Model, &cadcraft_render::Options::default()).bounds;
     assert!(b.min.x > -0.2 && b.max.x > 0.5 && b.min.y > -0.2 && b.max.y > 0.5, "box right of and above (0,0): {b:?}");
+}
+
+// --- SVG import ---
+
+/// One 20mm×10mm page whose user units are millimetres; the reader flips Y, so a point at
+/// SVG y lands at `10 - y` in the drawing.
+const SVG_PAGE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="10mm" viewBox="0 0 20 10">"#;
+
+fn kinds(d: &Drawing) -> Vec<&'static str> {
+    d.model.iter().map(|e| e.kind.type_name()).collect()
+}
+
+fn gzip_of(data: &[u8]) -> Vec<u8> {
+    let mut crc: u32 = 0xffff_ffff;
+    for b in data {
+        crc ^= u32::from(*b);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320u32 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+    out.extend_from_slice(&miniz_oxide::deflate::compress_to_vec(data, 6));
+    out.extend_from_slice(&(!crc).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out
+}
+
+#[test]
+fn svg_shapes_become_entities_in_millimetres() {
+    let svg = format!(
+        "{SVG_PAGE}<rect x=\"1\" y=\"1\" width=\"4\" height=\"3\"/><circle cx=\"10\" cy=\"5\" r=\"2\"/>\
+         <ellipse cx=\"10\" cy=\"5\" rx=\"4\" ry=\"2\"/><line x1=\"0\" y1=\"0\" x2=\"20\" y2=\"10\"/>\
+         <polyline points=\"0,0 5,0 5,5\"/><polygon points=\"0,0 2,0 1,1\"/></svg>"
+    );
+    let d = read(svg.as_bytes(), "shapes.svg").unwrap();
+    assert_eq!(kinds(&d), ["Polyline", "Circle", "Ellipse", "Line", "Polyline", "Polyline"]);
+    let r = first(&d, |k| if let EntityKind::LwPolyline(p) = k { Some(p.clone()) } else { None });
+    assert!(r.closed);
+    let got: Vec<Vec2> = r.vertices.iter().map(|v| v.p).collect();
+    let want = [Vec2::new(1.0, 9.0), Vec2::new(5.0, 9.0), Vec2::new(5.0, 6.0), Vec2::new(1.0, 6.0)];
+    for (g, w) in got.iter().zip(want.iter()) {
+        assert!((*g - *w).len() < 1e-9, "{g:?} vs {w:?}");
+    }
+    let c = first(&d, |k| if let EntityKind::Circle(c) = k { Some(c.clone()) } else { None });
+    assert!((c.radius - 2.0).abs() < 1e-9 && (c.center.x - 10.0).abs() < 1e-9 && (c.center.y - 5.0).abs() < 1e-9, "{c:?}");
+    let e = first(&d, |k| if let EntityKind::Ellipse(e) = k { Some(e.clone()) } else { None });
+    let major = Vec2::new(e.major.x - e.center.x, e.major.y - e.center.y);
+    assert!((major.len() - 4.0).abs() < 1e-9 && (e.ratio - 0.5).abs() < 1e-9, "{e:?}");
+    let l = first(&d, |k| if let EntityKind::Line(l) = k { Some(l.clone()) } else { None });
+    assert!((l.a.y - 10.0).abs() < 1e-9 && (l.b.y).abs() < 1e-9, "{l:?}");
+}
+
+#[test]
+fn svg_path_lines_curves_and_arcs() {
+    let svg = format!("{SVG_PAGE}<path d=\"M1 1 L5 1 C6 1 7 2 8 3\"/><path d=\"M0 0 A5 5 0 0 1 10 0 Z\"/></svg>");
+    let d = read(svg.as_bytes(), "paths.svg").unwrap();
+    assert_eq!(kinds(&d), ["Polyline", "Spline", "Polyline"]);
+    let line_run = first(&d, |k| if let EntityKind::LwPolyline(p) = k { Some(p.clone()) } else { None });
+    assert!(!line_run.closed && line_run.vertices.len() == 2, "{line_run:?}");
+    let spline = first(&d, |k| if let EntityKind::Spline(s) = k { Some(s.clone()) } else { None });
+    assert!(spline.is_valid(), "{spline:?}");
+    let arc = d
+        .model
+        .iter()
+        .find_map(|e| match &e.kind {
+            EntityKind::LwPolyline(p) if p.vertices.first().is_some_and(|v| v.bulge != 0.0) => Some(p.clone()),
+            _ => None,
+        })
+        .expect("an arc becomes a bulge vertex");
+    assert!(arc.closed && arc.vertices.len() == 2, "{arc:?}");
+    let bulge = arc.vertices[0].bulge;
+    assert!((bulge.abs() - 1.0).abs() < 1e-6, "semicircle bulge is ±1, got {bulge}");
+}
+
+#[test]
+fn svg_group_transforms_apply() {
+    let svg = format!("{SVG_PAGE}<g transform=\"translate(5,2)\"><line x1=\"0\" y1=\"0\" x2=\"10\" y2=\"0\"/></g></svg>");
+    let d = read(svg.as_bytes(), "t.svg").unwrap();
+    let l = first(&d, |k| if let EntityKind::Line(l) = k { Some(l.clone()) } else { None });
+    assert!((l.a - Vec3::new(5.0, 8.0, 0.0)).len() < 1e-9, "{l:?}");
+    assert!((l.b - Vec3::new(15.0, 8.0, 0.0)).len() < 1e-9, "{l:?}");
+}
+
+#[test]
+fn svg_viewbox_scaling_and_mm_units() {
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="10mm" viewBox="0 0 200 100"><circle cx="100" cy="50" r="50"/></svg>"#;
+    let d = read(svg.as_bytes(), "vb.svg").unwrap();
+    let c = first(&d, |k| if let EntityKind::Circle(c) = k { Some(c.clone()) } else { None });
+    assert!((c.radius - 5.0).abs() < 1e-9, "{c:?}");
+    assert!((c.center.x - 10.0).abs() < 1e-9 && (c.center.y - 5.0).abs() < 1e-9, "{c:?}");
+}
+
+#[test]
+fn svg_inkscape_layers_are_kept() {
+    let svg = format!(
+        "{SVG_PAGE}<g inkscape:groupmode=\"layer\" inkscape:label=\"Cut\"><rect x=\"0\" y=\"0\" width=\"2\" height=\"2\"/></g>\
+         <g inkscape:groupmode=\"layer\" inkscape:label=\"Engrave\"><circle cx=\"5\" cy=\"5\" r=\"1\"/></g></svg>",
+        SVG_PAGE = SVG_PAGE.replace("<svg ", "<svg xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" ")
+    );
+    let d = read(svg.as_bytes(), "layers.svg").unwrap();
+    let layers: Vec<&str> = d.layers.iter().map(|l| l.name.as_str()).collect();
+    assert!(layers.contains(&"Cut") && layers.contains(&"Engrave"), "{layers:?}");
+    let per_layer = |name: &str| d.model.iter().filter(|e| e.common.layer == name).count();
+    assert_eq!(per_layer("Cut"), 1);
+    assert_eq!(per_layer("Engrave"), 1);
+}
+
+#[test]
+fn svg_hidden_and_defs_subtrees_are_skipped() {
+    let svg = format!(
+        "{SVG_PAGE}<defs><rect x=\"0\" y=\"0\" width=\"9\" height=\"9\"/></defs><text x=\"0\" y=\"0\">hi</text>\
+         <rect x=\"0\" y=\"0\" width=\"1\" height=\"1\" display=\"none\"/><rect x=\"0\" y=\"0\" width=\"1\" height=\"1\" style=\"fill:red;display:none\"/>\
+         <rect x=\"1\" y=\"1\" width=\"2\" height=\"2\"/></svg>"
+    );
+    let d = read(svg.as_bytes(), "skip.svg").unwrap();
+    assert_eq!(kinds(&d), ["Polyline"]);
+}
+
+#[test]
+fn svgz_gunzips_to_the_same_drawing() {
+    let svg = format!("{SVG_PAGE}<rect x=\"1\" y=\"1\" width=\"4\" height=\"3\"/></svg>");
+    let plain = read(svg.as_bytes(), "a.svg").unwrap();
+    let packed = read(&gzip_of(svg.as_bytes()), "a.svgz").unwrap();
+    assert_eq!(kinds(&plain), kinds(&packed));
+    assert_eq!(plain.model.iter().map(|e| &e.kind).collect::<Vec<_>>(), packed.model.iter().map(|e| &e.kind).collect::<Vec<_>>());
+}
+
+#[test]
+fn svg_read_dispatches_by_extension() {
+    let svg = format!("{SVG_PAGE}<circle cx=\"5\" cy=\"5\" r=\"1\"/></svg>");
+    assert!(read(svg.as_bytes(), "a.svg").is_ok());
+    assert!(read(&gzip_of(svg.as_bytes()), "a.svgz").is_ok());
+}
+
+#[test]
+fn svg_hostile_input_errors_without_panicking() {
+    let deep = format!("{SVG_PAGE}{}<line x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\"/>{}</svg>", "<g>".repeat(200), "</g>".repeat(200));
+    for (bytes, name) in [
+        (b"not xml at all".to_vec(), "a.svg"),
+        (Vec::new(), "a.svg"),
+        (b"<svg><rect x=\"1e309\" width=\"NaN\" height=\"inf\"/></svg>".to_vec(), "a.svg"),
+        (deep.clone().into_bytes(), "a.svg"),
+        (b"<svg><path d=\"M0 0 X5 5\"/></svg>".to_vec(), "a.svg"),
+        (b"<svg><path d=\"M0 0 L\"/></svg>".to_vec(), "a.svg"),
+        (b"<svg><path d=\"M0 0 A1 1 0 5 1 2 2\"/></svg>".to_vec(), "a.svg"),
+        (b"<svg><polyline points=\"1 2 3\"/></svg>".to_vec(), "a.svg"),
+        (b"<svg><g transform=\"bogus(1)\"><rect width=\"1\" height=\"1\"/></g></svg>".to_vec(), "a.svg"),
+        (vec![0x1f, 0x8b, 8, 0, b'j', b'u', b'n', b'k', 0, 0, 0, 0, 0, 0, 0, 0], "a.svgz"),
+        (vec![0xff, 0xfe, 0x00, 0x01, 0x02, 0x03], "a.svg"),
+    ] {
+        let _ = read(&bytes, name);
+    }
+    let deep = read(deep.as_bytes(), "a.svg");
+    assert!(deep.is_err(), "200 nested groups are refused, not walked");
+}
+
+#[test]
+fn svg_no_geometry_yields_an_empty_drawing() {
+    let svg = format!("{SVG_PAGE}</svg>");
+    let d = read(svg.as_bytes(), "empty.svg").unwrap();
+    assert!(kinds(&d).is_empty());
+}
+
+/// An application data group inside a kept XRECORD — the AcDs thumbnail schema's
+/// `{ATTRRECORD 341 h 2 name 280 1 291 1 ATTRRECORD}` — is written back as read. It used to be
+/// collapsed into a handle list: the handle came out under group 291 (a bool) and the name and
+/// flags were dropped, which strict DXF readers (ezdxf) reject outright.
+#[test]
+fn kept_xrecord_application_group_roundtrips_as_read() {
+    let dxf = "0\nSECTION\n2\nOBJECTS\n\
+0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n3\nTD_SCHEMA\n350\n20\n\
+0\nXRECORD\n5\n20\n330\nC\n100\nAcDbXrecord\n280\n1\n1\nAcDb_Thumbnail_Schema\n\
+102\n{ATTRRECORD\n341\n21\n2\nAcDbDs::TreatedAsObjectData\n280\n1\n291\n1\n102\nATTRRECORD}\n\
+0\nXRECORD\n5\n21\n330\n20\n100\nAcDbXrecord\n280\n1\n1\nTarget\n\
+0\nENDSEC\n0\nEOF\n";
+    let d = read_dxf(dxf.as_bytes()).expect("read");
+    let out = write_dxf(&d);
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let at = lines.iter().position(|l| *l == "{ATTRRECORD").expect("group kept");
+    // The group keeps its own shape: a reference under 341, then the name, flag and bool.
+    assert_eq!(lines[at + 1], "341", "reference group code: {:?}", &lines[at..at + 12]);
+    assert!(lines[at + 2] != "0" && !lines[at + 2].is_empty());
+    assert_eq!(&lines[at + 3..at + 5], &["2", "AcDbDs::TreatedAsObjectData"]);
+    assert_eq!(&lines[at + 5..at + 7], &["280", "1"]);
+    assert_eq!(&lines[at + 7..at + 9], &["291", "1"]);
+    assert_eq!(&lines[at + 9..at + 11], &["102", "ATTRRECORD}"]);
+    // And no handle is written under a bool code anywhere.
+    assert!(!out.contains("291\n2"), "no handle may be written under a bool code");
+}
+
+// ---------- plot transparency ----------
+
+/// A black line under a red solid at `percent` transparency (drawn after it, so on top).
+fn transparent_over_line(percent: u8) -> Drawing {
+    let mut d = Drawing::new_metric();
+    d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(-10.0, 30.0, 0.0), b: Vec3::new(110.0, 30.0, 0.0) })).unwrap();
+    let corners = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(100.0, 0.0, 0.0), Vec3::new(0.0, 60.0, 0.0), Vec3::new(100.0, 60.0, 0.0)];
+    let red = Common { color: Color::Index(1), transparency: Transparency::Percent(percent), ..Common::default() };
+    d.add(&Space::Model, red, EntityKind::Solid(Solid { corners })).unwrap();
+    d
+}
+
+#[test]
+fn pdf_plots_transparency_only_when_asked() {
+    let d = transparent_over_line(50);
+    let opts = |extra: serde_json::Value| {
+        let mut o = serde_json::json!({"paper": "A4", "compress": false});
+        if let (Some(o), Some(e)) = (o.as_object_mut(), extra.as_object()) {
+            o.extend(e.clone());
+        }
+        o
+    };
+    let on = plot(&d, &Space::Model, &opts(serde_json::json!({"plotTransparency": true}))).unwrap();
+    let content = check_pdf(&on);
+    let text = String::from_utf8_lossy(&on).to_string();
+    assert!(text.contains("/ExtGState << /T50 << /Type /ExtGState /CA 0.5 /ca 0.5 >> >>"), "{text}");
+    // The line is opaque, the solid at half alpha.
+    assert!(content.contains("/T50 gs\n1 0 0 rg"), "{content}");
+    // Off (the default, and explicitly): no graphics states, and the same bytes either way.
+    let off = plot(&d, &Space::Model, &opts(serde_json::json!({}))).unwrap();
+    assert_eq!(off, plot(&d, &Space::Model, &opts(serde_json::json!({"plotTransparency": false}))).unwrap());
+    let off_text = String::from_utf8_lossy(&off).to_string();
+    assert!(!off_text.contains("ExtGState") && !off_text.contains(" gs\n"));
+    // On, but nothing transparent: the same bytes as off.
+    let opaque = transparent_over_line(0);
+    assert_eq!(
+        plot(&opaque, &Space::Model, &opts(serde_json::json!({"plotTransparency": true}))).unwrap(),
+        plot(&opaque, &Space::Model, &opts(serde_json::json!({}))).unwrap()
+    );
+    // A hostile flag is ignored (off).
+    assert_eq!(plot(&d, &Space::Model, &opts(serde_json::json!({"plotTransparency": "yes"}))).unwrap(), off);
+}
+
+#[test]
+fn layout_page_setup_plot_transparency_is_used() {
+    let mut d = transparent_over_line(90);
+    let paper = Space::Paper(d.layouts[0].name.clone());
+    let corners = [Vec3::new(1.0, 1.0, 0.0), Vec3::new(5.0, 1.0, 0.0), Vec3::new(1.0, 4.0, 0.0), Vec3::new(5.0, 4.0, 0.0)];
+    let faint = Common { color: Color::Index(5), transparency: Transparency::Percent(90), ..Common::default() };
+    d.add(&paper, faint, EntityKind::Solid(Solid { corners })).unwrap();
+    let raw = serde_json::json!({"compress": false});
+    assert!(!String::from_utf8_lossy(&plot(&d, &paper, &raw).unwrap()).contains("ExtGState"));
+    d.layouts[0].page.plot_transparency = true;
+    let text = String::from_utf8_lossy(&plot(&d, &paper, &raw).unwrap()).to_string();
+    assert!(text.contains("/T90 << /Type /ExtGState /CA 0.1 /ca 0.1 >>"), "{text}");
+    // The plot's own option wins over the page setup.
+    let off = serde_json::json!({"compress": false, "plotTransparency": false});
+    assert!(!String::from_utf8_lossy(&plot(&d, &paper, &off).unwrap()).contains("ExtGState"));
+}
+
+#[test]
+fn png_and_svg_plots_blend_transparency_when_asked() {
+    let d = transparent_over_line(50);
+    let png = |on: Option<bool>| {
+        let mut o = serde_json::json!({"output": "png", "resolution": 50, "width": 210, "height": 297, "landscape": true});
+        if let (Some(on), Some(o)) = (on, o.as_object_mut()) {
+            o.insert("plotTransparency".into(), serde_json::json!(on));
+        }
+        plotter::plot(&d, &Space::Model, &o).unwrap()
+    };
+    let decode = |bytes: &[u8]| tiny_skia::Pixmap::decode_png(bytes).unwrap();
+    // The centre of the sheet is inside the solid (the drawing is fitted to the paper).
+    let centre = |pm: &tiny_skia::Pixmap| {
+        let c = pm.pixel(pm.width() / 2, pm.height() / 2 + 20).unwrap();
+        (c.red(), c.green(), c.blue())
+    };
+    assert_eq!(centre(&decode(&png(None))), (255, 0, 0), "off: opaque red");
+    assert_eq!(png(None), png(Some(false)));
+    let (r, g, b) = centre(&decode(&png(Some(true))));
+    assert!(r == 255 && g.abs_diff(127) <= 2 && b.abs_diff(127) <= 2, "half red on white paper: {:?}", (r, g, b));
+    let svg = |on: bool| {
+        let o = serde_json::json!({"output": "svg", "plotTransparency": on});
+        String::from_utf8(plotter::plot(&d, &Space::Model, &o).unwrap()).unwrap()
+    };
+    assert!(svg(true).contains(r##"fill="#ff0000" opacity="0.50""##), "{}", svg(true));
+    assert!(!svg(false).contains("opacity"));
+}
+
+#[test]
+fn view_exports_draw_transparency() {
+    let d = transparent_over_line(50);
+    let svg = String::from_utf8(write(&d, "a.svg").unwrap()).unwrap();
+    assert!(svg.contains(r#"opacity="0.50""#));
+    assert_ne!(write(&d, "a.png").unwrap(), write(&transparent_over_line(0), "a.png").unwrap());
+}
+
+#[test]
+fn pdf_strokes_overlapping_transparent_objects_one_by_one() {
+    // Two crossing lines, ByLayer on layer `layer_t` percent transparent.
+    let crossing = |layer_t: u8| {
+        let mut d = Drawing::new_metric();
+        d.layers.push(Layer { name: "Glass".into(), color: Color::Index(5), transparency: layer_t, ..Layer::default() });
+        let on = || Common { layer: "Glass".into(), ..Common::default() };
+        d.add(&Space::Model, on(), EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(100.0, 100.0, 0.0) })).unwrap();
+        d.add(&Space::Model, on(), EntityKind::Line(Line { a: Vec3::new(0.0, 100.0, 0.0), b: Vec3::new(100.0, 0.0, 0.0) })).unwrap();
+        d
+    };
+    let content = |d: &Drawing, on: bool| {
+        check_pdf(&plot(d, &Space::Model, &serde_json::json!({"paper": "A4", "compress": false, "plotTransparency": on})).unwrap())
+    };
+    // 50 %: each line is its own stroke, so they build up where they cross.
+    let glass = content(&crossing(50), true);
+    assert!(glass.contains("/T50 gs"), "{glass}");
+    assert_eq!(glass.matches("S\n").count(), 2, "{glass}");
+    // Opaque: one path as before, whether the option is on or off.
+    let opaque = content(&crossing(0), true);
+    assert_eq!(opaque.matches("S\n").count(), 1, "{opaque}");
+    assert_eq!(opaque, content(&crossing(0), false));
+    // Transparency off: the transparent layer plots as before too.
+    assert_eq!(content(&crossing(50), false), opaque);
+}
+
+#[test]
+fn pdf_strokes_each_transparent_primitive_inside_a_block() {
+    // One block reference whose two children cross: they share the reference's handle.
+    let crossing_block = |t: u8| {
+        let mut d = Drawing::new_metric();
+        let mut blk = Block::new("X");
+        for (i, (a, b)) in [((0.0, 0.0), (100.0, 100.0)), ((0.0, 100.0), (100.0, 0.0))].into_iter().enumerate() {
+            let line = Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) };
+            let mut e = Entity::new(Handle(i as u64 + 1), EntityKind::Line(line));
+            e.common = Common { color: Color::Index(1), transparency: Transparency::ByBlock, ..Common::default() };
+            blk.entities.push(e);
+        }
+        d.blocks.insert("X".into(), std::sync::Arc::new(blk));
+        let ins = Insert {
+            block: "X".into(),
+            insert: Vec3::ZERO,
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: vec![],
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+        };
+        d.add(&Space::Model, Common { transparency: Transparency::Percent(t), ..Common::default() }, EntityKind::Insert(ins)).unwrap();
+        d
+    };
+    let content = |d: &Drawing, on: bool| {
+        check_pdf(&plot(d, &Space::Model, &serde_json::json!({"paper": "A4", "compress": false, "plotTransparency": on})).unwrap())
+    };
+    let half = content(&crossing_block(50), true);
+    assert!(half.contains("/T50 gs"), "{half}");
+    assert_eq!(half.matches("S\n").count(), 2, "{half}");
+    // Opaque: one path, the same with the option on or off.
+    let opaque = content(&crossing_block(0), true);
+    assert_eq!(opaque.matches("S\n").count(), 1, "{opaque}");
+    assert_eq!(opaque, content(&crossing_block(0), false));
+    assert_eq!(content(&crossing_block(50), false), opaque);
+}
+
+#[test]
+fn foreign_table_reads_cell_text_height_and_keeps_style_scale() {
+    // A table from another writer: no CADCraft xdata; cell 1 sets 140 before its value block
+    // (the cell's text height), cell 2 only has a 140 inside the value block (a number).
+    let dxf = "0\nSECTION\n2\nENTITIES\n0\nACAD_TABLE\n100\nAcDbTable\n91\n1\n92\n2\n141\n300\n142\n900\n142\n900\n\
+        171\n1\n140\n150\n301\nCELL_VALUE\n1\nA\n304\nACVALUE_END\n\
+        171\n1\n301\nCELL_VALUE\n140\n42\n1\nB\n304\nACVALUE_END\n0\nENDSEC\n0\nEOF\n";
+    let d = read_dxf(dxf.as_bytes()).unwrap();
+    let t = first(&d, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None });
+    assert_eq!(t.cells[0][0].text_height, Some(150.0));
+    assert_eq!(t.cells[0][1].text_height, None);
+    // No scale of its own: the table takes its style's height.
+    assert_eq!(t.text_height, TableStyle::default().text_height);
+    // Written back and read again.
+    let back = roundtrip(&d);
+    let t2 = first(&back, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None });
+    assert_eq!(t2.cells[0][0].text_height, Some(150.0));
+    assert_eq!(t2.cells[0][1].text_height, None);
 }

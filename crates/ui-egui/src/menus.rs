@@ -8,8 +8,16 @@ use crate::CadApp;
 /// The top-level menus, in order.
 pub const MENUS: &[&str] = &["File", "Edit", "View", "Insert", "Format", "Tools", "Draw", "Dimension", "Modify", "Window", "Help"];
 
+/// File ▸ Open Recent: one `ui.recent.<n>` item per recent file, then Clear Recent Files.
+pub const OPEN_RECENT: &str = "Open Recent";
+const RECENT_ITEM: &str = "ui.recent.";
+const RECENT_CLEAR: &str = "ui.recent.clear";
+
 /// UI-only commands: (id, label, menu path, shortcut).
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
+    ("ui.spacemouse", "3D Mouse...", &["Tools", "3D Mouse..."], None),
+    ("ui.spacemouse.calibrate", "Calibrate 3D Mouse", &[], None),
+    ("ui.spacemouse.navigate", "3D Mouse Navigation", &[], None),
     ("ui.dock", "Arrange Panel", &[], None),
     ("ui.dock.reset", "Reset Panel Layout", &["Window", "Reset Panel Layout"], None),
     ("ui.open", "Open...", &[], Some("Cmd+O")),
@@ -21,6 +29,10 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
     ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
+    ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
+    ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
+    ("ui.animations.off", "Off", &["View", "Accessibility", "Animation Effects", "Off"], None),
+    ("ui.animations", "Animation Effects", &[], None),
     ("ui.toggle.toolbar", "Tool Bar", &["Window", "Tool Bar"], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
     ("ui.toggle.statusbar", "Status Bar", &["Window", "Status Bar"], None),
@@ -71,7 +83,13 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
 }
 
 fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if let Some(result) = crate::spacemouse::route(app, id, params) {
+        return Some(result);
+    }
     if let Some(r) = crate::xrefs::route(app, id, params) {
+        return Some(r);
+    }
+    if let Some(r) = crate::bedit::route(app, id, params) {
         return Some(r);
     }
     if let Some(r) = crate::managers::route(app, id, params) {
@@ -102,13 +120,30 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     // never open a picker.
     let no_path =
         if id.starts_with("ui.") { params.is_null() || (params.get("path").is_none() && params.get("data").is_none()) } else { params.is_null() };
+    if id == RECENT_CLEAR {
+        app.ui.recent_files.clear();
+        return Some(Ok(Value::Null));
+    }
+    if let Some(i) = id.strip_prefix(RECENT_ITEM).and_then(|n| n.parse::<usize>().ok()) {
+        let Some(path) = app.ui.recent_files.get(i).cloned() else { return Some(Err(format!("no recent file {i}"))) };
+        app.open_path(&path);
+        return Some(Ok(Value::Null));
+    }
     let r = match id {
         "ui.language" => {
             let Some(preference) = params.get("lang").and_then(Value::as_str).and_then(crate::i18n::Preference::parse) else {
                 return Some(Err(format!("language must be {}", crate::i18n::Preference::codes())));
             };
             app.ui.interface_language = preference;
-            Ok(json!({"interfaceLanguage": preference.code()}))
+            let shown = app.language();
+            if shown != preference.resolve(&app.system_languages) {
+                app.set_status(if preference.resolve(&app.system_languages) == "ko" {
+                    "No font covers the Korean interface, so it stays in English. Install a Hangul font (Malgun Gothic or Nanum Gothic), or build with a Hang/Kore craft-fonts face."
+                } else {
+                    "No Chinese font is installed, so the interface stays in English. Install one (Noto Sans CJK, for example) to use Chinese."
+                });
+            }
+            Ok(json!({"interfaceLanguage": preference.code(), "shown": shown}))
         }
         "ui.open" | "open" if no_path => {
             let picked = app.services.pick_open.as_ref().and_then(|f| f());
@@ -223,6 +258,18 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             },
             None => Ok(theme_json(app)),
         },
+        "ui.animations.system" | "ui.animations.on" | "ui.animations.off" => {
+            let pref = crate::animation::AnimationPref::parse(id.trim_start_matches("ui.animations.")).unwrap_or_default();
+            Ok(set_animations(app, pref))
+        }
+        // `{"animations": "system"|"on"|"off"}` sets the choice; without it, reports it.
+        "ui.animations" => match params.get("animations").and_then(Value::as_str) {
+            Some(name) => match crate::animation::AnimationPref::parse(name) {
+                Some(pref) => Ok(set_animations(app, pref)),
+                None => Err(format!("unknown animations choice \"{}\" (system, on or off)", name.chars().take(40).collect::<String>())),
+            },
+            None => Ok(animations_json(app)),
+        },
         "ui.saveformat.dxf" | "ui.saveformat.dwg" => {
             let format = crate::SaveFormat::parse(id.trim_start_matches("ui.saveformat.")).unwrap_or_default();
             Ok(set_save_format(app, format))
@@ -262,8 +309,8 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "ui.resetpalettes" => {
             let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
-            let save_version = std::mem::take(&mut app.ui.save_version);
-            app.ui = crate::UiState { in_window_menu: menu, theme, interface_language, save_format, save_version, ..Default::default() };
+            let (animations, save_version) = (app.ui.animations, std::mem::take(&mut app.ui.save_version));
+            app.ui = crate::UiState { in_window_menu: menu, theme, animations, interface_language, save_format, save_version, ..Default::default() };
             Ok(Value::Null)
         }
         "ui.start" => {
@@ -343,6 +390,16 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = Some("dsettings".into());
             Ok(Value::Null)
         }
+        // Typed or from a menu (no parameters): the Hatch and Gradient dialog (HPDLGMODE 1) and the
+        // Hatch Edit dialog. -HATCH, -HATCHEDIT and JSON calls keep the command line and the JSON form.
+        "hatch" | "h" | "bh" | "gradient" | "gd" if params.is_null() && crate::hatchdlg::dialog_on(app) => {
+            crate::hatchdlg::open_create(app, matches!(id, "gradient" | "gd"));
+            Ok(Value::Null)
+        }
+        "hatchedit" | "he" if params.is_null() && app.session.state().is_ok() => {
+            crate::hatchdlg::open_edit(app);
+            Ok(Value::Null)
+        }
         "properties" | "pr" | "props" | "ch" if params.is_null() => {
             crate::docking::command(app, false, &json!({"operation":"open", "panel":"properties"}))
         }
@@ -380,6 +437,22 @@ fn theme_json(app: &CadApp) -> Value {
         p => p.resolve(None),
     };
     json!({ "theme": app.ui.theme.as_str(), "shown": if shown == egui::Theme::Light { "light" } else { "dark" } })
+}
+
+fn set_animations(app: &mut CadApp, pref: crate::animation::AnimationPref) -> Value {
+    app.ui.animations = pref;
+    let shown = if app.shows_animations() { "on" } else { "off" };
+    app.session.echo(match pref {
+        crate::animation::AnimationPref::System => format!("Animation effects follow the system setting ({shown})"),
+        _ => format!("Animation effects are {shown}"),
+    });
+    animations_json(app)
+}
+
+/// The animation effects choice and whether the interface animates with it (System resolves
+/// against the OS setting).
+fn animations_json(app: &CadApp) -> Value {
+    json!({ "animations": app.ui.animations.as_str(), "shown": app.shows_animations() })
 }
 
 /// A menu entry.
@@ -429,7 +502,30 @@ pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
             add(menu, label, id, *sc, true);
         }
     }
+    if let Some((_, file)) = out.iter_mut().find(|(m, _)| m == "File") {
+        let at = file.iter().position(|e| matches!(e, Entry::Item { id, .. } if id == "open")).map_or(0, |i| i + 1);
+        file.insert(at, Entry::Sub { label: OPEN_RECENT.into(), children: recent_entries(app) });
+    }
     out
+}
+
+/// The items of File ▸ Open Recent: the recent files by name, newest first, then Clear Recent Files.
+pub fn recent_entries(app: &CadApp) -> Vec<Entry> {
+    let mut entries: Vec<Entry> = app
+        .ui
+        .recent_files
+        .iter()
+        .enumerate()
+        .map(|(i, path)| Entry::Item { label: file_name(path), id: format!("{RECENT_ITEM}{i}"), shortcut: None, enabled: true })
+        .collect();
+    let enabled = !app.ui.recent_files.is_empty();
+    entries.push(Entry::Item { label: "Clear Recent Files".into(), id: RECENT_CLEAR.into(), shortcut: None, enabled });
+    entries
+}
+
+/// The file name of `path` (the whole path when it has none).
+pub(crate) fn file_name(path: &str) -> String {
+    std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().to_string())
 }
 
 /// Turn a registry shortcut ("Cmd+Shift+Z") into the form shown on this platform: macOS symbols ("⇧⌘Z") or
@@ -456,7 +552,7 @@ pub(crate) fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String
             }
         }
         Entry::Sub { label, children } => {
-            ui.menu_button(crate::i18n::t(label), |ui| {
+            ui.menu_button(crate::i18n::menu(label), |ui| {
                 for c in children {
                     entry_ui(ui, c, clicked);
                 }
@@ -474,7 +570,7 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 for (name, entries) in &tree {
-                    ui.menu_button(crate::i18n::t(name), |ui| {
+                    ui.menu_button(crate::i18n::menu(name), |ui| {
                         for e in entries {
                             entry_ui(ui, e, &mut clicked);
                         }

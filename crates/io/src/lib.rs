@@ -1,4 +1,4 @@
-//! CADCraft file formats: DXF read/write, SVG, PNG and PDF export (plotting).
+//! CADCraft file formats: DXF/DWG read, SVG and SVGZ import, SVG/PNG/PDF export (plotting).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -15,6 +15,7 @@ mod dxf_xref;
 pub mod pdf;
 pub mod plotter;
 pub mod svg;
+mod svg_read;
 
 /// Multilines and their styles (MLINE, MLINESTYLE).
 mod dxf_mline;
@@ -23,6 +24,8 @@ use cadcraft_doc::{Drawing, Space};
 use cadcraft_geom::Bounds2;
 
 pub use cadcraft_dxf::Version;
+pub use dxf_read::entity_from_groups;
+pub use dxf_write::entity_groups;
 pub use pdf::{PdfOptions, pdf, plot};
 
 /// How a drawing is saved as DXF or DWG.
@@ -54,13 +57,17 @@ fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
-/// Read a drawing; the format comes from the content (DXF ASCII/binary) or the name.
+/// Read a drawing; the format comes from the content (DXF ASCII/binary, DWG) or the name
+/// (SVG and gzip-compressed SVGZ).
 pub fn read(bytes: &[u8], name: &str) -> Result<Drawing> {
     if cadcraft_dwg::is_dwg(bytes) {
-        let dxf = cadcraft_dwg::dwg_to_dxf(bytes).map_err(IoError::Format)?;
-        return dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")));
+        let (dxf, notes) = cadcraft_dwg::dwg_to_dxf_noted(bytes, cadcraft_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
+        let mut d = dxf_read::read(&dxf).map_err(|e| IoError::Format(format!("{e} (in the DXF converted from this DWG)")))?;
+        d.read_notes = notes;
+        return Ok(d);
     }
     match ext(name).as_str() {
+        "svg" | "svgz" => svg_read::read(bytes),
         "dxf" | "" => dxf_read::read(bytes),
         e if bytes.len() > 4 => dxf_read::read(bytes).map_err(|_| IoError::Unsupported(e.to_string())),
         e => Err(IoError::Unsupported(e.to_string())),
@@ -92,7 +99,7 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
         // gradients, so a drawing from an R2000 DXF doesn't lose them by default.
         "dwg" if !opts.binary => {
             let version = opts.version.unwrap_or_else(|| version.max(Version::R2004));
-            cadcraft_dwg::dxf_to_dwg_as(dxf_write::write(d).as_bytes(), version.code()).map_err(IoError::Format)
+            cadcraft_dwg::dxf_to_dwg_as(dxf_write::dwg_bridge(d, version).as_bytes(), version.code()).map_err(IoError::Format)
         }
         e if opts.binary => Err(IoError::Format(format!("binary output is for DXF files, not `{e}`"))),
         _ => write_framed(d, name, None),
@@ -156,9 +163,10 @@ pub fn png(d: &Drawing, space: &Space, width: u32, height: u32) -> Result<Vec<u8
 }
 
 /// Render a space to PNG showing `window` (centred, fitted without margin), or fitted to its
-/// extents (5% margin) when `window` is `None`.
+/// extents (5% margin) when `window` is `None`. Objects are drawn with their transparency, as on
+/// screen.
 pub fn png_framed(d: &Drawing, space: &Space, width: u32, height: u32, window: Option<Bounds2>) -> Result<Vec<u8>> {
-    let list = cadcraft_render::build(d, space, &cadcraft_render::Options::default());
+    let list = cadcraft_render::build(d, space, &cadcraft_render::Options { transparency: true, ..cadcraft_render::Options::default() });
     let view = png_view(&list.bounds, width, height, window);
     cadcraft_render::raster::render_png(&list, &view, &cadcraft_render::raster::RasterOptions::default())
         .ok_or_else(|| IoError::Format("render failed".into()))
