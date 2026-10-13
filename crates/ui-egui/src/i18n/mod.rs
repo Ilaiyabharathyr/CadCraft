@@ -31,12 +31,14 @@ pub enum Preference {
     French,
     #[serde(rename = "zh")]
     Chinese,
+    #[serde(rename = "it")]
+    Italian,
     #[serde(rename = "ko")]
     Korean,
 }
 
 impl Preference {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Auto,
         Self::English,
         Self::Ukrainian,
@@ -47,6 +49,7 @@ impl Preference {
         Self::Russian,
         Self::French,
         Self::Chinese,
+        Self::Italian,
         Self::Korean,
     ];
 
@@ -71,6 +74,7 @@ impl Preference {
             Self::Russian => "ru",
             Self::French => "fr",
             Self::Chinese => "zh",
+            Self::Italian => "it",
             Self::Korean => "ko",
         }
     }
@@ -87,8 +91,9 @@ impl Preference {
             Self::Russian => "Русский",
             Self::French => "Français",
             Self::Chinese => "简体中文",
+            Self::Italian => "Italiano",
             Self::Korean => {
-                if crate::theme::can_show("ko") {
+                if crate::theme::shows_hangul(CURRENT.with(Cell::get)) {
                     "한국어"
                 } else {
                     "Korean"
@@ -117,6 +122,7 @@ impl Preference {
             Self::Russian => "ru",
             Self::French => "fr",
             Self::Chinese => "zh",
+            Self::Italian => "it",
             Self::Korean => "ko",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
@@ -134,7 +140,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 10] = [
+pub static LANGUAGES: [Language; 11] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -159,6 +165,8 @@ pub static LANGUAGES: [Language; 10] = [
     // Chinese has no grammatical plural: both `@plural` forms read the same. Its glyphs come from
     // an installed CJK font (`theme::cjk_font`); without one the interface stays English.
     Language { code: "zh", name: "简体中文", source: include_str!("zh.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Italian integer plurals (CLDR `it`) follow the English rule: one (1), other.
+    Language { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     // Korean has one integer plural form and needs a Hangul-capable interface font.
     Language { code: "ko", name: "한국어", source: include_str!("ko.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
 ];

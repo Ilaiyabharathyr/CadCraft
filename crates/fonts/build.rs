@@ -3,10 +3,9 @@
 //! empty, `CRAFT_FONTS` is empty and the build is unchanged. It only reads the local checkout
 //! (no network). A bad checkout is a warning, or an error with `CRAFT_FONTS_REQUIRED=1`.
 //!
-//! On wasm32 it embeds only BIZ UDPGothic Regular and the `Arab`/`Hang`/`Kore` faces.
-//! Optional Korean faces increase the binary size; check hosting limits (Cloudflare Pages:
-//! 25 MiB per file) for the chosen craft-fonts input. The web build has no
-//! system fonts, so these are its only fallback for Japanese, Korean and Arabic-script text.
+//! On wasm32 it embeds only BIZ UDPGothic Regular and the `Arab` faces (about 5.5 MB), to keep the
+//! web build within hosting limits (Cloudflare Pages: 25 MiB per file). The web build has no
+//! system fonts, so these are its only fallback for Japanese and Arabic-script text.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -51,8 +50,8 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
             println!("cargo::warning=craft-fonts: not embedding {family} {style} (AGENTS.md: no Adobe fonts)");
             continue;
         }
-        let web_script = scripts.split(',').any(|s| matches!(s.trim(), "Arab" | "Hang" | "Kore"));
-        let web_face = (*family == "BIZ UDPGothic" && *style == "Regular") || web_script;
+        let arabic = scripts.split(',').any(|s| s.trim() == "Arab");
+        let web_face = (*family == "BIZ UDPGothic" && *style == "Regular") || arabic;
         if wasm && !web_face {
             continue;
         }
