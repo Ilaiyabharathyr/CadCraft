@@ -95,6 +95,9 @@ pub struct Drawing {
     /// Objects hidden for this session by ISOLATEOBJECTS / HIDEOBJECTS. Never written to a file:
     /// a drawing opens with everything shown again.
     pub hidden_objects: BTreeSet<Handle>,
+    /// Records of the file this drawing was read from that the reader could not place (a damaged
+    /// file), counted by the section they came from. Never written to a file.
+    pub skipped_records: BTreeMap<String, usize>,
 }
 
 impl Default for Drawing {
@@ -148,6 +151,7 @@ impl Drawing {
             scales: imperial_scales(),
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
+            skipped_records: BTreeMap::new(),
         }
     }
 
