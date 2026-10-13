@@ -302,9 +302,12 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             contents.push_str(&t.s(1).unwrap_or_default());
             let contents = mtext_dxf::decode_contents(&contents);
             let columns = mtext_dxf::read_columns(tags);
-            let mut rotation = match (t.f(11), t.f(21)) {
+            // The direction comes from the MTEXT's own groups only: in an R2018+ embedded object
+            // (group 101), 11 is the insertion point, not the X-axis direction (#667).
+            let own = T(mtext_dxf::before_columns(tags));
+            let mut rotation = match (own.f(11), own.f(21)) {
                 (Some(x), Some(y)) if x != 0.0 || y != 0.0 => Vec2::new(x, y).angle(),
-                _ => T(mtext_dxf::before_columns(tags)).fd(50, 0.0).to_radians(),
+                _ => own.fd(50, 0.0).to_radians(),
             };
             let mut attach = t.i(71).unwrap_or(1).clamp(1, 9) as u8;
             if c.extrusion.z < 0.0 {
@@ -935,6 +938,8 @@ struct Rx {
     pstyles: HashMap<String, String>,
     /// Upper-case block name → associative array parameters from its BLOCK_RECORD.
     block_arrays: HashMap<String, cadcraft_doc::ArrayParams>,
+    /// LAYER record handle (upper case) → layer name (VIEWPORT group 341 frozen layers).
+    layers: HashMap<String, String>,
 }
 
 /// The plot style names of a file: the entries of the `ACAD_PLOTSTYLENAME` dictionary of the
@@ -1032,6 +1037,15 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
                 rx.inserted.insert(b.block.to_ascii_uppercase());
             }
             rx.mleader_fix.push((h, pending));
+        }
+        // CADCraft's VPFROZEN xdata wins; otherwise AutoCAD's group 341 layer handles.
+        ("VIEWPORT", EntityKind::Viewport(v)) if v.frozen_layers.is_empty() => {
+            v.frozen_layers = tags
+                .iter()
+                .take_while(|t| t.code < 1000)
+                .filter(|t| t.code == 341)
+                .filter_map(|t| rx.layers.get(&t.str().trim().to_ascii_uppercase()).cloned())
+                .collect();
         }
         _ => {}
     }
@@ -1275,8 +1289,16 @@ fn annotative(tags: &[Tag]) -> bool {
 }
 
 /// A text style's font: CADCraft's own font name from `CADCRAFT` xdata (`1000 FONT`, name)
-/// while the font file is still the `txt` written for other readers, otherwise the file.
+/// while the font file is still the `txt` written for other readers; the TrueType family of the
+/// style's `ACAD` xdata (`1000` typeface) when it has no font file (how AutoCAD stores TrueType
+/// styles); otherwise the file.
 fn style_font(tags: &[Tag], file: String) -> String {
+    if file.trim().is_empty()
+        && let Some(face) =
+            crate::dxf_ext::xdata(tags, "ACAD").iter().find(|t| t.code == 1000).map(|t| t.str().trim().to_string()).filter(|f| !f.is_empty())
+    {
+        return face;
+    }
     let x = crate::dxf_ext::xdata(tags, crate::dxf_ext::APP);
     let own = x.windows(2).find_map(|w| match w {
         [m, n] if m.code == 1000 && m.str() == "FONT" && n.code == 1000 => Some(n.str()),
@@ -1319,6 +1341,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
             }
             "LTYPE" => {
                 rx.ltypes.insert(h.trim().to_ascii_uppercase(), n);
+            }
+            "LAYER" => {
+                rx.layers.insert(h.trim().to_ascii_uppercase(), n);
             }
             _ => {}
         }
@@ -1567,6 +1592,17 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
     let mut entities = Vec::new();
     let mut objs = Objects::default();
+    // Every handle another program's file already uses is taken before anything gets a new one:
+    // its $HANDSEED can be lower than its handles, and entities made while reading (the faces of
+    // a polyface mesh) would otherwise get handles that records further on still have. A file
+    // CADCraft wrote names its own next handle, above which its rebuilt records are numbered
+    // (#495), so it is left to that.
+    let ours = secs.iter().any(|s| s.name == "OBJECTS" && s.tags.iter().any(|t| t.code == 3 && t.str() == crate::dxf_ext::HANDSEED_KEY));
+    for t in secs.iter().filter(|_| !ours).flat_map(|s| s.tags.iter()).filter(|t| t.code == 5 || t.code == 105) {
+        if let Some(h) = Handle::parse_hex(t.str().trim()) {
+            d.bump_handseed(h);
+        }
+    }
     for s in &secs {
         match s.name.as_str() {
             "HEADER" => header(&s.tags, &mut d),
@@ -1601,7 +1637,8 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                     }
                 }
             }
-            "ENTITIES" => entities = parse_entities(&records(&s.tags), &mut d, &mut rx),
+            // A damaged file may split its entities over several ENTITIES sections (#865).
+            "ENTITIES" => entities.extend(parse_entities(&records(&s.tags), &mut d, &mut rx)),
             "OBJECTS" => {
                 for (k, tg) in records(&s.tags) {
                     objs.add(&k, &tg);
