@@ -430,8 +430,9 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
             cmd("blend"),
             SEP,
             ico("explode", Icon::Explode),
-            sub(
+            sub_ico(
                 "Object",
+                Icon::Object,
                 &[
                     cmd("pedit"),
                     cmd("splinedit"),
@@ -456,11 +457,11 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
             SEP,
             cmd("ncopy"),
             cmd("chspace"),
-            cmd("flatten"),
-            cmd("overkill"),
+            ico("flatten", Icon::Flatten),
+            ico("overkill", Icon::Overkill),
             SEP,
-            sub("Clip", &[cmd("vpclip")]),
-            sub("Solid Editing", &[cmd("union"), cmd("subtract"), cmd("intersect")]),
+            sub_ico("Clip", Icon::Clip, &[cmd("vpclip")]),
+            sub_ico("Solid Editing", Icon::Solid, &[cmd("union"), cmd("subtract"), cmd("intersect")]),
             sub_ico("3D Operations", Icon::Orbit, &[cmd("align")]),
         ],
     ),
@@ -490,7 +491,17 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
             ico("ui.toggle.history", Icon::List),
         ],
     ),
-    ("Help", &[ico("ui.dialog.commands", Icon::Help), cmd("ui.sample"), SEP, cmd("ui.discord"), SEP, cmd("ui.dialog.about")]),
+    (
+        "Help",
+        &[
+            ico("ui.dialog.commands", Icon::Help),
+            ico("ui.sample", Icon::Sample),
+            SEP,
+            ico("ui.discord", Icon::Chat),
+            SEP,
+            ico("ui.dialog.about", Icon::Info),
+        ],
+    ),
 ];
 
 #[cfg(test)]

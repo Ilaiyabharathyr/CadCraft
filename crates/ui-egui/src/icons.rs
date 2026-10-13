@@ -188,6 +188,14 @@ pub enum Icon {
     Oblique,
     AlignText,
     DimOverride,
+    Object,
+    Clip,
+    Solid,
+    Flatten,
+    Overkill,
+    Sample,
+    Chat,
+    Info,
 }
 
 #[derive(Clone, Copy)]
@@ -974,7 +982,7 @@ pub fn paint_tinted(p: &Painter, rect: Rect, icon: Icon, dim: bool, tint: Option
         Script | Compare | Group | DrawOrder | Mouse3d => menu_icon(&Pen { g: 20.0, ..pen }, icon),
         Polyline3d | Multiline | Helix | CenterMark | CenterLine | Dimension | DimJogged | DimSpace | DimBreak | Tolerance | Inspection | Oblique
         | AlignText | DimOverride => menu_icon(&Pen { g: 20.0, ..pen }, icon),
-        // MENU-ARMS
+        Object | Clip | Solid | Flatten | Overkill | Sample | Chat | Info => menu_icon(&Pen { g: 20.0, ..pen }, icon),
     }
 }
 
@@ -1294,7 +1302,50 @@ fn menu_icon(m: &Pen, icon: Icon) {
             m.poly(&[(4.0, 13.0), (11.0, 6.0), (14.0, 9.0), (7.0, 16.0), (4.0, 16.0)], true, b);
             m.la(12.0, 5.0, 15.0, 8.0);
         }
-        // MENU-ICONS
+        Object => {
+            // A box inside a frame.
+            m.rect(4.0, 4.0, 12.0, 12.0, b);
+            m.rect(8.0, 8.0, 4.0, 4.0, a);
+        }
+        Clip => {
+            // A frame cut by a diagonal.
+            m.rect(4.0, 4.0, 12.0, 12.0, b);
+            m.la(8.0, 8.0, 16.0, 16.0);
+        }
+        Solid => {
+            // A cube.
+            m.poly(&[(10.0, 3.0), (16.0, 6.5), (16.0, 13.5), (10.0, 17.0), (4.0, 13.5), (4.0, 6.5)], true, b);
+            m.poly(&[(4.0, 6.5), (10.0, 10.0), (16.0, 6.5)], false, a);
+            m.la(10.0, 10.0, 10.0, 17.0);
+        }
+        Flatten => {
+            // A shape pressed onto a plane.
+            m.l(3.0, 14.0, 17.0, 14.0);
+            m.poly(&[(6.0, 10.0), (10.0, 5.0), (14.0, 10.0)], false, a);
+        }
+        Overkill => {
+            // Two overlapping boxes with a line struck out.
+            m.rect(3.0, 3.0, 10.0, 10.0, b);
+            m.rect(7.0, 7.0, 10.0, 10.0, b);
+            m.la(9.0, 12.0, 15.0, 12.0);
+        }
+        Sample => {
+            // A drawing sheet with a view and a title line.
+            m.rect(4.0, 3.0, 12.0, 14.0, b);
+            m.rect(7.0, 7.0, 6.0, 4.0, a);
+            m.l(7.0, 14.0, 13.0, 14.0);
+        }
+        Chat => {
+            // A speech bubble.
+            m.poly(&[(4.0, 5.0), (16.0, 5.0), (16.0, 13.0), (9.0, 13.0), (5.0, 16.0), (5.0, 13.0), (4.0, 13.0)], true, b);
+            m.la(7.0, 9.0, 13.0, 9.0);
+        }
+        Info => {
+            // An i in a circle.
+            m.c(10.0, 10.0, 7.0, b);
+            m.la(10.0, 9.0, 10.0, 14.0);
+            m.fill_c(10.0, 6.5, 0.9, a);
+        }
         _ => {}
     }
 }
