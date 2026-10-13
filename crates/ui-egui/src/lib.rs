@@ -409,6 +409,10 @@ impl CadApp {
         } else {
             self.ui.start_tab = false;
             self.canvas.zoom_pending = true;
+            // A dynamic block's own drawing: ask whether to open it in the Block Editor.
+            if self.session.state().is_ok_and(|st| cadcraft_engine::blockedit::has_authoring_elements(&st.doc)) {
+                self.ui.dialog = Some("authoring".into());
+            }
         }
     }
 
