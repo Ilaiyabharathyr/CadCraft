@@ -682,20 +682,40 @@ pub(crate) fn offset_polyline(pl: &Polyline, d: f64) -> Option<Vec<PolyVertex>> 
         return None;
     }
     let n = segs.len();
-    let mut verts: Vec<PolyVertex> = Vec::new();
+    // Where each offset segment starts after joining it to the previous one.
+    let mut starts: Vec<Vec2> = Vec::with_capacity(n);
     for i in 0..n {
         let s = segs.get(i)?;
-        let start = if i == 0 && !pl.closed {
+        starts.push(if i == 0 && !pl.closed {
             s.start()
         } else {
             let prev = segs.get((i + n - 1) % n)?;
             join_point(prev, s).unwrap_or(s.start())
+        });
+    }
+    let mut verts: Vec<PolyVertex> = Vec::new();
+    for i in 0..n {
+        let s = segs.get(i)?;
+        let start = *starts.get(i)?;
+        let end = if i + 1 < n {
+            *starts.get(i + 1)?
+        } else if pl.closed {
+            *starts.first()?
+        } else {
+            s.end()
         };
         let bulge = match s {
             Segment::Line(_) => 0.0,
             Segment::Arc { arc, ccw } => {
-                let sw = arc.sweep();
-                cadcraft_geom::arc_to_bulge(if *ccw { sw } else { -sw })
+                // The joined endpoints may have moved along the circle: take the sweep between them.
+                let sweep = if start.near(end, 1e-9) {
+                    arc.sweep()
+                } else if *ccw {
+                    ccw_sweep(arc.center.angle_to(start), arc.center.angle_to(end))
+                } else {
+                    ccw_sweep(arc.center.angle_to(end), arc.center.angle_to(start))
+                };
+                cadcraft_geom::arc_to_bulge(if *ccw { sweep } else { -sweep })
             }
         };
         verts.push(PolyVertex { p: start, bulge, start_width: 0.0, end_width: 0.0 });
@@ -703,7 +723,6 @@ pub(crate) fn offset_polyline(pl: &Polyline, d: f64) -> Option<Vec<PolyVertex>> 
     if !pl.closed {
         verts.push(PolyVertex::new(segs.last()?.end()));
     }
-    // Recompute arc bulges where endpoints moved (approximation: keep sweep sign).
     Some(verts)
 }
 
@@ -1414,6 +1433,9 @@ fn run_explode(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Break `h` between two points (or at one point when p1 == p2).
 pub(crate) fn break_entity(s: &mut Session, h: Handle, p1: Vec2, p2: Vec2) -> Result<Vec<Handle>> {
+    if super::curves::is_locked(s, h) {
+        return Err(EngineError::Other("The object is on a locked layer.".into()));
+    }
     let e = s.doc()?.entity(h).map(|e| (**e).clone()).ok_or_else(|| EngineError::Other("no such object".into()))?;
     let pieces: Vec<EntityKind> = match &e.kind {
         EntityKind::Line(l) => {
@@ -1522,6 +1544,9 @@ fn run_breakat(s: &mut Session, p: &Value) -> Result<Value> {
 pub(crate) fn join(s: &mut Session, hs: &[Handle]) -> Result<Option<Handle>> {
     if let Some(h) = super::modify2::join_curves(s, hs)? {
         return Ok(Some(h));
+    }
+    if hs.iter().any(|h| super::curves::is_locked(s, *h)) {
+        return Err(EngineError::Other("An object is on a locked layer.".into()));
     }
     let d = s.doc()?;
     let mut segs: Vec<Segment> = Vec::new();

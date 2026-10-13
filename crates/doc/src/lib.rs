@@ -61,6 +61,26 @@ pub enum Space {
     Paper(String),
 }
 
+impl Space {
+    /// Whether this is a layout's paper space.
+    pub fn is_paper(&self) -> bool {
+        matches!(self, Space::Paper(_))
+    }
+
+    /// The layout whose paper space this is; `None` for model space.
+    pub fn layout(&self) -> Option<&str> {
+        match self {
+            Space::Paper(n) => Some(n),
+            Space::Model => None,
+        }
+    }
+
+    /// The tab name (CTAB): `Model`, or the layout's name.
+    pub fn tab_name(&self) -> &str {
+        self.layout().unwrap_or("Model")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drawing {
     pub header: Header,
@@ -97,9 +117,15 @@ pub struct Drawing {
     /// Objects hidden for this session by ISOLATEOBJECTS / HIDEOBJECTS. Never written to a file:
     /// a drawing opens with everything shown again.
     pub hidden_objects: BTreeSet<Handle>,
+    /// What reading the file left out (a DWG's object records the reader couldn't decode), told
+    /// to the user when the drawing opens. Never written to a file.
+    pub read_notes: Vec<String>,
     /// The in-place block reference edit in progress (REFEDIT). Never written to a file; files are
     /// written from [`Drawing::committed`].
     pub refedit: Option<RefEdit>,
+    /// Records of the file this drawing was read from that the reader could not place (a damaged
+    /// file), counted by the section they came from. Never written to a file.
+    pub skipped_records: BTreeMap<String, usize>,
 }
 
 impl Default for Drawing {
@@ -153,7 +179,9 @@ impl Drawing {
             scales: imperial_scales(),
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
+            read_notes: Vec::new(),
             refedit: None,
+            skipped_records: BTreeMap::new(),
         }
     }
 
