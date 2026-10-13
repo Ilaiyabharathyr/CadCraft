@@ -778,6 +778,15 @@ fn parameters_in_a_stretch_selection_are_carried_along() {
     let ps = cadcraft_doc::dynblock::custom_properties(&d, r).unwrap().1;
     let pos: Vec<(&str, &str)> = ps.iter().filter(|p| p.name.starts_with("Position1")).map(|p| (p.name.as_str(), p.value.as_str())).collect();
     assert_eq!(pos, [("Position1 X", "29.0000"), ("Position1 Y", "0.0000")]);
+    // Whether a parameter's point is in the stretch frame (34,-2)-(38,2) is decided where Door
+    // has it, as AutoCAD evaluates from the block: moved out to x = 60 first, it still follows.
+    {
+        let mut d = d.clone();
+        cadcraft_doc::dynblock::set_property(&mut d, r, "Position1 X", "60").unwrap();
+        cadcraft_doc::dynblock::set_property(&mut d, r, "Width", "36").unwrap();
+        let ps = cadcraft_doc::dynblock::custom_properties(&d, r).unwrap().1;
+        assert_eq!(ps.iter().find(|p| p.name == "Position1 X").map(|p| p.value.as_str()), Some("66.0000"));
+    }
     // A position set directly is recorded as the drag of its grip (12), from where Door has it.
     cadcraft_doc::dynblock::set_property(&mut d, r, "Position1 X", "20").unwrap();
     let x = d.foreign.entities.get(&r).and_then(|x| x.xdict).unwrap();

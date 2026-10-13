@@ -412,16 +412,24 @@ fn apply(
         }
         for h in &a.selection {
             if let Some(node) = param_of.get(h) {
-                // A parameter in the selection is carried along (its points in the frame).
+                // A parameter in the selection is carried along: its points in the frame. Which
+                // points are in it is decided where the dynamic block has them (AutoCAD evaluates
+                // the actions from the block itself, so a point another action has moved out of
+                // the frame still follows).
                 if set.contains_key(node) {
                     continue;
                 }
                 let Some(cur) = new.get(node).cloned().or_else(|| current(&m, values, *node)) else { continue };
-                let shift = |p: Vec3| if frame.is_empty() || in_frame(frame, p.xy()) { p + v.to3(0.0) } else { p };
-                let moved = match cur {
-                    Val::Point(p) => Val::Point(shift(p)),
-                    Val::Points(b, e) => Val::Points(shift(b), shift(e)),
-                    t => t,
+                let home = current(&m, &BTreeMap::new(), *node);
+                let shift = |p: Vec3, at: Option<Vec3>| {
+                    if frame.is_empty() || in_frame(frame, at.unwrap_or(p).xy()) { p + v.to3(0.0) } else { p }
+                };
+                let moved = match (cur, home) {
+                    (Val::Point(p), Some(Val::Point(h))) => Val::Point(shift(p, Some(h))),
+                    (Val::Point(p), _) => Val::Point(shift(p, None)),
+                    (Val::Points(b, e), Some(Val::Points(hb, he))) => Val::Points(shift(b, Some(hb)), shift(e, Some(he))),
+                    (Val::Points(b, e), _) => Val::Points(shift(b, None), shift(e, None)),
+                    (t, _) => t,
                 };
                 new.insert(*node, moved);
                 continue;
