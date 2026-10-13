@@ -22,6 +22,16 @@ fn drawings(test: &str) -> (String, String) {
     (path("plan.dxf"), path("section.dwg"))
 }
 
+/// Wait for the drawings being read in the background to be added (or reported).
+fn settle(app: &mut CadApp) {
+    let t = std::time::Instant::now();
+    while app.opening.busy() && t.elapsed() < std::time::Duration::from_secs(10) {
+        app.finish_opening();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.finish_opening();
+}
+
 /// File ▸ Open Recent: (label, command id) of each item.
 fn open_recent(app: &CadApp) -> Vec<(String, String)> {
     let file = menus::tree(app).into_iter().find(|(m, _)| m == "File").map(|(_, e)| e).unwrap_or_default();
@@ -44,11 +54,15 @@ fn opened_drawings_are_listed_newest_first_and_survive_a_restart() {
     assert!(app.ui.recent_files.is_empty());
 
     app.open_path(&plan);
+    settle(&mut app);
     app.open_path(&section);
+    settle(&mut app);
     app.open_path(&plan);
+    settle(&mut app);
     assert_eq!(app.ui.recent_files, [plan.clone(), section.clone()], "newest first, each file once");
     // A file that could not be opened is not listed.
     app.open_path("/nonexistent/missing.dxf");
+    settle(&mut app);
     assert_eq!(app.ui.recent_files, [plan.clone(), section.clone()]);
 
     let items = open_recent(&app);
@@ -58,6 +72,7 @@ fn opened_drawings_are_listed_newest_first_and_survive_a_restart() {
     // Choosing an item opens that file and moves it to the top.
     let before = app.session.docs.len();
     menus::activate(&mut app, &items[1].1);
+    settle(&mut app);
     assert_eq!(app.session.docs.len(), before + 1);
     assert_eq!(app.session.state().ok().and_then(|s| s.path.clone()), Some(section.clone()));
     assert_eq!(app.ui.recent_files, [section.clone(), plan.clone()]);
@@ -109,6 +124,12 @@ fn start_page_lists_recent_files_and_opens_one_on_click() {
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
+    let t = std::time::Instant::now();
+    while h.state().opening.busy() && t.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.run_steps(1);
+    }
+    h.run_steps(1);
     let app = h.state();
     assert_eq!(app.session.state().ok().and_then(|s| s.path.clone()), Some(plan.clone()));
     assert_eq!(app.ui.recent_files, [plan, section]);
