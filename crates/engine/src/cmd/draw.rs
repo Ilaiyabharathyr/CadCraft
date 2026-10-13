@@ -378,7 +378,7 @@ fn run_mtext(s: &mut Session, p: &Value) -> Result<Value> {
         attach,
         rotation: f64_or(p, "rotation", 0.0).to_radians(),
         style,
-        contents: super::mtext_opts::json_paragraphs(p, text.replace('\n', "\\P"))?,
+        contents: super::mtext_opts::json_paragraphs(p, text.replace('\n', "\\P"), height)?,
         line_spacing: f64_or(p, "lineSpacing", 1.0),
         line_spacing_exact: bool_or(p, "lineSpacingExact", false),
         columns: super::mtext_opts::json_columns(p, height, width)?,
@@ -937,11 +937,17 @@ impl Interactive for PolygonM {
                 s.last_used.polygon_circumscribed = !ins;
             }
             (Some(c), Some(ins), Input::Point(p)) => {
+                if c.near(p, 1e-12) {
+                    return Err(crate::EngineError::Other("Value must be positive and nonzero.".into()));
+                }
                 s.add_entity(lwpoly(polygon_vertices(c, n, p, ins), true))?;
                 return Ok(Step::Done);
             }
             (Some(c), Some(ins), Input::Text(t)) => {
                 let r = number(&t).ok_or_else(|| crate::EngineError::Other("Requires numeric distance or point.".into()))?;
+                if !r.is_finite() || r <= 0.0 {
+                    return Err(crate::EngineError::Other("Value must be positive and nonzero.".into()));
+                }
                 let rp = polygon_typed_radius_point(c, n, r, ins);
                 s.add_entity(lwpoly(polygon_vertices(c, n, rp, ins), true))?;
                 return Ok(Step::Done);
