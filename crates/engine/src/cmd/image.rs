@@ -24,6 +24,8 @@ const MAX_IMAGE_BYTES: u64 = 256 << 20;
 const MAX_LOADED_BYTES: u64 = 2 << 30;
 /// Most image files decoded at the same time when a drawing opens.
 const MAX_LOADERS: usize = 4;
+/// Largest embedded OLE object looked into for its picture (bytes).
+const MAX_OLE_BYTES: usize = 256 << 20;
 /// Longest image path taken from a caller.
 const MAX_PATH: usize = 4096;
 
@@ -107,12 +109,10 @@ fn bytes_of(r: &Raster) -> u64 {
 pub(crate) fn after_open(s: &mut Session, i: usize) {
     let Some(st) = s.docs.get_mut(i) else { return };
     let paths = paths(&st.doc);
-    if paths.is_empty() {
-        return;
-    }
     let mut rasters = st.doc.rasters.clone();
-    let notes = load_missing(&paths, st.path.as_deref(), &mut rasters);
-    if !rasters.is_empty() {
+    let mut notes = load_missing(&paths, st.path.as_deref(), &mut rasters);
+    notes.extend(load_ole(&st.doc, &mut rasters));
+    if rasters.len() != st.doc.rasters.len() {
         // Loading pixels is not a change to the drawing. A drawing counts as unchanged while
         // it is the very one that was saved, so the saved one follows.
         let unchanged = Arc::ptr_eq(&st.doc, &st.saved);
@@ -152,6 +152,49 @@ fn load_missing(paths: &[String], host: Option<&str>, rasters: &mut cadcraft_doc
         }
     }
     notes
+}
+
+/// Read into `rasters` the pictures of the embedded OLE objects of `d` that are not in it yet.
+/// Returns a message when some have no picture that can be shown.
+fn load_ole(d: &Drawing, rasters: &mut cadcraft_doc::Rasters) -> Option<String> {
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    let objects = stores.flat_map(|store| store.iter()).filter_map(|e| match &e.kind {
+        EntityKind::Unknown(u) if u.is_ole() => Some((cadcraft_doc::ole_raster_key(e.handle), u)),
+        _ => None,
+    });
+    let (mut kept_bytes, mut failed, mut reason) = (0u64, 0usize, String::new());
+    for (key, object) in objects.take(MAX_IMAGE_FILES) {
+        if rasters.get(&key).is_some() {
+            continue;
+        }
+        let picture = match object.ole_data(MAX_OLE_BYTES) {
+            Some(data) if kept_bytes <= MAX_LOADED_BYTES => decode_ole(&data),
+            Some(_) => Err(format!("not loaded (more than {} MB of images)", MAX_LOADED_BYTES >> 20)),
+            None => Err("OLE object: no object data".into()),
+        };
+        match picture {
+            Ok(r) => {
+                kept_bytes = kept_bytes.saturating_add(bytes_of(&r));
+                rasters.insert(&key, Arc::new(r));
+            }
+            Err(e) => {
+                failed = failed.saturating_add(1);
+                if reason.is_empty() {
+                    reason = e;
+                }
+            }
+        }
+    }
+    (failed > 0).then(|| format!("{failed} embedded OLE object(s) shown as a crossed-out frame ({reason})"))
+}
+
+/// The picture of an OLE object from its data; a reader that panics fails this object only.
+fn decode_ole(data: &[u8]) -> std::result::Result<Raster, String> {
+    let hook = super::file::ole_decoder().ok_or("OLE objects can't be read in this build")?;
+    match std::panic::catch_unwind(|| hook(data)) {
+        Ok(r) => r,
+        Err(_) => Err("OLE object: the object data is damaged".into()),
+    }
 }
 
 fn over_limit(path: &str) -> String {

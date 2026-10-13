@@ -71,6 +71,17 @@ pub fn image_decoder() -> Option<ImageHook> {
     IMAGE.get().copied()
 }
 
+static OLE: OnceLock<ImageHook> = OnceLock::new();
+
+/// The reader of an embedded OLE object's picture from the object's data, installed like
+/// [`set_image_decoder`].
+pub fn set_ole_decoder(h: ImageHook) {
+    let _ = OLE.set(h);
+}
+pub fn ole_decoder() -> Option<ImageHook> {
+    OLE.get().copied()
+}
+
 /// Hand finished file bytes to the user where there is no file system (the browser: a download).
 /// Arguments: file name, MIME type, bytes. `Ok` only once the delivery was actually started.
 pub type DeliverHook = fn(&str, &str, &[u8]) -> std::result::Result<(), String>;

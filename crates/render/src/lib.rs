@@ -1390,6 +1390,38 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 b.polyline(ctx, rgb, lw, l);
             }
         }
+        EntityKind::Unknown(u) if u.is_ole() => {
+            let Some(frame) = u.ole_frame() else { return };
+            let (low, high) = (frame.min, frame.max);
+            let (right, left) = (Vec2::new(high.x, low.y), Vec2::new(low.x, high.y));
+            // The picture read from the object when the drawing opened, over its rectangle.
+            let raster = ctx.d.rasters.get(&cadcraft_doc::ole_raster_key(e.handle));
+            if let Some(r) = raster {
+                let (w, h) = (f64::from(r.width()), f64::from(r.height()));
+                let i = cadcraft_doc::Image {
+                    insert: low.to3(0.0),
+                    u: Vec2::new(frame.width() / w, 0.0).to3(0.0),
+                    v: Vec2::new(0.0, frame.height() / h).to3(0.0),
+                    size: Vec2::new(w, h),
+                    ..Default::default()
+                };
+                b.image(ctx, rgb, &i, r);
+            }
+            // The frame per OLEFRAME: 0 = none, 1 = shown and plotted, 2 = shown but not
+            // plotted. An object without a picture is always a crossed-out frame.
+            let framed = match ctx.d.header.i64("OLEFRAME", 2) {
+                0 => false,
+                1 => true,
+                _ => !b.plotting,
+            };
+            if framed || raster.is_none() {
+                b.polyline(ctx, rgb, lw, &[low, right, high, left, low]);
+            }
+            if raster.is_none() {
+                b.polyline(ctx, rgb, lw, &[low, high]);
+                b.polyline(ctx, rgb, lw, &[right, left]);
+            }
+        }
         kind => {
             for prim in kind.prims() {
                 match prim {
