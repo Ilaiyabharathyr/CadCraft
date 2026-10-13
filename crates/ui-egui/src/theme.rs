@@ -302,7 +302,7 @@ pub fn mono() -> FontId {
 }
 
 /// Load a system UI font at run time when one is installed (not bundled), else keep egui's.
-pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
+pub fn install_fonts(ctx: &egui::Context, cjk: bool, arabic: bool) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let candidates: &[&str] = if cfg!(target_os = "macos") {
@@ -336,10 +336,24 @@ pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
                 }
             }
         }
+        // العربية: an installed Arabic face after the Latin ones (egui's bundled faces carry no
+        // Arabic glyphs). Arabic fonts are small, so the probe is cheap next to the CJK one.
+        if arabic {
+            if let Some(path) = arabic_font() {
+                if let Ok(bytes) = std::fs::read(path) {
+                    fonts.font_data.insert("system-arabic".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+                    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+                        if let Some(f) = fonts.families.get_mut(&family) {
+                            f.push("system-arabic".into());
+                        }
+                    }
+                }
+            }
+        }
         ctx.set_fonts(fonts);
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = (ctx, cjk);
+    let _ = (ctx, cjk, arabic);
 }
 
 /// Largest interface font file read (CJK collections are 15–60 MB).
@@ -388,9 +402,53 @@ pub fn cjk_font() -> Option<&'static std::path::Path> {
     None
 }
 
-/// Whether the interface can show `language`: Chinese needs an installed CJK font.
+/// Whether the interface can show `language`: Chinese needs an installed CJK font and العربية
+/// needs an installed Arabic font; anything else always renders (the bundled faces cover it).
 pub fn can_show(language: &str) -> bool {
-    !language.starts_with("zh") || cjk_font().is_some()
+    (!language.starts_with("zh") || cjk_font().is_some()) && (language != "ar" || arabic_font().is_some())
+}
+
+/// An installed font with Arabic glyphs, for the العربية interface; fonts are never bundled
+/// (only looked for where the OS or common packages put them). Checked once.
+pub fn arabic_font() -> Option<&'static std::path::Path> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+        FOUND
+            .get_or_init(|| {
+                let candidates: &[&str] = if cfg!(target_os = "macos") {
+                    &[
+                        "/System/Library/Fonts/GeezaPro.ttc",
+                        "/System/Library/Fonts/Supplemental/Geeza Pro.ttf",
+                        "/System/Library/Fonts/Supplemental/Al Nile.ttc",
+                        "/System/Library/Fonts/Supplemental/Baghdad.ttf",
+                    ]
+                } else if cfg!(windows) {
+                    &[
+                        "C:\\Windows\\Fonts\\segoeui.ttf",
+                        "C:\\Windows\\Fonts\\tahoma.ttf",
+                        "C:\\Windows\\Fonts\\trado.ttf",
+                        "C:\\Windows\\Fonts\\arabtype.ttf",
+                        "C:\\Windows\\Fonts\\arial.ttf",
+                    ]
+                } else {
+                    &[
+                        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+                        "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
+                        "/usr/share/fonts/opentype/noto/NotoSansArabic-Regular.ttf",
+                        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+                        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                        "/usr/share/fonts/truetype/amiri/Amiri-Regular.ttf",
+                        "/usr/share/fonts/truetype/kacst/KacstOne.ttf",
+                    ]
+                };
+                candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
+            })
+            .as_deref()
+    }
+    #[cfg(target_arch = "wasm32")]
+    None
 }
 
 /// egui's visuals for `theme`, from its tokens.

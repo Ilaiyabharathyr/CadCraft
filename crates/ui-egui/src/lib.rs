@@ -197,6 +197,8 @@ pub struct CadApp {
     pub frame_cap: Option<gpu::FrameCap>,
     /// Interface fonts installed, and whether with a CJK font (`None` until the first frame).
     fonts_cjk: Option<bool>,
+    /// Whether the Arabic interface font was installed for the last layout (reinstall on change).
+    fonts_arabic: Option<bool>,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
@@ -239,6 +241,7 @@ impl CadApp {
             #[cfg(not(target_arch = "wasm32"))]
             frame_cap: None,
             fonts_cjk: None,
+            fonts_arabic: None,
             shown_theme: None,
             shown_follows_system: false,
             frame_ms: 0.0,
@@ -415,9 +418,11 @@ impl CadApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         let cjk = self.language().starts_with("zh");
-        if self.fonts_cjk != Some(cjk) {
-            theme::install_fonts(ctx, cjk);
+        let arabic = self.language() == "ar";
+        if self.fonts_cjk != Some(cjk) || self.fonts_arabic != Some(arabic) {
+            theme::install_fonts(ctx, cjk, arabic);
             self.fonts_cjk = Some(cjk);
+            self.fonts_arabic = Some(arabic);
         }
         // Resolved every frame, so a System choice follows the OS appearance live (winit and the
         // browser report changes as input); the saved choice itself never changes here.

@@ -31,10 +31,12 @@ pub enum Preference {
     French,
     #[serde(rename = "zh")]
     Chinese,
+    #[serde(rename = "ar")]
+    Arabic,
 }
 
 impl Preference {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Auto,
         Self::English,
         Self::Ukrainian,
@@ -45,6 +47,7 @@ impl Preference {
         Self::Russian,
         Self::French,
         Self::Chinese,
+        Self::Arabic,
     ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
@@ -68,6 +71,7 @@ impl Preference {
             Self::Russian => "ru",
             Self::French => "fr",
             Self::Chinese => "zh",
+            Self::Arabic => "ar",
         }
     }
 
@@ -83,6 +87,7 @@ impl Preference {
             Self::Russian => "Русский",
             Self::French => "Français",
             Self::Chinese => "简体中文",
+            Self::Arabic => "العربية",
         }
     }
 
@@ -106,6 +111,7 @@ impl Preference {
             Self::Russian => "ru",
             Self::French => "fr",
             Self::Chinese => "zh",
+            Self::Arabic => "ar",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -122,7 +128,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 9] = [
+pub static LANGUAGES: [Language; 10] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -147,6 +153,17 @@ pub static LANGUAGES: [Language; 9] = [
     // Chinese has no grammatical plural: both `@plural` forms read the same. Its glyphs come from
     // an installed CJK font (`theme::cjk_font`); without one the interface stays English.
     Language { code: "zh", name: "简体中文", source: include_str!("zh.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // العربية (Arabic) is right-to-left; an installed Arabic font (`theme::arabic_font`)
+    // covers its glyphs, and the shell keeps egui's left-to-right run order. Six plural
+    // forms: zero, one, two, few, many.
+    Language {
+        code: "ar",
+        name: "العربية",
+        source: include_str!("ar.tsv"),
+        plural: plural_arabic,
+        plural_forms: 6,
+        catalog: OnceLock::new(),
+    },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
@@ -256,6 +273,19 @@ pub fn plural_uk(n: u64) -> usize {
 /// Portuguese integer plurals (CLDR `pt`): one (0, 1), other (2 and up).
 pub fn plural_pt(n: u64) -> usize {
     usize::from(n > 1)
+}
+
+/// Arabic integer plurals (CLDR `ar`): zero (0), one (1), two (2), few (3–10, 103–110),
+/// many (11–99) — the same rule pdfcraft uses, so the sibling apps agree.
+pub fn plural_arabic(n: u64) -> usize {
+    match (n, n % 100) {
+        (0, _) => 0,
+        (1, _) => 1,
+        (2, _) => 2,
+        (_, 3..=10) => 3,
+        (_, 11..=99) => 4,
+        _ => 5,
+    }
 }
 
 fn plural_en(n: u64) -> usize {
