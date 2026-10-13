@@ -76,7 +76,7 @@ fn hit(xf: &Xf, g: &DynGrip, gs: f32, p: Pos2) -> bool {
 pub(crate) fn draw(app: &mut CadApp, painter: &Painter, xf: &Xf, rect: Rect, hover: Option<Pos2>) {
     let t = Tokens::get();
     let gs = app.session.settings.gripsize as f32;
-    let hot = app.canvas.dyn_hot.clone();
+    let hot = app.canvas.dyn_hot;
     for (h, g) in of_selection(app).iter() {
         if !rect.contains(xf.to_screen(g.at)) {
             continue;
