@@ -50,6 +50,10 @@ pub struct PdfOptions {
     pub fit: Option<bool>,
     /// Plot scale in paper units per drawing unit (when not fitting).
     pub scale: Option<f64>,
+    /// Model-space plot placement. `None` keeps the legacy centered behavior.
+    pub center: Option<bool>,
+    /// Model-space X/Y plot offset in millimetres from the printable area's lower-left corner.
+    pub offset: Option<[f64; 2]>,
     /// Plot object lineweights. Default: the layout's setting; on for model space.
     pub lineweights: Option<bool>,
     /// Flate-compress the content stream.
@@ -87,6 +91,8 @@ impl Default for PdfOptions {
             landscape: None,
             fit: None,
             scale: None,
+            center: None,
+            offset: None,
             lineweights: None,
             compress: false,
             title: String::new(),
@@ -102,8 +108,9 @@ impl Default for PdfOptions {
 }
 
 impl PdfOptions {
-    /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, lineweights?, compress?, title?,
-    /// window?: [[x1, y1], [x2, y2]], margins?: [l, b, r, t] (mm), hyperlinks?: bool}`.
+    /// Parse `{paper?, width?, height?, landscape?, fit?, scale?, center?, offset?: [x,y] mm,
+    /// lineweights?, compress?, title?, window?: [[x1, y1], [x2, y2]], margins?: [l, b, r, t] (mm),
+    /// hyperlinks?: bool}`.
     pub fn from_json(v: &Value) -> PdfOptions {
         let num = |k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
         let paper_mm = match (num("width"), num("height")) {
@@ -123,6 +130,8 @@ impl PdfOptions {
             landscape: v.get("landscape").and_then(Value::as_bool),
             fit: v.get("fit").and_then(Value::as_bool),
             scale: num("scale").filter(|s| *s > 0.0),
+            center: v.get("center").and_then(Value::as_bool),
+            offset: offset(v.get("offset")),
             lineweights: v.get("lineweights").and_then(Value::as_bool),
             compress: v.get("compress").and_then(Value::as_bool).unwrap_or(true),
             title: v.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
@@ -131,6 +140,35 @@ impl PdfOptions {
             hyperlinks: v.get("hyperlinks").and_then(Value::as_bool).unwrap_or(true),
         }
     }
+}
+
+fn offset(v: Option<&Value>) -> Option<[f64; 2]> {
+    let a = v?.as_array()?;
+    if a.len() != 2 {
+        return None;
+    }
+    let x = a.first()?.as_f64()?;
+    let y = a.get(1)?.as_f64()?;
+    valid_plot_offset([x, y]).then_some([x, y])
+}
+
+fn valid_plot_offset(offset: [f64; 2]) -> bool {
+    offset.iter().all(|v| v.is_finite() && v.abs() <= paper::MAX_PLOT_OFFSET_MM)
+}
+
+/// Reject malformed offsets at the JSON plotting boundary, before a permissive option parser
+/// could treat them as absent.
+pub(crate) fn validate_plot_offset_json(v: &Value) -> Result<()> {
+    if let Some(raw) = v.get("offset")
+        && offset(Some(raw)).is_none()
+    {
+        return Err(IoError::Format(format!(
+            "plot offset must contain exactly two finite values from -{} to {} mm",
+            paper::MAX_PLOT_OFFSET_MM,
+            paper::MAX_PLOT_OFFSET_MM
+        )));
+    }
+    Ok(())
 }
 
 /// `[l, b, r, t]` margins in mm (finite, 0–1000), else `None`.
@@ -156,9 +194,34 @@ fn window(v: Option<&Value>) -> Option<Bounds2> {
 
 /// Plot with JSON options (the engine's `plot` hook).
 pub fn plot(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
+    validate_plot_offset_json(opts)?;
     // `layouts: [name | "Model"] | "all"` plots those sheets into one file, one page each,
     // instead of `space`; "all" = Model if it has objects, then the layouts in tab order.
     let o = PdfOptions::from_json(opts);
+    // `pages: [{window: [[x1,y1],[x2,y2]], paper?, landscape?, scale?}]` plots model space once
+    // per window, one page each (a book of sheet frames), instead of `space`.
+    if let Some(pages) = opts.get("pages") {
+        let list = pages.as_array().ok_or_else(|| IoError::Format("`pages` must be a list of {window, paper?, landscape?}".into()))?;
+        if list.len() > MAX_PAGES {
+            return Err(IoError::Format(format!("at most {MAX_PAGES} sheets fit in one PDF")));
+        }
+        let items = list
+            .iter()
+            .map(|pg| {
+                let w = window(pg.get("window")).ok_or_else(|| IoError::Format("each page needs a `window` with two corners".into()))?;
+                let mut po = PdfOptions::from_json(&serde_json::json!({
+                    "paper": pg.get("paper"), "landscape": pg.get("landscape"), "scale": pg.get("scale"),
+                    "plotStyleTable": opts.get("plotStyleTable"), "lineweights": opts.get("lineweights"),
+                    "margins": opts.get("margins"), "text": opts.get("text"),
+                }));
+                po.window = Some(w);
+                po.fit = Some(true);
+                po.compress = o.compress;
+                Ok((Space::Model, po))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return pdf_items(d, &items, &o);
+    }
     match opts.get("layouts") {
         Some(Value::String(a)) if a.eq_ignore_ascii_case("all") => {
             let mut layouts: Vec<_> = d.layouts.iter().collect();
@@ -202,9 +265,9 @@ fn links_json(v: Option<&Value>) -> Vec<(Handle, String)> {
 
 /// The page setup a plot of `space` uses, with overrides applied.
 pub fn page_for(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<PageSetup> {
-    let mut page = match space {
-        Space::Paper(n) => d.layout(n).map(|l| l.page.clone()).ok_or_else(|| IoError::Format(format!("no layout `{n}`")))?,
-        Space::Model => {
+    let mut page = match space.layout() {
+        Some(n) => d.layout(n).map(|l| l.page.clone()).ok_or_else(|| IoError::Format(format!("no layout `{n}`")))?,
+        None => {
             let mut p = PageSetup::default();
             if paper::paper_unit_mm(d) == 1.0
                 && let Some(a4) = paper::paper_size("A4")
@@ -265,19 +328,27 @@ pub fn pdf(d: &Drawing, space: &Space, o: &PdfOptions) -> Result<Vec<u8>> {
 
 /// The name of a sheet: `Model` or the layout's.
 fn sheet_name(space: &Space) -> String {
-    match space {
-        Space::Model => "Model".to_string(),
-        Space::Paper(n) => n.clone(),
-    }
+    space.tab_name().to_string()
 }
 
 /// Write a vector PDF with one page per space (at most [`MAX_PAGES`]), each labelled with its
 /// layout name. The options apply to every sheet; layouts use their own page setups.
 pub fn pdf_sheets(d: &Drawing, spaces: &[Space], o: &PdfOptions) -> Result<Vec<u8>> {
-    if spaces.is_empty() {
+    let items: Vec<(Space, PdfOptions)> = spaces.iter().take(MAX_PAGES + 1).map(|s| (s.clone(), o.clone())).collect();
+    pdf_items(d, &items, o)
+}
+
+/// Write a vector PDF with one page per `(space, options)` item (at most [`MAX_PAGES`]): each
+/// page plots with its own options (window, paper, orientation); `o` supplies the file-wide
+/// ones (compression, title, layers, links).
+pub fn pdf_items(d: &Drawing, items: &[(Space, PdfOptions)], o: &PdfOptions) -> Result<Vec<u8>> {
+    if items.iter().any(|(_, io)| io.offset.is_some_and(|offset| !valid_plot_offset(offset))) {
+        return Err(IoError::Format("plot offset must contain two finite values within ±100000 mm".into()));
+    }
+    if items.is_empty() {
         return Err(IoError::Format("there are no sheets to plot".into()));
     }
-    if spaces.len() > MAX_PAGES {
+    if items.len() > MAX_PAGES {
         return Err(IoError::Format(format!("at most {MAX_PAGES} sheets fit in one PDF")));
     }
     // Layers that are off plot on PDF layers that start hidden: draw them from a copy with them on.
@@ -293,7 +364,7 @@ pub fn pdf_sheets(d: &Drawing, spaces: &[Space], o: &PdfOptions) -> Result<Vec<u
         d
     };
     let links = all_links(d, o);
-    let pages = spaces.iter().map(|s| sheet(drawn, s, o, &links)).collect::<Result<Vec<_>>>()?;
+    let pages = items.iter().map(|(s, po)| sheet(drawn, s, po, &links)).collect::<Result<Vec<_>>>()?;
     let title = if o.title.is_empty() { pages.first().map(|p| p.label.clone()).unwrap_or_default() } else { o.title.clone() };
     let fonts = if o.text_as_geometry { fonts::Fonts::default() } else { fonts::Fonts::collect(pages.iter().map(|p| &p.list)) };
     Ok(assemble(d, &pages, &fonts, o, &title))
@@ -320,10 +391,7 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     let page = page_for(d, space, o)?;
     let unit_mm = paper::paper_unit_mm(d);
     let sheet = Sheet::from_page(&page, unit_mm);
-    let lineweights = o.lineweights.unwrap_or(match space {
-        Space::Paper(_) => page.lineweights,
-        Space::Model => true,
-    });
+    let lineweights = o.lineweights.unwrap_or(if space.is_paper() { page.lineweights } else { true });
     let plot_style_table = cadcraft_doc::plot_style_table(d, &page.plot_style_table).map(std::sync::Arc::new);
     let ropts = cadcraft_render::Options {
         tolerance: 0.001,
@@ -334,6 +402,7 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
         view_height: 0.0,
         plot_style_table,
         view: None,
+        skip_viewport: None,
     };
     let k = unit_mm * PT_PER_MM;
     let window = o.window.filter(|w| matches!(space, Space::Model) && !w.is_empty());
@@ -348,8 +417,8 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     let b = window.unwrap_or(list.bounds);
     let s = plot_scale(&b, &sheet, fit, o.scale);
     let map = if fit || matches!(space, Space::Model) {
-        let from = if b.is_empty() { Vec2::ZERO } else { b.center() };
-        Map { from, s, to: sheet.printable.center(), k }
+        let (from, to) = placement(space, &b, fit, &sheet, o);
+        Map { from, s, to, k }
     } else {
         Map { from: Vec2::ZERO, s, to: Vec2::ZERO, k }
     };
@@ -376,6 +445,30 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
     Ok(SheetPage { media, list, map, clip_pt, layers, links, label: sheet_name(space) })
 }
 
+/// Source and destination origins for the shared model-space PDF/PNG placement behavior.
+pub(crate) fn placement(space: &Space, bounds: &Bounds2, fit: bool, sheet: &Sheet, o: &PdfOptions) -> (Vec2, Vec2) {
+    if matches!(space, Space::Model) {
+        let from = if bounds.is_empty() {
+            Vec2::ZERO
+        } else if o.center.unwrap_or(true) {
+            bounds.center()
+        } else {
+            bounds.min
+        };
+        let to = if o.center.unwrap_or(true) {
+            sheet.printable.center()
+        } else {
+            let offset = o.offset.unwrap_or([0.0, 0.0]);
+            sheet.printable.min + Vec2::new(offset[0] / sheet.unit_mm, offset[1] / sheet.unit_mm)
+        };
+        (from, to)
+    } else if fit {
+        (if bounds.is_empty() { Vec2::ZERO } else { bounds.center() }, sheet.printable.center())
+    } else {
+        (Vec2::ZERO, Vec2::ZERO)
+    }
+}
+
 /// The hyperlinks to plot: the options' own, then (with [`PdfOptions::hyperlinks`]) those the
 /// drawing file gave its entities as `PE_URL` extended data, at most [`MAX_LINKS`] in all.
 fn all_links(d: &Drawing, o: &PdfOptions) -> Vec<(Handle, String)> {
@@ -384,17 +477,16 @@ fn all_links(d: &Drawing, o: &PdfOptions) -> Vec<(Handle, String)> {
         return out;
     }
     let given: std::collections::HashSet<Handle> = out.iter().map(|(h, _)| *h).collect();
-    for (h, extra) in &d.foreign.entities {
-        if out.len() >= MAX_LINKS {
-            break;
-        }
-        if given.contains(h) {
-            continue;
-        }
-        if let Some(url) = pe_url(&extra.xdata) {
-            out.push((*h, url));
-        }
-    }
+    let mut read: Vec<(Handle, String)> = std::iter::once(&d.model)
+        .chain(d.layouts.iter().map(|l| &l.entities))
+        .chain(d.blocks.values().map(|b| &b.entities))
+        .flat_map(|s| s.iter())
+        .filter(|e| !given.contains(&e.handle))
+        .filter_map(|e| Some((e.handle, pe_url(&e.common.xdata)?)))
+        .collect();
+    read.sort_by_key(|(h, _)| *h);
+    read.dedup_by_key(|(h, _)| *h);
+    out.extend(read.into_iter().take(MAX_LINKS.saturating_sub(out.len())));
     out
 }
 
@@ -439,7 +531,7 @@ fn links(list: &cadcraft_render::DisplayList, map: &Map, clip_pt: &Bounds2, link
 }
 
 /// Paper units per drawing unit for a plot.
-fn plot_scale(b: &Bounds2, sheet: &Sheet, fit: bool, scale: Option<f64>) -> f64 {
+pub(crate) fn plot_scale(b: &Bounds2, sheet: &Sheet, fit: bool, scale: Option<f64>) -> f64 {
     if let Some(s) = scale.filter(|s| s.is_finite() && *s > 0.0)
         && !fit
     {
