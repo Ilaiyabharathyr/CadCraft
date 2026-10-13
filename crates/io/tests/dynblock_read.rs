@@ -360,7 +360,7 @@ const FIXTURE: &str = "
 93 0
 170 0
 171 0
-100 AcDbBlockLookupParameter
+100 AcDbBlockLookUpParameter
 94 5
 303 Size
 304 Standard door sizes
@@ -476,7 +476,12 @@ fn a_saved_drawing_keeps_the_dynamic_block_as_read() {
     let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
     // The objects may get new handles on save; the block's objects keep theirs, and the graph's
     // references between its members follow the new ones.
-    assert_eq!(by_node(dynamic_block(&again, "Door").unwrap()), by_node(before));
+    assert_eq!(by_node(dynamic_block(&again, "Door").unwrap()), by_node(before.clone()));
+    // And through DWG: the lookup parameter (AutoCAD writes its marker AcDbBlockLookUpParameter)
+    // keeps its name and lookup action.
+    let dwg = cadcraft_io::write(&d, "x.dwg").unwrap();
+    let back = cadcraft_io::read(&dwg, "x.dwg").unwrap();
+    assert_eq!(by_node(dynamic_block(&back, "Door").unwrap()), by_node(before));
 }
 
 /// The model with each parameter and action object named by its graph id instead of its handle.
