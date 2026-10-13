@@ -1085,10 +1085,61 @@ fn dimension_associativity_roundtrips() {
     let foreign = read_dxf(cadcraft_dxf::write_ascii(&stripped).as_bytes()).unwrap();
     assert_eq!(assoc_of(&foreign, hl), lin.assoc);
     let fa = assoc_of(&foreign, ha);
-    assert_eq!(fa.len(), 2);
-    assert_eq!(fa[1], ali.assoc[1]);
+    // The polyline vertex isn't a standard reference: without the subentity it names, AutoCAD
+    // took the polyline's first segment and changed the value (#1049). Only CADCraft's xdata
+    // keeps that link.
+    assert_eq!(fa.len(), 1);
     assert!(matches!(fa[0].snap, AssocSnap::OnCircle { angle } if angle.abs() < 1e-9));
     assert!(assoc_of(&foreign, hr).is_empty(), "radial links are CADCraft-only");
+}
+
+/// #1049: dimensions on polyline vertices get no standard DIMASSOC reference (AutoCAD can't tell
+/// which segment one means and regenerated them from the first segment, changing their values),
+/// while CADCraft keeps the links through its xdata and a dimension on a line keeps its
+/// standard reference.
+#[test]
+fn polyline_vertex_dimensions_are_not_standard_references() {
+    let mut d = Drawing::new_metric();
+    let c = Common::default;
+    let pts = [(0.0, 0.0), (160.0, 0.0), (160.0, 210.0), (0.0, 210.0)];
+    let pl = d
+        .add(
+            &Space::Model,
+            c(),
+            EntityKind::LwPolyline(LwPolyline {
+                vertices: pts.iter().map(|(x, y)| PolyVertex::new(Vec2::new(*x, *y))).collect(),
+                closed: true,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            }),
+        )
+        .unwrap();
+    let ln = d.add(&Space::Model, c(), EntityKind::Line(Line { a: Vec3::new(200.0, 0.0, 0.0), b: Vec3::new(200.0, 50.0, 0.0) })).unwrap();
+    let mut on_pl = dim(DimKind::Linear { rotation: std::f64::consts::FRAC_PI_2 }, Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 210.0, 0.0));
+    on_pl.assoc = vec![
+        DimAssoc { point: "p13".into(), handle: pl, snap: AssocSnap::Vertex { index: 0 } },
+        DimAssoc { point: "p14".into(), handle: pl, snap: AssocSnap::Vertex { index: 3 } },
+    ];
+    let mut on_line = dim(DimKind::Linear { rotation: std::f64::consts::FRAC_PI_2 }, Vec3::new(200.0, 0.0, 0.0), Vec3::new(200.0, 50.0, 0.0));
+    on_line.assoc = vec![
+        DimAssoc { point: "p13".into(), handle: ln, snap: AssocSnap::Start },
+        DimAssoc { point: "p14".into(), handle: ln, snap: AssocSnap::End },
+    ];
+    let hp = d.add(&Space::Model, c(), EntityKind::Dimension(on_pl.clone())).unwrap();
+    let hl = d.add(&Space::Model, c(), EntityKind::Dimension(on_line.clone())).unwrap();
+    let text = write_dxf(&d);
+    let tags = cadcraft_dxf::parse(text.as_bytes()).unwrap();
+    let refs_to = |h: Handle| tags.iter().filter(|t| t.code == 331 && t.str() == h.hex()).count();
+    assert_eq!(refs_to(pl), 0, "no standard reference to the polyline");
+    assert_eq!(refs_to(ln), 2, "the line's two references are written");
+    let back = read_dxf(text.as_bytes()).unwrap();
+    let assoc_of = |h: Handle| match &back.entity(h).unwrap().kind {
+        EntityKind::Dimension(x) => x.assoc.clone(),
+        _ => panic!(),
+    };
+    assert_eq!(assoc_of(hp), on_pl.assoc, "CADCraft keeps the polyline links");
+    assert_eq!(assoc_of(hl), on_line.assoc);
 }
 
 fn parametric_sample(d: &mut Drawing) -> (Vec<Constraint>, Parametric) {

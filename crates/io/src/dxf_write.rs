@@ -1400,9 +1400,19 @@ fn arrow_block_entities(kind: cadcraft_render::Arrowhead) -> Vec<Entity> {
     out
 }
 
+/// Whether a DIMASSOC point reference to `k` is complete without naming a part of it: true for
+/// objects made of one curve. A polyline's segment or vertex would need the reference's
+/// subentity (groups 73 and 91), which CADCraft doesn't write; AutoCAD then resolved every such
+/// reference to the polyline's first segment and changed the dimension's value on regeneration
+/// (#1049). Those points are left out of the DIMASSOC object (the dimension keeps its value, and
+/// CADCraft's own link in xdata).
+fn whole_object_ref(k: &EntityKind) -> bool {
+    !matches!(k, EntityKind::LwPolyline(_) | EntityKind::Polyline3d(_) | EntityKind::MLine(_))
+}
+
 /// Standard DIMASSOC point references of an associative dimension: the extension-line
 /// origins of linear/aligned dimensions and the feature point of ordinate dimensions, linked
-/// to objects that exist. CADCraft's exact links travel in xdata as well.
+/// to objects that exist ([`whole_object_ref`]). CADCraft's exact links travel in xdata as well.
 fn std_assoc_refs(d: &Drawing, dm: &Dimension) -> (i64, Vec<OsnapRef>) {
     let slots: &[&str] = match dm.kind {
         DimKind::Linear { .. } | DimKind::Aligned => &["p13", "p14"],
@@ -1413,7 +1423,7 @@ fn std_assoc_refs(d: &Drawing, dm: &Dimension) -> (i64, Vec<OsnapRef>) {
     let mut refs = Vec::new();
     for (slot, name) in slots.iter().enumerate() {
         let Some(a) = dm.assoc.iter().find(|a| a.point == *name) else { continue };
-        let Some(ent) = d.entity(a.handle) else { continue };
+        let Some(ent) = d.entity(a.handle).filter(|e| whole_object_ref(&e.kind)) else { continue };
         let point = if *name == "p13" { dm.p13 } else { dm.p14 };
         let (osnap, param, other) = match &a.snap {
             AssocSnap::Start | AssocSnap::End | AssocSnap::Vertex { .. } => (1, 0.0, None),
@@ -1421,7 +1431,7 @@ fn std_assoc_refs(d: &Drawing, dm: &Dimension) -> (i64, Vec<OsnapRef>) {
             AssocSnap::Center => (if matches!(ent.kind, EntityKind::Point(_)) { 4 } else { 3 }, 0.0, None),
             AssocSnap::OnCircle { angle } => (10, *angle, None),
             AssocSnap::Intersection { other } => {
-                if d.entity(*other).is_none() {
+                if !d.entity(*other).is_some_and(|o| whole_object_ref(&o.kind)) {
                     continue;
                 }
                 (6, 0.0, Some(*other))
