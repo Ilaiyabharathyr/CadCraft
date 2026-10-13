@@ -194,6 +194,8 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
   options, Snap Overrides, Pan/Zoom. Otherwise it opens a shortcut menu (Repeat, Recent Commands,
   Clipboard ▸, Isolate ▸, the selection's editing commands, Draw Order ▸, Group, the selected
   object type's edit commands, Select Similar, Deselect All, Undo/Redo, Pan/Zoom; #325, #512).
+  Selected dimensions add AutoCAD's dimension items: Align Text ▸, Dimension Style ▸ (the
+  drawing's styles, Save as New Style), Precision ▸ and Remove Style Overrides.
   The command line, drawing tabs, layout tabs, Layers palette rows and the Properties palette
   have menus too (#512). Still missing: in-place layout tab rename, Move or Copy, Select All
   Layouts.
@@ -202,6 +204,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Dimension shortcut menu: Align Text, Dimension Style (styles, Save as New Style), Precision, Remove Style Overrides |
 | 2026-10-13 | minor | Properties Inspector shows the text, mtext and dimension rows `properties.describe` gives (dimension style settings as overrides, *VARIES* for several objects, fixed-height note) |
 | 2026-10-12 | minor | Selected and hovered objects redrawn in the selection colour (text and arrowheads included); Options ▸ Selection laid out as AutoCAD's: Object grouping, Show grips, grip object limit, selection preview, Visual Effect Settings (selection area, preview filter) |
 | 2026-10-12 | minor | Animation effects (dialog and menu fades, smoothed wheel scrolling and ⌘/Ctrl+wheel zoom) follow the operating system's setting; View ▸ Accessibility ▸ Animation Effects chooses System, On or Off |
