@@ -2,7 +2,7 @@
 title: Getting started
 description: Install CADCraft and open your first drawing.
 order: 10
-verified: 0.5.0
+verified: 0.6.2
 ---
 
 To get going, install CADCraft, then open the sample drawing and try the command line.

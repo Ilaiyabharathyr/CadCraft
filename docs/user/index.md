@@ -1,7 +1,7 @@
 ---
 title: CADCraft
 description: CADCraft is a free, open-source computer-aided design and drafting app that opens and saves DXF and DWG drawings.
-verified: 0.5.0
+verified: 0.6.2
 ---
 
 CADCraft is a free app for 2D technical drawing and drafting. It is an alternative to Autodesk AutoCAD: you work at a command line with object snaps, layers, dimensions, hatches and blocks, and you open and save DXF and DWG drawings.

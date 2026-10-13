@@ -2,7 +2,7 @@
 title: Is CADCraft free, and where does it run?
 description: CADCraft is free and open source, with no account, and runs on Windows 11, macOS, Linux, FreeBSD and in a browser.
 order: 20
-verified: 0.5.0
+verified: 0.6.2
 ---
 
 Yes, CADCraft is free. It is open source under the MIT or Apache-2.0 license, with no account and no subscription.

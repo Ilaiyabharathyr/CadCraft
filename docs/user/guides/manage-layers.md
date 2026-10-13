@@ -2,10 +2,12 @@
 title: Manage layers
 description: Create, rename, switch and hide layers in the CADCraft Layer Properties Manager.
 order: 40
-verified: 0.5.0
+verified: 0.6.2
 ---
 
 Layers are managed in the **Layer Properties Manager**. Open it with **Window ▸ Layers**.
+
+The **Layers** palette at the side of the window also lists the layers. If you closed it, choose **Window ▸ Layers Palette**.
 
 ## Create a layer and make it current
 
@@ -17,7 +19,7 @@ The line at the bottom of the window shows how many layers are displayed and whi
 
 ## Hide, freeze, lock or stop plotting a layer
 
-In the layer table, each layer has these columns: **Status**, **Name**, **On**, **Freeze**, **Lock**, **Plot**, **Color**, **Linetype**, **Lineweight**, **Transparency** and **Description**. Click the icon in a column to change that setting for the layer.
+In the layer table, each layer has these columns: **Status**, **Name**, **On**, **Freeze**, **Lock**, **Plot**, **Color**, **Linetype**, **Lineweight**, **Transparency**, **New VP Freeze** and **Description**. In a layout with an active viewport, **VP Freeze** and **VP Color** columns appear too. Click the icon in a column to change that setting for the layer.
 
 - **On**: shows or hides the layer.
 - **Freeze**: freezes or thaws it.

@@ -2,7 +2,7 @@
 title: FAQ
 description: Short answers about CADCraft file formats, price, platforms and scripting.
 order: 40
-verified: 0.5.0
+verified: 0.6.2
 ---
 
 - [Which file formats does CADCraft support?](file-formats.md)

@@ -1,11 +1,11 @@
 ---
 title: The app closes right after opening on Windows
-description: Fix CADCraft 0.5.0 on Windows 11 closing a moment after its window appears, by starting it with the Vulkan graphics backend.
+description: Fix CADCraft on Windows 11 closing a moment after its window appears, by updating to 0.6 or later or starting it with another graphics backend.
 order: 10
-verified: 0.5.0
+verified: 0.6.2
 ---
 
-If CADCraft 0.5.0 opens a window and closes again within a second, start it with the Vulkan graphics backend from PowerShell. That works around the problem. On Intel graphics, use `gl` instead.
+If CADCraft opens a window and closes again within a second, [install the latest release](../getting-started/install.md). CADCraft 0.5.0 had this problem on some PCs, and 0.6.0 and later fix it. If it still happens, start CADCraft with the Vulkan graphics backend as shown below.
 
 ## Symptoms
 
@@ -14,8 +14,9 @@ If CADCraft 0.5.0 opens a window and closes again within a second, start it with
 
 ## Fix
 
-1. Open PowerShell in the folder that contains `cadcraft.exe`.
-2. Run these three lines:
+1. Check the version in **Help ▸ About CADCraft**, or in the file name you downloaded. If it is older than 0.6.0, [install the latest release](../getting-started/install.md).
+2. If the latest release also closes right away, open PowerShell in the folder that contains `cadcraft.exe`.
+3. Run these three lines:
 
         $env:WGPU_BACKEND = "vulkan"
         & .\cadcraft.exe
@@ -29,7 +30,11 @@ On AMD graphics do not use `gl`: it can bring back the `atio6axx.dll` driver cra
 
 ## Why this happens
 
-CADCraft 0.5.0 draws with DirectX 12 on Windows and compiles its shaders with DXC. The 0.5.0 Windows build does not ship the DXC compiler files (`dxcompiler.dll` and `dxil.dll`), so on some PCs the graphics device is lost before the first frame and the app exits. This is issue [#608](https://github.com/storytold/cadcraft/issues/608). The issue reports that starting with Vulkan instead gets the app running. A fix that uses FXC, the compiler built into Windows, was merged after 0.5.0 ([pull request #613](https://github.com/storytold/cadcraft/pull/613)) and is not in a release yet.
+CADCraft draws with DirectX 12 on Windows. CADCraft 0.5.0 compiled its shaders with DXC, and the 0.5.0 Windows build does not ship the DXC compiler files (`dxcompiler.dll` and `dxil.dll`). On some PCs the graphics device was lost before the first frame and the app exited. This is issue [#608](https://github.com/storytold/cadcraft/issues/608).
+
+CADCraft 0.6.0 and later use FXC instead, the shader compiler built into Windows ([pull request #613](https://github.com/storytold/cadcraft/pull/613)).
+
+If the graphics device fails while CADCraft is already running, 0.6.0 and later keep the app open. A **Graphics error** window says what happened and whether recovery copies of your unsaved drawings were saved. Save your work and restart CADCraft.
 
 ## Still stuck?
 

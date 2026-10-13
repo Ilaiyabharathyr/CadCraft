@@ -2,7 +2,7 @@
 title: Guides
 description: Step-by-step guides for the everyday tasks in CADCraft.
 order: 20
-verified: 0.5.0
+verified: 0.6.2
 ---
 
 Each guide covers one task.

@@ -2,7 +2,7 @@
 title: A screen magnifier does not follow the crosshair
 description: Turn on Show System Cursor so Windows Magnifier and other screen tools can follow the pointer over the CADCraft drawing area.
 order: 20
-verified: 0.5.0
+verified: 0.6.2
 ---
 
 Turn on **View ▸ Accessibility ▸ Show System Cursor**. CADCraft then keeps a small system crosshair at the center of its own crosshair, and screen magnifiers can follow it.
@@ -17,7 +17,9 @@ Turn on **View ▸ Accessibility ▸ Show System Cursor**. CADCraft then keeps a
 1. Choose **View ▸ Accessibility ▸ Show System Cursor**.
 2. Move the pointer over the drawing area. A small system crosshair is visible at the center of the drawn one.
 
-To have it on at every start, set the environment variable `CADCRAFT_SYSTEM_CURSOR=1`. On Windows, run `setx CADCRAFT_SYSTEM_CURSOR 1` once and start CADCraft again.
+CADCraft remembers the setting for the next start. The same setting is in **Tools ▸ Options...** on the **Display** tab: **Keep the system cursor visible over the drawing area**.
+
+The environment variable `CADCRAFT_SYSTEM_CURSOR=1` also turns it on at every start. On Windows, run `setx CADCRAFT_SYSTEM_CURSOR 1` once and start CADCraft again.
 
 ## Why this happens
 

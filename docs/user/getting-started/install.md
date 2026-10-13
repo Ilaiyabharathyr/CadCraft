@@ -2,10 +2,10 @@
 title: Install CADCraft
 description: Download CADCraft for Windows 11, macOS, Linux, FreeBSD or the web, or install it through ArtCraft Launcher.
 order: 10
-verified: 0.5.0
+verified: 0.6.2
 ---
 
-Download the build for your system from the [latest release](https://github.com/storytold/cadcraft/releases/latest) on GitHub, or install CADCraft with ArtCraft Launcher. In the file names, `<version>` stands for the version number, for example `0.5.0`. `SHA256SUMS.txt` in the release lists a checksum for every file.
+Download the build for your system from the [latest release](https://github.com/storytold/cadcraft/releases/latest) on GitHub, or install CADCraft with ArtCraft Launcher. In the file names, `<version>` stands for the version number, for example `0.6.2`. `SHA256SUMS.txt` in the release lists a checksum for every file.
 
 ## Install with ArtCraft Launcher
 
@@ -17,6 +17,7 @@ ArtCraft Launcher lists CADCraft. It installs the build that fits your system an
 |--------------------------------------|----------------------------------------|-------------------------------------------------|
 | x64 (64-bit Intel/AMD)               | `cadcraft-<version>-windows-x64.msi`   | `cadcraft-<version>-windows-x64-portable.zip`   |
 | arm64 (Snapdragon and other ARM PCs) | `cadcraft-<version>-windows-arm64.msi` | `cadcraft-<version>-windows-arm64-portable.zip` |
+| x86 (32-bit)                         | `cadcraft-<version>-windows-x86.msi`   | `cadcraft-<version>-windows-x86-portable.zip`   |
 
 1. Download the `.msi` for your processor.
 2. Run it. The installer adds CADCraft to the Start menu and asks whether to add a desktop shortcut too. The shortcut box is unticked by default.
@@ -40,7 +41,9 @@ Download `cadcraft-<version>-macos-universal.dmg`. It runs on Apple silicon and 
 | Fedora, RHEL, openSUSE | `cadcraft-<version>-linux-x86_64.rpm`, `cadcraft-<version>-linux-aarch64.rpm`           |
 | Tarball                | `cadcraft-<version>-linux-x86_64.tar.gz`, `cadcraft-<version>-linux-aarch64.tar.gz`     |
 
-Install a Flatpak with `flatpak install --user <file>`. A riscv64 tarball is also published (`cadcraft-<version>-linux-riscv64.tar.gz`). It needs glibc 2.39 or newer.
+Install a Flatpak with `flatpak install --user <file>`.
+
+For RISC-V (riscv64) the release has `cadcraft-<version>-linux-riscv64.tar.gz`, `cadcraft-<version>-linux-riscv64.deb` and `cadcraft-<version>-linux-riscv64.rpm`. The riscv64 tarball needs glibc 2.39 or newer, as on Ubuntu 24.04 or Debian 13.
 
 ## FreeBSD
 
