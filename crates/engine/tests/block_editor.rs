@@ -257,3 +257,42 @@ fn a_dynamic_block_from_another_program_says_its_parameters_are_kept() {
     s.execute("bedit", &json!({ "name": "Door" })).unwrap();
     assert!(!s.log.iter().any(|l| l.contains("dynamic block")), "{:?}", s.log);
 }
+
+#[test]
+fn a_dynamic_reference_with_its_own_values_opens_its_dynamic_block() {
+    use cadcraft_engine::doc::foreign::{Foreign, ForeignExtra};
+    use cadcraft_engine::doc::{Block, Handle, RawTag};
+    let mut s = Session::new();
+    let (a, _) = door(&mut s);
+    // As AutoCAD leaves it: the reference shows anonymous block *U7, whose record's
+    // AcDbBlockRepBTag xdata names Door's record (file handle 1D).
+    let mut d = s.doc().unwrap().clone();
+    let door_block = d.block("Door").unwrap().clone();
+    d.blocks.insert("*U7".into(), std::sync::Arc::new(Block { name: "*U7".into(), anonymous: true, ..(*door_block).clone() }));
+    let h = cadcraft_engine::cmd::curves::handle_value(&a).unwrap();
+    d.model.modify(h, |e| {
+        if let EntityKind::Insert(i) = &mut e.kind {
+            i.block = "*U7".into();
+        }
+    });
+    let mut f = Foreign::default();
+    let tag = |code, value: &str| RawTag { code, value: value.into() };
+    f.records.insert(
+        ("BLOCK_RECORD".into(), "*U7".into()),
+        ForeignExtra { xdata: vec![tag(1001, "AcDbBlockRepBTag"), tag(1070, "1"), tag(1005, "1D")], ..Default::default() },
+    );
+    f.targets.insert(Handle(0x1D), ("BLOCK_RECORD".into(), "DOOR".into()));
+    d.foreign = std::sync::Arc::new(f);
+    s.open_drawing(d, "dynamic", None);
+
+    // Selected (the right-click Block Editor) and by handle: both open Door.
+    s.set_selection(vec![h]);
+    s.start("bedit").unwrap();
+    assert_eq!(editor(&s).as_deref(), Some("Door"));
+    s.execute("bclose", &json!({})).unwrap();
+    s.execute("bedit", &json!({ "handle": h.hex() })).unwrap();
+    assert_eq!(editor(&s).as_deref(), Some("Door"));
+    s.execute("bclose", &json!({})).unwrap();
+    // Other anonymous blocks are still refused by name.
+    assert!(s.execute("bedit", &json!({ "name": "*U7" })).is_err());
+}
