@@ -174,7 +174,7 @@ fn splinedit_json_and_command_line() {
     assert!(matches!(last(&s), EntityKind::Spline(x) if x.closed));
     s.cmdline("o r u").unwrap();
     assert!(matches!(last(&s), EntityKind::Spline(x) if !x.closed && near(x.control[0], 0.0, 0.0)));
-    s.cmdline("f p p").unwrap();
+    s.cmdline("f p 4").unwrap();
     assert!(s.running.is_none());
     assert!(matches!(last(&s), EntityKind::LwPolyline(_)));
 }
@@ -369,6 +369,8 @@ fn chspace_json_and_command_line() {
         locked: false,
         frozen_layers: Vec::new(),
         layer_colors: Vec::new(),
+        clip: None,
+        on: true,
     };
     s.doc_mut().unwrap().add(&Space::Paper("Layout1".into()), Default::default(), EntityKind::Viewport(vp)).unwrap();
     let r = s.execute("chspace", &json!({"handles": [l]})).unwrap();
@@ -680,4 +682,42 @@ fn editing_commands_leave_locked_layer_objects_alone() {
     s.execute("trim", &json!({"handle": a, "pick": [2, 0], "edges": [b]})).unwrap();
     s.execute("explode", &json!({"handles": [r]})).unwrap();
     assert_ne!(model_dump(&s), before);
+}
+
+#[test]
+fn pedit_preselected_line_asks_to_convert() {
+    // Yes converts the pre-selected line and continues with the option prompt.
+    let mut s = Session::new();
+    let l = h(&s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap());
+    s.set_selection(vec![Handle::parse_hex(&l).unwrap()]);
+    s.cmdline("pedit").unwrap();
+    assert!(s.running.is_some());
+    assert!(matches!(kind(&s, &l), EntityKind::Line(_)), "nothing changes before the answer");
+    s.cmdline("y").unwrap();
+    assert!(matches!(kind(&s, &l), EntityKind::LwPolyline(_)));
+    s.cmdline("c").unwrap();
+    s.cmdline("").unwrap();
+    assert!(s.running.is_none());
+
+    // No ends the command and leaves the line alone.
+    let m = h(&s.execute("line", &json!({"points": [[0, 5], [10, 5]]})).unwrap());
+    s.set_selection(vec![Handle::parse_hex(&m).unwrap()]);
+    s.cmdline("pedit").unwrap();
+    s.cmdline("n").unwrap();
+    assert!(s.running.is_none());
+    assert!(matches!(kind(&s, &m), EntityKind::Line(_)));
+}
+
+#[test]
+fn offset_polyline_arc_bulge_follows_joined_endpoints() {
+    let mut s = Session::new();
+    // A diagonal line into a CCW semicircle centred on (10, 5); offsetting inward moves the arc start.
+    let pl = pline(&mut s, json!([[0, -5], {"p": [10, 0], "bulge": 1}, [10, 10]]), false);
+    s.execute("offset", &json!({"handle": pl, "distance": 1, "side": [12, 5]})).unwrap();
+    let p = poly(&last(&s));
+    let (a, b) = (p.vertices[1], p.vertices[2]);
+    let (arc, ccw) = cadcraft_geom::bulge_to_arc(a.p, b.p, a.bulge).unwrap();
+    assert!(ccw);
+    assert!(near(arc.center, 10.0, 5.0), "arc centre drifted to {:?}", arc.center);
+    assert!((arc.radius - 4.0).abs() < 1e-6, "radius {}", arc.radius);
 }

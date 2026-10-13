@@ -29,12 +29,9 @@ fn spline_close_makes_a_smooth_periodic_curve() {
 }
 
 #[test]
-fn spline_options_report_and_stay_at_the_prompt() {
+fn spline_rejects_text_and_switches_method() {
     let mut s = Session::new();
-    s.cmdline("spline k o 0,0 t 5,5 l 10,0 xyz").unwrap();
-    for k in ["Knots: not available yet", "Object: not available yet", "start Tangency: not available yet", "toLerance: not available yet"] {
-        assert!(logged(&s, k), "{k}");
-    }
+    s.cmdline("spline 0,0 5,5 10,0 xyz").unwrap();
     assert!(logged(&s, "Point or option keyword required."));
     s.cmdline("").unwrap();
     let EntityKind::Spline(sp) = last(&s) else { panic!("no spline") };
@@ -45,6 +42,25 @@ fn spline_options_report_and_stay_at_the_prompt() {
     s.cmdline("").unwrap();
     let EntityKind::Spline(sp) = last(&s) else { panic!("no spline") };
     assert!(sp.fit.is_empty() && sp.control.len() == 4);
+}
+
+#[test]
+fn circle_radius_point_on_the_centre_is_refused() {
+    for input in ["circle 2,3 2,3", "circle 2,3 d 2,3"] {
+        let mut s = Session::new();
+        s.cmdline(input).unwrap();
+        assert_eq!(s.doc().unwrap().model.len(), 0, "{input}: no circle");
+        assert!(logged(&s, "Value must be positive and nonzero."), "{input}: {:?}", s.log);
+        assert!(s.running.is_some(), "{input}: still at the radius prompt");
+        s.cmdline("4").unwrap();
+        assert!(s.running.is_none(), "{input}: a positive value finishes");
+        assert_eq!(s.doc().unwrap().model.len(), 1, "{input}: one circle");
+        let want = if input.contains(" d ") { 2.0 } else { 4.0 };
+        assert!(
+            matches!(last(&s), EntityKind::Circle(c) if c.center.xy().near(Vec2::new(2.0, 3.0), 1e-9) && (c.radius - want).abs() < 1e-9),
+            "{input}: the centre is kept"
+        );
+    }
 }
 
 /// The two lowest vertices of a closed polyline share their y (the bottom edge is horizontal).
@@ -69,6 +85,20 @@ fn polygon_typed_radius_has_a_horizontal_bottom_edge() {
 }
 
 #[test]
+fn polygon_edge_endpoints_must_differ() {
+    let mut s = Session::new();
+    s.cmdline("polygon 4 e 1,1 1,1").unwrap();
+    assert_eq!(s.doc().unwrap().model.len(), 0, "no polygon");
+    assert!(logged(&s, "Edge endpoints must differ."), "{:?}", s.log);
+    assert!(s.running.is_some(), "still at the second endpoint prompt");
+    s.cmdline("3,1").unwrap();
+    assert!(s.running.is_none(), "a distinct endpoint finishes");
+    let EntityKind::LwPolyline(p) = last(&s) else { panic!("no polygon") };
+    assert!(p.closed && p.vertices.len() == 4);
+    assert!(p.vertices.iter().any(|v| v.p.near(Vec2::new(3.0, 1.0), 1e-9)), "the edge runs from 1,1 to 3,1");
+}
+
+#[test]
 fn circle_center_prompt_rejects_garbage() {
     let mut s = Session::new();
     s.cmdline("circle d").unwrap();
@@ -76,4 +106,20 @@ fn circle_center_prompt_rejects_garbage() {
     assert!(s.running.is_some(), "still at the centre prompt");
     s.cmdline("0,0 5").unwrap();
     assert!(matches!(last(&s), EntityKind::Circle(c) if (c.radius - 5.0).abs() < 1e-9));
+}
+
+#[test]
+fn polygon_radius_must_be_positive() {
+    for input in ["polygon 4 0,0 i 0", "polygon 4 0,0 c 0", "polygon 5 0,0 i -5", "polygon 5 0,0 c -5", "polygon 4 0,0 i 0,0", "polygon 4 0,0 c 0,0"]
+    {
+        let mut s = Session::new();
+        s.cmdline(input).unwrap();
+        assert_eq!(s.doc().unwrap().model.len(), 0, "{input}: no polygon");
+        assert!(logged(&s, "Value must be positive and nonzero."), "{input}: {:?}", s.log);
+        assert!(s.running.is_some(), "{input}: still at the radius prompt");
+        s.cmdline("2").unwrap();
+        assert!(s.running.is_none(), "{input}: a positive radius finishes");
+        assert_eq!(s.doc().unwrap().model.len(), 1, "{input}: one polygon");
+        assert!(matches!(last(&s), EntityKind::LwPolyline(p) if p.closed), "{input}");
+    }
 }

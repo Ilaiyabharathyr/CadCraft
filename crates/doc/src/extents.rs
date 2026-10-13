@@ -14,10 +14,8 @@ pub const MAX_BLOCK_DEPTH: usize = 16;
 fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
     use crate::{HAlign, VAlign};
     let w = t.height * 0.9 * t.width_factor.abs().max(0.01) * len.max(1) as f64;
-    let origin = match t.halign {
-        HAlign::Left | HAlign::Aligned | HAlign::Fit => t.insert,
-        _ => t.align_pt.unwrap_or(t.insert),
-    };
+    // Justified text (TL, ML and BL too) hangs from its alignment point (DXF group 11).
+    let origin = t.justify_point();
     let dx = match t.halign {
         HAlign::Left | HAlign::Aligned | HAlign::Fit => 0.0,
         HAlign::Center | HAlign::Middle => -w / 2.0,
@@ -31,68 +29,113 @@ fn text_box(t: &crate::Text, len: usize) -> Bounds2 {
         (_, VAlign::Top) => -t.height,
     };
     let local = [Vec2::new(dx, dy), Vec2::new(dx + w, dy), Vec2::new(dx + w, dy + t.height), Vec2::new(dx, dy + t.height)];
-    Bounds2::from_points(local.map(|p| origin.xy() + p.rotate(t.rotation)))
+    Bounds2::from_points(local.map(|p| origin + p.rotate(t.rotation)))
+}
+
+/// Whether an entity inside a block definition shows: its own invisible flag and its layer count,
+/// as when drawing. Dimensional constraints of dynamic blocks (layer `*ADSK_CONSTRAINTS`) and the
+/// entities a visibility state hides are invisible this way, and they sit far from the block's
+/// geometry in real drawings. Layer "0" takes the insert's layer, which the caller has checked.
+fn in_block_visible(d: &Drawing, e: &Entity) -> bool {
+    // Attribute definitions are not drawn in an insert (its attribs are, see below).
+    !matches!(e.kind, EntityKind::AttDef(_))
+        && e.common.visible
+        && (e.common.layer == "0" || d.layer(&e.common.layer).is_none_or(crate::Layer::visible))
+}
+
+/// A text that draws no glyph (empty, or only blanks and non-breaking spaces) takes no room.
+fn blank(s: &str) -> bool {
+    s.replace("\\~", " ").chars().all(char::is_whitespace)
+}
+
+/// Approximate box of an MTEXT, from its attachment point, width and line count.
+fn mtext_box(t: &crate::MText) -> Bounds2 {
+    let lines = t.contents.split("\\P").count().max(1);
+    let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
+    let mut w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
+    let mut h = t.height * 1.66 * lines as f64;
+    if let Some(c) = t.columns.as_ref().filter(|_| t.width > 0.0) {
+        // Columns side by side, the text flowing down each in turn.
+        w = c.total_width(t.width);
+        h = if c.max_height() > 0.0 { c.max_height() } else { h };
+    }
+    let (dx, dy) = match t.attach {
+        2 | 5 | 8 => (-w / 2.0, 0.0),
+        3 | 6 | 9 => (-w, 0.0),
+        _ => (0.0, 0.0),
+    };
+    let top = match t.attach {
+        4..=6 => h / 2.0,
+        7..=9 => h,
+        _ => 0.0,
+    };
+    let o = t.insert.xy();
+    let pts = [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)]
+        .map(|p| o + p.rotate(t.rotation));
+    Bounds2::from_points(pts)
 }
 
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
+    // A top-level annotative object measures as it draws at the current annotation scale.
+    if depth == 0 {
+        match d.anno_draw(e) {
+            crate::AnnoDraw::Plain => {}
+            crate::AnnoDraw::Hidden => return Bounds2::EMPTY,
+            crate::AnnoDraw::Scaled(f) => return bounds_in(d, &crate::anno_scaled(e, f), 0, &mut HashMap::new()),
+        }
+    }
     bounds_in(d, e, depth, &mut HashMap::new())
 }
 
 /// [`entity_bounds`] with the bounds of block contents (in block coordinates) already computed,
-/// by block name: every further reference to a block reuses them instead of expanding the block
-/// again, so nested or self-referencing blocks cost one pass over each definition instead of one
-/// per reference (which grows exponentially with the nesting depth).
-fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String, Bounds2>) -> Bounds2 {
+/// by block name and depth: every further reference to a block at that depth reuses them instead of
+/// expanding the block again, so nested or self-referencing blocks cost at most one pass over each
+/// definition per depth instead of one per reference (which grows exponentially with the nesting
+/// depth). The depth is part of the key because [`MAX_BLOCK_DEPTH`] cuts a deep visit short: its
+/// bounds must not stand in for a shallower reference to the same block (#706).
+fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<(&'a str, usize), Bounds2>) -> Bounds2 {
     match &e.kind {
+        EntityKind::Table(t) if t.is_broken() => t.bounds(),
+        EntityKind::Text(t) if blank(&t.value) => Bounds2::EMPTY,
+        EntityKind::MText(t) if blank(&t.contents) => Bounds2::EMPTY,
         EntityKind::Text(t) => text_box(t, t.value.chars().count()),
         EntityKind::AttDef(a) => text_box(&a.text, a.tag.chars().count()),
-        EntityKind::MText(t) => {
-            let lines = t.contents.split("\\P").count().max(1);
-            let longest = t.contents.split("\\P").map(|l| l.chars().count()).max().unwrap_or(1);
-            let w = if t.width > 0.0 { t.width } else { t.height * 0.8 * longest as f64 };
-            let h = t.height * 1.66 * lines as f64;
-            let (dx, dy) = match t.attach {
-                2 | 5 | 8 => (-w / 2.0, 0.0),
-                3 | 6 | 9 => (-w, 0.0),
-                _ => (0.0, 0.0),
-            };
-            let top = match t.attach {
-                4..=6 => h / 2.0,
-                7..=9 => h,
-                _ => 0.0,
-            };
-            let o = t.insert.xy();
-            let pts = [Vec2::new(dx, top + dy), Vec2::new(dx + w, top + dy), Vec2::new(dx + w, top - h + dy), Vec2::new(dx, top - h + dy)]
-                .map(|p| o + p.rotate(t.rotation));
-            Bounds2::from_points(pts)
-        }
+        EntityKind::MText(t) => mtext_box(t),
         EntityKind::Insert(ins) => {
             if depth >= MAX_BLOCK_DEPTH {
                 return Bounds2::EMPTY;
             }
-            let Some(blk) = d.block(&ins.block) else { return Bounds2::from_points([ins.insert.xy()]) };
-            let m = ins.transform(blk.base.xy());
-            let inner = match blocks.get(&blk.name) {
-                Some(b) => *b,
-                None => {
-                    let mut inner = Bounds2::EMPTY;
-                    for be in blk.entities.iter() {
-                        inner = inner.union(&bounds_in(d, be, depth + 1, blocks));
+            // A reference to a missing block (an unloaded xref, a purged definition) or to an empty
+            // one draws nothing, so it contributes nothing: ZOOM Extents must not fly off to its
+            // insertion point. Attributes below still count.
+            let mut b = Bounds2::EMPTY;
+            if let Some(blk) = d.block(&ins.block) {
+                let m = ins.transform(blk.base.xy());
+                let inner = match blocks.get(&(blk.name.as_str(), depth)) {
+                    Some(b) => *b,
+                    None => {
+                        let mut inner = Bounds2::EMPTY;
+                        for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
+                            inner = inner.union(&bounds_in(d, be, depth + 1, blocks));
+                        }
+                        blocks.insert((blk.name.as_str(), depth), inner);
+                        inner
                     }
-                    blocks.insert(blk.name.clone(), inner);
-                    inner
+                };
+                b = if inner.is_empty() { Bounds2::EMPTY } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
+                if ins.cols > 1 || ins.rows > 1 {
+                    let off =
+                        Vec2::new(ins.col_spacing * f64::from(ins.cols.saturating_sub(1)), ins.row_spacing * f64::from(ins.rows.saturating_sub(1)))
+                            .rotate(ins.rotation);
+                    b = b.union(&Bounds2::from_points(b.corners().map(|c| c + off)));
                 }
-            };
-            let mut b =
-                if inner.is_empty() { Bounds2::from_points([ins.insert.xy()]) } else { Bounds2::from_points(inner.corners().map(|c| m.apply(c))) };
-            if ins.cols > 1 || ins.rows > 1 {
-                let off = Vec2::new(ins.col_spacing * f64::from(ins.cols.saturating_sub(1)), ins.row_spacing * f64::from(ins.rows.saturating_sub(1)))
-                    .rotate(ins.rotation);
-                b = b.union(&Bounds2::from_points(b.corners().map(|c| c + off)));
             }
             for a in &ins.attribs {
                 if !a.invisible {
-                    b = b.union(&text_box(&a.text, a.text.value.chars().count()));
+                    b = b.union(&match a.multiline_text() {
+                        Some(m) => mtext_box(&m),
+                        None => text_box(&a.text, a.text.value.chars().count()),
+                    });
                 }
             }
             b
@@ -122,7 +165,7 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             if let Some(blk) = dm.block.as_ref().and_then(|n| d.block(n))
                 && depth < MAX_BLOCK_DEPTH
             {
-                for be in blk.entities.iter() {
+                for be in blk.entities.iter().filter(|be| in_block_visible(d, be)) {
                     b = b.union(&bounds_in(d, be, depth + 1, blocks));
                 }
             }
@@ -132,6 +175,13 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             let mut b = Bounds2::from_points(m.leaders.iter().flatten().map(|v| v.xy()).chain(std::iter::once(m.landing.xy())));
             if let Some(t) = &m.text {
                 b.add(t.insert.xy());
+                if !blank(&t.contents) {
+                    b = b.union(&mtext_box(t));
+                }
+            }
+            if let Some(ins) = &m.block {
+                let be = Entity { handle: e.handle, common: e.common.clone(), kind: EntityKind::Insert(ins.clone()) };
+                b = b.union(&bounds_in(d, &be, depth, blocks));
             }
             b
         }
@@ -140,6 +190,8 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             let h: f64 = t.row_heights.iter().sum();
             Bounds2::new(t.insert.xy(), t.insert.xy() + Vec2::new(w, -h))
         }
+        // Text widths estimated like `text_box`; the renderer measures the font.
+        EntityKind::Tolerance(t) => t.layout(d, &|s, h| h * 0.9 * s.chars().count() as f64).bounds,
         EntityKind::Image(i) => {
             let o = i.insert.xy();
             let u = i.u.xy() * i.size.x;
@@ -156,14 +208,9 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
                     Prim::Ellipse(e) => e.bounds(),
                     Prim::Spline(s) => s.bounds(),
                     Prim::Point(p) => Bounds2::from_points([p]),
-                    // Infinite lines don't contribute to extents (as in ZOOM Extents).
-                    Prim::Infinite { base, ray, .. } => {
-                        if ray {
-                            Bounds2::from_points([base])
-                        } else {
-                            Bounds2::EMPTY
-                        }
-                    }
+                    // Infinite lines don't contribute to extents, rays included (as in ZOOM Extents;
+                    // real drawings carry stray rays millions of units away).
+                    Prim::Infinite { .. } => Bounds2::EMPTY,
                     Prim::Fill(pts) => Bounds2::from_points(pts),
                 };
                 b = b.union(&pb);
@@ -270,8 +317,49 @@ mod tests {
     #[test]
     fn right_justified_attdef_is_left_of_alignment_point() {
         let text = text(HAlign::Right, VAlign::Baseline);
-        let a = crate::Attrib { tag: "HELLO".into(), text, invisible: false, constant: false, prompt: String::new() };
+        let a = crate::Attrib {
+            tag: "HELLO".into(),
+            text,
+            invisible: false,
+            constant: false,
+            prompt: String::new(),
+            props: Default::default(),
+            multiline: None,
+            modes: Default::default(),
+        };
         let b = bounds(EntityKind::AttDef(a));
         assert!(b.min.x <= -4.4 && b.max.x < 1.0);
+    }
+
+    #[test]
+    fn multileader_text_is_inside_its_bounds() {
+        let mtext = crate::MText {
+            insert: Vec3::new(25.45, 0.0, 0.0),
+            height: 5.0,
+            width: 0.0,
+            attach: 4,
+            rotation: 0.0,
+            style: "Standard".into(),
+            contents: "N".into(),
+            line_spacing: 1.0,
+            line_spacing_exact: false,
+            columns: None,
+        };
+        let ml = crate::MLeader {
+            leaders: vec![vec![Vec3::new(0.0, 0.0, 0.0)]],
+            landing: Vec3::new(25.0, 0.0, 0.0),
+            dogleg: 0.45,
+            text: Some(mtext.clone()),
+            style: "Standard".into(),
+            arrow_size: 1.0,
+            spline: false,
+            block: None,
+        };
+        let b = bounds(EntityKind::MLeader(ml.clone()));
+        // The glyph spans x 25.45..28.78, y -2.5..2.5.
+        assert!(b.min.x <= 0.0 && b.max.x >= 28.79 && b.min.y <= -2.5 && b.max.y >= 2.5);
+        let mut empty = ml;
+        empty.text = Some(crate::MText { contents: " ".into(), ..mtext });
+        assert!(bounds(EntityKind::MLeader(empty)).max.x < 26.0);
     }
 }

@@ -77,6 +77,43 @@ fn programmatic_undo_during_a_command_ends_it_first() {
 }
 
 #[test]
+fn undo_during_line_removes_the_last_segment_and_keeps_line_running() {
+    let mut s = Session::new();
+    s.cmdline("line 0,0 10,0 10,10 20,10").unwrap();
+    assert_eq!(kinds(&s), vec!["Line", "Line", "Line"]);
+    // Ctrl+Z / the U command / the menu (Session::start) act as the Undo keyword.
+    s.start("u").unwrap();
+    assert!(s.running.is_some());
+    assert_eq!(kinds(&s), vec!["Line", "Line"]);
+    s.start("u").unwrap();
+    assert!(s.running.is_some());
+    assert_eq!(kinds(&s), vec!["Line"]);
+    // The command goes on from the last remaining point.
+    s.cmdline("10,5").unwrap();
+    assert_eq!(kinds(&s), vec!["Line", "Line"]);
+    s.cmdline("").unwrap();
+    assert!(s.running.is_none());
+}
+
+#[test]
+fn undo_during_a_command_without_undo_keyword_ends_it_and_undoes() {
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    // LINE at its first point offers no Undo: Ctrl+Z ends it, then undoes the earlier line.
+    s.cmdline("line").unwrap();
+    assert!(s.running.is_some());
+    s.start("u").unwrap();
+    assert!(s.running.is_none());
+    assert!(kinds(&s).is_empty());
+    // TEXT offers no Undo keyword either.
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    s.script("TEXT 0,0 5 0 HELLO\n").unwrap();
+    s.start("u").unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(kinds(&s), vec!["Line"]);
+}
+
+#[test]
 fn polar_and_direct_distance() {
     let mut s = Session::new();
     s.cmdline("line 1,1").unwrap();
@@ -343,6 +380,50 @@ fn copy_rotate_scale_mirror() {
 }
 
 #[test]
+fn copy_and_rotate_drag_as_a_transform_of_the_selection() {
+    fn start(cmd: &str) -> Session {
+        let mut s = Session::new();
+        s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap();
+        for t in [cmd, "all", "", "0,0"] {
+            s.cmdline(t).unwrap();
+        }
+        s
+    }
+    let s = start("copy");
+    let (d, extra) = s.drag(Vec2::new(3.0, 4.0)).expect("COPY drags its selection");
+    assert_eq!(d.handles.len(), 1);
+    assert!(d.matrix.apply(Vec2::new(1.0, 0.0)).near(Vec2::new(4.0, 4.0), 1e-9));
+    assert_eq!(extra.len(), 1, "the base-to-cursor line");
+
+    let (d, _) = start("rotate").drag(Vec2::new(0.0, 5.0)).expect("ROTATE drags its selection");
+    assert!(d.matrix.apply(Vec2::new(1.0, 0.0)).near(Vec2::new(0.0, 1.0), 1e-9));
+
+    // MIRROR: geometry is mirrored by the matrix; text, which stays readable, is transformed
+    // object by object and comes with the extra geometry.
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap();
+    s.execute("text", &json!({"at": [2, 2], "height": 1, "text": "A"})).unwrap();
+    for t in ["mirror", "all", "", "0,0"] {
+        s.cmdline(t).unwrap();
+    }
+    let (d, extra) = s.drag(Vec2::new(0.0, 5.0)).expect("MIRROR drags its selection");
+    assert_eq!(d.handles.len(), 1, "the line is mirrored by the matrix");
+    assert!(d.matrix.apply(Vec2::new(1.0, 0.0)).near(Vec2::new(-1.0, 0.0), 1e-9));
+    assert_eq!(extra.len(), 2, "the base-to-cursor line and the text");
+    let EntityKind::Text(t) = &extra[1].kind else { panic!("expected the text") };
+    assert!(t.insert.xy().near(Vec2::new(-2.0, 2.0), 1e-9) && t.rotation.abs() < 1e-9, "mirrored, still reading left to right");
+
+    // PASTECLIP drags the clipboard.
+    let mut s = Session::new();
+    let l = s.execute("line", &json!({"points": [[0, 0], [1, 0]]})).unwrap();
+    s.execute("copyclip", &json!({"handles": [l["handles"][0].clone()]})).unwrap();
+    s.cmdline("pasteclip").unwrap();
+    let (d, _) = s.drag(Vec2::new(5.0, 5.0)).expect("PASTECLIP drags the clipboard");
+    assert!(d.clipboard && d.handles.is_empty());
+    assert!(d.matrix.apply(s.clipboard_base).near(Vec2::new(5.0, 5.0), 1e-9));
+}
+
+#[test]
 fn scale_reference_typed_and_picked() {
     // Issue #17: SCALE ▸ Reference scales by new length / reference length.
     fn end(s: &Session) -> Vec2 {
@@ -441,6 +522,19 @@ fn zoom_extents_fits_drawing() {
 }
 
 #[test]
+fn setvar_point_variables_take_point_objects() {
+    let mut s = Session::new();
+    for name in ["SNAPBASE", "LIMMIN", "LIMMAX", "INSBASE"] {
+        // GETVAR's own value (an object with z) writes back, and an {x, y} object equals the array form.
+        let got = sysvars::get(&s, name).unwrap();
+        s.execute("setvar", &json!({"name": name, "value": got})).unwrap();
+        s.execute("setvar", &json!({"name": name, "value": {"x": 5, "y": 7}})).unwrap();
+        assert_eq!(sysvars::get(&s, name), Some(json!({"x": 5.0, "y": 7.0, "z": 0.0})), "{name}");
+        assert!(s.execute("setvar", &json!({"name": name, "value": {"x": "a", "y": 1}})).is_err());
+    }
+}
+
+#[test]
 fn sysvars_roundtrip() {
     let mut s = Session::new();
     s.execute("setvar", &json!({"name": "osmode", "value": 7})).unwrap();
@@ -456,6 +550,26 @@ fn sysvars_roundtrip() {
     assert!(s.execute("setvar", &json!({"name": "FONTALT", "value": 3})).is_err());
     s.execute("setvar", &json!({"name": "FONTALT", "value": "."})).unwrap();
     assert_eq!(sysvars::get(&s, "FONTALT"), Some(json!("")));
+}
+
+#[test]
+fn setvar_clayer_keeps_numeric_layer_name() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "10"})).unwrap();
+    s.execute("setvar", &json!({"name": "CLAYER", "value": "10"})).unwrap();
+    assert_eq!(sysvars::get(&s, "CLAYER"), Some(json!("10")));
+    let c = s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
+    let h = cadcraft_doc::Handle::parse_hex(c["handle"].as_str().unwrap()).unwrap();
+    assert_eq!(s.doc().unwrap().entity(h).unwrap().common.layer, "10");
+    s.execute("setvar", &json!({"name": "CLAYER", "value": "0"})).unwrap();
+    assert_eq!(sysvars::get(&s, "CLAYER"), Some(json!("0")));
+    // Typed at the command line too.
+    s.cmdline("SETVAR CLAYER 10").unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(sysvars::get(&s, "CLAYER"), Some(json!("10")));
+    // Numeric variables still parse typed text.
+    s.execute("setvar", &json!({"name": "LUNITS", "value": "3"})).unwrap();
+    assert_eq!(sysvars::get(&s, "LUNITS"), Some(json!(3)));
 }
 
 #[test]
@@ -561,6 +675,8 @@ fn hostile_params_never_panic() {
             json!({"points": [[1e308, -1e308], ["a"]]}),
             json!({"handles": ["zz", 99999]}),
             json!({"radius": -1, "center": [0, 0]}),
+            json!({"gradient": {"name": 5, "color1": [1], "angle": "x", "centered": "y"}}),
+            json!({"points": [[0, 0]], "handles": ["1"], "gradient": "x", "name": "RAINBOW"}),
         ] {
             let _ = s.execute(c.id, &p);
         }
@@ -571,6 +687,11 @@ fn hostile_params_never_panic() {
 fn every_interactive_command_starts_and_cancels() {
     for c in command_specs().iter().filter(|c| c.interactive.is_some()) {
         let mut s = Session::new();
+        if (c.enabled)(&s).is_err() {
+            // Unavailable in a new drawing (e.g. pasting with an empty clipboard): refused.
+            assert!(s.start(c.id).is_err() && s.running.is_none(), "{}", c.id);
+            continue;
+        }
         s.start(c.id).unwrap();
         let _ = s.prompt_text();
         let _ = s.preview(Vec2::new(1.0, 1.0));
@@ -592,13 +713,15 @@ fn sample_drawing_builds() {
 #[test]
 fn count_from_the_menu_shows_its_result() {
     let mut s = Session::new();
-    s.start("count").unwrap();
+    s.cmdline("count").unwrap();
+    s.cmdline("").unwrap();
     assert_eq!(s.log.last().map(String::as_str), Some("No block references in model space."));
     s.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
     s.execute("selectall", &json!({})).unwrap();
     s.cmdline("block Valve 0,0").unwrap();
-    s.cmdline("insert Valve 10,0 1 0").unwrap();
-    s.start("count").unwrap();
+    s.cmdline("insert Valve 10,0 1 1 0").unwrap();
+    s.cmdline("count").unwrap();
+    s.cmdline("").unwrap();
     let n = s.log.len();
     assert_eq!(&s.log[n - 3..], ["Block references in model space:", "  Valve: 2", "  Total: 2"]);
     let r = s.execute("count", &json!({"block": "Valve"})).unwrap();
@@ -776,6 +899,21 @@ fn gradient_pick_point_keeps_island_of_separate_lines() {
 }
 
 #[test]
+fn boundary_point_batch_is_capped() {
+    let mut s = Session::new();
+    let sq = [[0, 0], [20, 0], [20, 20], [0, 20]];
+    for i in 0..4 {
+        s.execute("line", &json!({"points": [sq[i], sq[(i + 1) % 4]]})).unwrap();
+    }
+    let many: Vec<_> = (0..100_000).map(|_| json!([2, 2])).collect();
+    let t = std::time::Instant::now();
+    assert!(s.execute("boundary", &json!({"points": many})).is_err());
+    assert!(t.elapsed().as_secs() < 5);
+    let ok: Vec<_> = (0..8).map(|_| json!([2, 2])).collect();
+    assert!(s.execute("boundary", &json!({"points": ok})).is_ok());
+}
+
+#[test]
 fn boundary_pick_point_keeps_island_of_separate_lines() {
     for lines in [true, false] {
         let mut s = square_hole_fixture(lines);
@@ -814,7 +952,7 @@ fn block_insert_with_attributes() {
     assert!(s.running.is_none());
     assert!(s.doc().unwrap().block("Valve").is_some());
     assert_eq!(s.doc().unwrap().model.len(), 1, "originals converted to one insert");
-    s.cmdline("insert Valve 10,0 2 90 V-101").unwrap();
+    s.cmdline("insert Valve 10,0 2 2 90 V-101").unwrap();
     let ins: Vec<_> =
         s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Insert(i) = &e.kind { Some(i.clone()) } else { None }).collect();
     assert_eq!(ins.len(), 2);
@@ -895,6 +1033,27 @@ fn line_first_point_deferred_tangent() {
     s.cmdline("").unwrap();
     assert_eq!(line_ends(&s).len(), 2);
     assert!(line_ends(&s)[1].0.near(b, 1e-12));
+}
+
+#[test]
+fn line_deferred_tangent_with_typed_polar() {
+    let mut s = Session::new();
+    s.cmdline("circle 0,0 5").unwrap();
+    s.execute("osnap", &json!({"modes": ["tan"]})).unwrap();
+    s.cmdline("line").unwrap();
+    snap_click(&mut s, Vec2::new(0.1, 5.2)); // deferred TAN, near the top of the circle
+    s.cmdline("@150<218").unwrap();
+    s.cmdline("").unwrap();
+    let ends = line_ends(&s);
+    assert_eq!(ends.len(), 1);
+    let (a, b) = ends[0];
+    // The start is the tangent point on the circle.
+    assert!((a.len() - 5.0).abs() < 1e-9, "start not on circle: {a:?}");
+    // The typed direction and distance are exact.
+    let v = b - a;
+    assert!((v.len() - 150.0).abs() < 1e-9, "length was {}", v.len());
+    let angle = v.y.atan2(v.x).to_degrees().rem_euclid(360.0);
+    assert!((angle - 218.0).abs() < 1e-9, "angle was {angle}");
 }
 
 #[test]
@@ -1080,4 +1239,104 @@ fn press_and_drag_selection_window() {
     s.cancel();
     assert!(!s.begin_window(Vec2::new(f64::NAN, 0.0)));
     assert!(s.pending_window.is_none());
+}
+
+#[test]
+fn block_rotation_property_turns_attribute_text() {
+    let mut s = Session::new();
+    s.execute("attdef", &json!({"tag": "TAG", "at": [10, 0], "default": "D", "height": 2.5})).unwrap();
+    let def = s.doc().unwrap().model.last().unwrap().handle;
+    s.execute("block", &json!({"name": "B", "base": [0, 0], "handles": [def.hex()], "keep": "delete"})).unwrap();
+    s.execute("insert", &json!({"name": "B", "at": [0, 0], "attribs": {"TAG": "hello"}})).unwrap();
+    let h = s.doc().unwrap().model.last().unwrap().handle;
+    s.execute("properties.set", &json!({"handles": [h.hex()], "rotation": 90})).unwrap();
+    let doc = s.doc().unwrap();
+    let Some(EntityKind::Insert(i)) = doc.model.last().map(|e| &e.kind) else { panic!("no insert") };
+    let t = &i.attribs[0].text;
+    assert!((i.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    assert!(t.insert.x.abs() < 1e-9 && (t.insert.y - 10.0).abs() < 1e-9, "text at {:?}", t.insert);
+    assert!((t.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    assert_eq!(t.value, "hello");
+    assert!((t.height - 2.5).abs() < 1e-12);
+}
+
+#[test]
+fn bare_variable_name_runs_setvar() {
+    let mut s = Session::new();
+    s.cmdline("pickadd").unwrap();
+    assert!(s.current_prompt().is_some());
+    s.cmdline("0").unwrap();
+    assert!(s.current_prompt().is_none());
+    assert_eq!(crate::sysvars::get(&s, "PICKADD"), Some(json!(0)));
+    // Not a command and not a variable: still an error.
+    assert!(s.cmdline("nosuchthing").is_err());
+    // A dash or dot prefix never means a variable.
+    assert!(s.cmdline("-pickadd").is_err());
+}
+
+fn setvar_prompt_open(s: &Session) -> bool {
+    s.running.as_ref().is_some_and(|r| r.id == "setvar")
+}
+
+#[test]
+fn every_variable_name_starts_setvar_unless_it_is_a_command() {
+    let mut s = Session::new();
+    let names: Vec<String> = match crate::sysvars::list(&s) {
+        Value::Object(m) => m.keys().cloned().collect(),
+        _ => Vec::new(),
+    };
+    assert!(names.len() > 50, "expected the full variable list, got {}", names.len());
+    let (mut prompted, mut read_only, mut commands) = (0, 0, 0);
+    for n in &names {
+        s.cancel();
+        let lower = n.to_ascii_lowercase();
+        let is_command = crate::cmd::find_command(&crate::cmd::resolve_alias(&lower)).is_some();
+        let result = s.cmdline(&lower);
+        if is_command {
+            // A real command keeps its name (it may refuse to run without parameters, as a bare
+            // CLAYER does); the variable is reached with SETVAR.
+            assert!(!setvar_prompt_open(&s), "{n} is a command but started SETVAR");
+            commands += 1;
+        } else if let Err(e) = result {
+            panic!("{n}: {e}");
+        } else if setvar_prompt_open(&s) {
+            prompted += 1;
+        } else {
+            // A read-only variable prints its value and ends.
+            assert!(s.current_prompt().is_none(), "{n}: neither SETVAR nor finished");
+            read_only += 1;
+        }
+    }
+    s.cancel();
+    assert!(prompted > 50 && read_only > 0, "prompted {prompted}, read-only {read_only}, commands {commands}");
+}
+
+#[test]
+fn hostile_variable_like_input_never_panics() {
+    let mut s = Session::new();
+    let long = "a".repeat(1 << 20);
+    for t in [
+        "'",
+        "''",
+        "'''pickadd",
+        "\0pickadd",
+        "pickadd\0",
+        " ",
+        "\t",
+        "pick add",
+        "PICKADD\u{0}0",
+        "ｐｉｃｋａｄｄ",
+        "pickadd;0",
+        "ÿ",
+        &long,
+        "pickadd\n0",
+        "'\u{202e}pickadd",
+    ] {
+        s.cancel();
+        let _ = s.cmdline(t);
+    }
+    s.cancel();
+    // The session is still usable afterwards.
+    s.cmdline("pickadd").unwrap();
+    assert!(setvar_prompt_open(&s));
 }

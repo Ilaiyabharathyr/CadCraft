@@ -374,7 +374,6 @@
 	Lines deleted	Usunięte wiersze
 	Linetype	Rodzaj linii
 	Linetype Scale	Skala rodzaju linii
-	Linetype scale	Skala rodzaju linii
 	Ltscale	Skala rodzaju linii
 	Linetype...	Rodzaj linii...
 	Lineweight	Grubość linii
@@ -410,7 +409,6 @@
 	Merged PRs	Scalone zgłoszenia zmian
 	Midpoint	Punkt środkowy
 	Mirror	Odbij lustrzanie
-	Model	Model
 	Model Space (in viewport)	Przestrzeń modelu (w rzutni)
 	Modeling	Modelowanie
 	Models	Modele
@@ -439,7 +437,6 @@
 	New Layout	Nowy układ
 	New VP Freeze	Zamroź w nowej rzutni
 	New Viewports...	Nowe rzutnie...
-	New layout	Nowy układ
 	New state name	Nazwa nowego stanu
 	No	Nie
 	No blocks defined in this drawing.	W tym rysunku nie zdefiniowano bloków.
@@ -466,7 +463,6 @@
 	One of the Crafting Apps by the ArtCraft team and community.	Jedna z aplikacji Crafting Apps tworzonych przez zespół ArtCraft i społeczność.
 	Open (⌘O)	Otwórz (⌘O)
 	Open Sample Drawing	Otwórz przykładowy rysunek
-	Open sample drawing	Otwórz przykładowy rysunek
 	Open...	Otwórz...
 	Operator:	Operator:
 	Orbit	Orbita
@@ -639,7 +635,6 @@
 	Select object to measure	Wybierz obiekt do pomiaru
 	Select object to offset	Wybierz obiekt do odsunięcia
 	Select object to trim or shift-select to extend	Wybierz obiekt do przycięcia lub przytrzymaj Shift, aby wydłużyć
-	Select objects	Wybierz obiekty
 	Select objects (crossing window first corner)	Wybierz obiekty (pierwszy narożnik okna przecinającego)
 	Select objects to array.	Wybierz obiekty do szyku.
 	Select objects to stretch by crossing-window or crossing-polygon...	Wybierz obiekty do rozciągnięcia oknem przecinającym lub wielokątem przecinającym...
@@ -852,7 +847,6 @@
 	Text Editor	Edytor tekstu
 	Text Height	Wysokość tekstu
 	Text Style...	Styl tekstu...
-	Text height	Wysokość tekstu
 	Text override	Nadpisanie tekstu
 	Text style	Styl tekstu
 	Thaw All Layers	Odmroź wszystkie warstwy
@@ -958,15 +952,12 @@
 	Select Color	Wybierz kolor
 	Line type	Rodzaj linii
 	Line weight	Grubość linii
-	New layer	Nowa warstwa
 	Layer filters	Filtry warstw
-	Current Layer	Bieżąca warstwa
 	Dashed	Kreskowa
 	Dotted	Kropkowana
 	Dashdot	Kreska-kropka
 	Hidden	Ukryta
 	Phantom	Dwupunktowa
-	Select all	Zaznacz wszystko
 	Clear selection	Wyczyść zaznaczenie
 	Object type	Typ obiektu
 	Model Space	Przestrzeń modelu
@@ -1011,21 +1002,6 @@
 	Face	Ściana
 	Origin	Początek układu
 	LwPolyline	Polilinia
-	LWPOLYLINE	Polilinia
-	LINE	Linia
-	CIRCLE	Okrąg
-	ARC	Łuk
-	SPLINE	Krzywa sklejania
-	ELLIPSE	Elipsa
-	HATCH	Kreskowanie
-	TEXT	Tekst
-	MTEXT	Tekst wielowierszowy
-	INSERT	Wstawienie bloku
-	DIMENSION	Wymiar
-	POINT	Punkt
-	REGION	Obszar
-	SOLID	Bryła
-	XLine	Prosta konstrukcyjna
 	New Sheet Set...	Nowy zestaw arkuszy...
 	Open Sheet Set...	Otwórz zestaw arkuszy...
 	Open Recent	Ostatnio otwierane
@@ -1057,7 +1033,6 @@
 	Current UCS	Bieżący LUW
 	World UCS	Globalny LUW
 	Named UCS	Nazwany LUW
-	Top	Z góry
 	Bottom	Dół
 	Front	Przód
 	Back	Tył
@@ -1101,7 +1076,6 @@
 	Scale List...	Lista skal...
 	Plot Style...	Styl wydruku...
 	Spelling	Pisownia
-	Paper	Papier
 	Height:	Wysokość:
 	Linetype Manager	Menedżer rodzajów linii
 	Color Selector	Wybór koloru
@@ -1114,7 +1088,6 @@
 	Polar Tracking Settings	Ustawienia śledzenia biegunowego
 	Explode Block	Rozbij blok
 	Block Name	Nazwa bloku
-	Base Point	Punkt bazowy
 	Coordinate	Współrzędna
 	Coordinates	Współrzędne
 	Properties Palette	Paleta właściwości
@@ -1143,3 +1116,355 @@
 	{n} contributor	{n} współautor
 @plural	{n} commit	{n} zatwierdzenie|{n} zatwierdzenia|{n} zatwierdzeń
 @plural	{n} contributor	{n} współautor|{n} współautorów|{n} współautorów
+	Attach DWG...	Dołącz plik DWG...
+	Bind	Powiąż
+	Detach	Odłącz
+	Loaded	Wczytano
+	Make it a block of this drawing, keeping its layer names	Utwórz blok w bieżącym rysunku, zachowując nazwy warstw
+	Make it a block of this drawing; its layers become NAME$0$LAYER	Utwórz blok w bieżącym rysunku; jego warstwy otrzymają nazwy NAME$0$LAYER
+	No external references are attached.	Nie dołączono żadnych odnośników zewnętrznych.
+	Not Found	Nie znaleziono
+	Not loaded	Nie wczytano
+	Overlay	Nakładka
+	Reference Name	Nazwa odnośnika
+	References: {n}	Odnośniki: {n}
+	Reload	Wczytaj ponownie
+	Reload All	Wczytaj wszystkie ponownie
+	Saved Path	Zapisana ścieżka
+	Unload	Usuń z pamięci
+	Unloaded	Usunięto z pamięci
+	Unreferenced	Bez odnośników
+	Unresolved	Nierozwiązany
+	A variable name starts with a letter and has only letters, digits and _	Nazwa zmiennej musi zaczynać się od litery i zawierać tylko litery, cyfry oraz _
+	Additional angles	Dodatkowe kąty
+	Arrange Panel	Rozmieść panel
+	Audit	Sprawdź rysunek
+	Bind...	Powiąż...
+	Bulleted list	Lista punktowana
+	Changed: {n}	Zmieniono: {n}
+	Clear History	Wyczyść historię
+	Clip	Przytnij
+	Clip Viewport	Przytnij rzutnię
+	Clipboard	Schowek
+	Close All Other Drawings	Zamknij wszystkie pozostałe rysunki
+	Close Comparison	Zamknij porównanie
+	Collapse Palettes	Zwiń palety
+	Command Aliases	Aliasy poleceń
+	Clear Command History	Wyczyść historię poleceń
+	Compare Drawings...	Porównaj rysunki...
+	Convert	Konwertuj
+	Copy Full File Path	Kopiuj pełną ścieżkę pliku
+	Copy History	Kopiuj historię
+	Copy Selection	Kopiuj zaznaczenie
+	Count List	Lista zliczania
+	Count Table	Tabela zliczania
+	DWG	DWG
+	DXF	DXF
+	Data Extraction...	Wyodrębnianie danych...
+	Default Save Format	Domyślny format zapisu
+	Default Save Version	Domyślna wersja zapisu
+	Degrees of Freedom	Stopnie swobody
+	Degrees of freedom: {n}	Stopnie swobody: {n}
+	Deselect All	Odznacz wszystko
+	Dimension Break	Przerwij wymiarowanie
+	Dimension Edit	Edytuj wymiar
+	Drawing (DWG)	Rysunek (DWG)
+	Drawing Template (DWT)	Szablon rysunku (DWT)
+	Drawing Utilities	Narzędzia rysunku
+	SVG drawings (SVG, SVGZ)	Rysunki SVG (SVG, SVGZ)
+	Edit Attributes...	Edytuj atrybuty...
+	Edit Table Cell	Edytuj komórkę tabeli
+	Enter	Enter
+	Evaluate	Oblicz
+	Evaluate LISP	Wykonaj LISP
+	Export Table	Eksportuj tabelę
+	External Reference	Odnośnik zewnętrzny
+	External References	Odnośniki zewnętrzne
+	From	Od
+	From Template...	Z szablonu...
+	Get from the Drawing	Pobierz z rysunku
+	Global	Globalny
+	Grid snap	Skok do siatki
+	Grip Edit	Edycja za pomocą uchwytów
+	Grip Option	Opcja uchwytu
+	Group	Grupuj
+	Group Edit	Edytuj grupę
+	Group Options	Opcje grupy
+	Group Selection	Wybór grupy
+	Hatch Patterns	Wzory kreskowania
+	History	Historia
+	Align Multileaders	Wyrównaj odnośniki wielokrotne
+	Collect	Zbierz
+	Collect Multileaders	Zbierz odnośniki wielokrotne
+	Edit Multileader	Edytuj odnośnik wielokrotny
+	Infer Constraints	Wnioskuj więzy
+	Insert tab	Wstaw tabulator
+	Insert Table Formula	Wstaw formułę tabeli
+	Inspection	Kontrolny
+	Jogged	Z załamaniem
+	Jogged Linear	Wymiar liniowy z załamaniem
+	Isometric Plane	Płaszczyzna izometryczna
+	Isometric snap	Skok izometryczny
+	Layer Delete	Usuń warstwę
+	Layer Merge	Scal warstwy
+	Layers Palette	Paleta warstw
+	Hide Palette	Ukryj paletę
+	Lines of Command History	Wiersze historii poleceń
+	Linetype scale	Skala rodzaju linii
+	List Groups	Lista grup
+	Lock viewport	Zablokuj rzutnię
+	Mid Between 2 Points	Środek między dwoma punktami
+	Model	Model
+	Named Views...	Widoki nazwane...
+	New from Template...	Nowy z szablonu...
+	New layout	Nowy arkusz
+	Next Change	Następna różnica
+	Numbered list	Lista numerowana
+	Object Snap Tracking Settings	Ustawienia śledzenia lokalizacji względem obiektów
+	Oblique	Ukośny
+	Only in this drawing: {n}	Tylko w tym rysunku: {n}
+	Only in {name}: {n}	Tylko w {name}: {n}
+	Open sample drawing	Otwórz przykładowy rysunek
+	Clear Recent Files	Wyczyść ostatnie pliki
+	Osnap Settings...	Ustawienia lokalizacji względem obiektów...
+	Over-constrained	Nadmiernie związany więzami
+	Paste to Command Line	Wklej do wiersza poleceń
+	Plot Window	Okno wydruku
+	Plot Style Manager	Menedżer stylów wydruku
+	Plot Style Manager...	Menedżer stylów wydruku...
+	Plotter Manager	Menedżer ploterów
+	Plotter Manager...	Menedżer ploterów...
+	New CTB	Nowa tabela CTB
+	New STB	Nowa tabela STB
+	New style	Nowy styl
+	Reset Panel Layout	Przywróć układ paneli
+	Use for this layout	Użyj dla tego arkusza
+	Display plot styles	Wyświetl style wydruku
+	No plot style tables.	Brak tabel stylów wydruku.
+	A built-in table: editing it keeps an edited copy in the drawing.	Wbudowana tabela: edycja zachowa jej zmodyfikowaną kopię w rysunku.
+	Keep an editable copy of this table in the drawing	Zachowaj edytowalną kopię tej tabeli w rysunku
+	Layout {name}: {table}	Arkusz {name}: {table}
+	Grayscale	Skala szarości
+	Screening	Rasteryzacja tonalna
+	Use object linetype	Użyj rodzaju linii obiektu
+	Use object lineweight	Użyj szerokości linii obiektu
+	Remove	Usuń
+	Add	Dodaj
+	Open a drawing first.	Najpierw otwórz rysunek.
+	Color-dependent	Zależny od koloru
+	Named	Nazwany
+	Point Filters	Filtry punktów
+	Polar angle measurement	Pomiar kąta biegunowego
+	Polar distance	Odległość biegunowa
+	PolarSnap	Skok biegunowy
+	Polyline Edit	Edytuj polilinię
+	Previous Change	Poprzednia różnica
+	QuickCalc Pick	Wybór w kalkulatorze
+	Recent Commands	Ostatnie polecenia
+	Recent Input	Ostatnio wprowadzane dane
+	Recover...	Odzyskaj...
+	Recalculate Table Formulas	Przelicz formuły tabeli
+	Rectangular snap	Skok prostokątny
+	Reinitialize	Zainicjuj ponownie
+	Relative to last segment	Względem ostatniego segmentu
+	Repeat {command}	Powtórz {command}
+	Select Similar	Wybierz podobne
+	Select objects	Wybierz obiekty
+	Add to Working Set	Dodaj do zestawu roboczego
+	Edit Reference In-Place	Edytuj odnośnik na miejscu
+	Save Reference Edits	Zapisz zmiany odnośnika
+	Working Set	Zestaw roboczy
+	Xref and Block In-place Editing	Edycja odnośników i bloków na miejscu
+	Set Current Viewport	Ustaw bieżącą rzutnię
+	Set Table Cell Style	Ustaw styl komórki tabeli
+	Show and hide the tools of this category	Pokaż lub ukryj narzędzia tej kategorii
+	Show in Tool Sets	Pokaż w zestawach narzędzi
+	Show command prompting near the crosshairs	Wyświetlaj monity poleceń przy celowniku
+	Snap Overrides	Nadpisania trybów lokalizacji
+	Snap type	Typ skoku
+	A drawing opened from a file keeps that file's format.	Rysunek otwarty z pliku zachowuje format tego pliku.
+	An array that would create more objects than this is refused.	Tablica tworząca więcej obiektów niż dopuszczalna liczba zostanie odrzucona.
+	CADCraft keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADCraft zapisuje te preferencje, tryby lokalizacji względem obiektów i przełączniki rysunkowe na Twoim koncie użytkownika oraz przywraca je przy uruchomieniu.
+	Changes apply at once and are kept for next time.	Zmiany są stosowane natychmiast i zachowywane na przyszłość.
+	Command line history	Historia wiersza poleceń
+	Copy as JSON	Kopiuj jako JSON
+	Crosshair size	Rozmiar celownika
+	Crossing selection color:	Kolor zaznaczenia przecinającego:
+	Exclude:	Wyklucz:
+	Grip size	Rozmiar uchwytu
+	Grips	Uchwyty
+	Groups	Grupy
+	Hatches	Kreskowania
+	Hold Shift to add to the selection	Przytrzymaj Shift, aby dodać do zaznaczenia
+	Indicate selection area	Wskaż obszar zaznaczenia
+	Interface language	Język interfejsu
+	Interface theme	Motyw interfejsu
+	Keep the system cursor visible over the drawing area	Pozostaw kursor systemowy widoczny nad obszarem rysunku
+	Largest array	Maksymalna wielkość tablicy
+	Layout paper	Papier arkusza
+	Model background	Tło modelu
+	Multiline text	Tekst wielowierszowy
+	Object grouping	Grupowanie obiektów
+	Object selection limit for display of grips	Limit liczby obiektów do wyświetlania uchwytów
+	Object snap aperture	Obszar wykrywania lokalizacji względem obiektów
+	Object snap marker size	Rozmiar znacznika lokalizacji względem obiektów
+	Objects on locked layers	Obiekty na zablokowanych warstwach
+	Open and Save	Otwieranie i zapisywanie
+	Options	Opcje
+	Options...	Opcje...
+	Pickbox size	Rozmiar pola wyboru
+	Profiles	Profile
+	Reset keeps the interface language.	Przywrócenie ustawień zachowuje język interfejsu.
+	Reset to Defaults	Przywróć ustawienia domyślne
+	Save new drawings as	Zapisuj nowe rysunki jako
+	Screen magnifiers, screen readers and recorders follow the system cursor.	Lupy ekranowe, czytniki ekranu i rejestratory podążają za kursorem systemowym.
+	Select objects first, then choose a command	Najpierw wybierz obiekty, a potem polecenie
+	Selection Area Effect	Efekt obszaru zaznaczenia
+	Selection Preview Filter	Filtr podglądu zaznaczenia
+	Selection area opacity:	Krycie obszaru zaznaczenia:
+	Selection effect color	Kolor efektu zaznaczenia
+	Selection modes	Tryby zaznaczania
+	Selection preview	Podgląd zaznaczenia
+	Settings...	Ustawienia...
+	Show Quick Properties for selected objects	Pokaż szybkie właściwości zaznaczonych obiektów
+	Show grips	Pokaż uchwyty
+	Snap, grid, polar tracking and Dynamic Input:	Skok, siatka, śledzenie biegunowe i wprowadzanie dynamiczne:
+	Tables	Tabele
+	The aperture is how near the cursor must come to a point for an object snap to find it.	Obszar wykrywania określa, jak blisko punktu musi znajdować się kursor, aby lokalizacja względem obiektów mogła go znaleźć.
+	User Preferences	Preferencje użytkownika
+	Visual Effect Settings	Ustawienia efektów wizualnych
+	Visual Effect Settings...	Ustawienia efektów wizualnych...
+	When a command is active	Gdy polecenie jest aktywne
+	When no command is active	Gdy żadne polecenie nie jest aktywne
+	Window selection color:	Kolor zaznaczenia oknem:
+	Xrefs	Odnośniki zewnętrzne
+	objects	obiekty
+	Spline Edit	Edytuj splajn
+	Synchronize Attributes	Synchronizuj atrybuty
+	To	Do
+	Table Breaks	Podziały tabeli
+	Table Cell Style	Styl komórki tabeli
+	Temporary track point	Tymczasowy punkt śledzenia
+	Text height	Wysokość tekstu
+	Thaw Layer	Odmroź warstwę
+	Track orthogonally only	Śledź tylko prostopadle
+	Track using all polar angle settings	Śledź ze wszystkimi ustawieniami kąta biegunowego
+	Turn On Layer	Włącz warstwę
+	Ungroup	Rozgrupuj
+	Units Conversion	Konwersja jednostek
+	Unlock viewport	Odblokuj rzutnię
+	Update Data Links	Aktualizuj łącza danych
+	Variables	Zmienne
+	Version 2000	Wersja 2000
+	Version 2004	Wersja 2004
+	Version 2007	Wersja 2007
+	Version 2010	Wersja 2010
+	Version 2013	Wersja 2013
+	Version 2018	Wersja 2018
+	Viewport is locked	Rzutnia jest zablokowana
+	Viewport scale	Skala rzutni
+	Zoom Dynamic	Zoom dynamiczny
+	Zoom Realtime	Zoom w czasie rzeczywistym
+	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	Animation Effects	Efekty animacji
+	Animation effects	Efekty animacji
+	Annotative Object Scale	Skala obiektu opisowego
+	Add Current Scale	Dodaj bieżącą skalę
+	Delete Current Scale	Usuń bieżącą skalę
+	Add/Delete Scales...	Dodaj/usuń skale...
+	Synchronize Multiple-scale Positions	Synchronizuj pozycje dla wielu skal
+	Annotative Update	Aktualizuj obiekty opisowe
+	Drawing Recovery Manager...	Menedżer odzyskiwania rysunków...
+	Tolerance...	Tolerancja...
+	Add Vertex	Dodaj wierzchołek
+	Remove Vertex	Usuń wierzchołek
+	Convert to Arc	Zamień na łuk
+	Convert to Line	Zamień na linię
+	Stretch Vertex	Rozciągnij wierzchołek
+	Edit Array	Edytuj tablicę
+	Close Array Editing	Zakończ edycję tablicy
+	Multiline...	Multilinia...
+	Multiline Style...	Styl multilinii...
+	Solid Editing	Edycja brył
+	3D Mouse...	Mysz 3D...
+	3D Mouse	Mysz 3D
+	Calibrate 3D Mouse	Kalibruj mysz 3D
+	3D Mouse Navigation	Nawigacja myszą 3D
+	3D mouse input is unavailable on this platform	Obsługa myszy 3D jest niedostępna na tej platformie
+	No supported 3D mouse found	Nie znaleziono obsługiwanej myszy 3D
+	Release the 3D mouse to calibrate its resting position	Puść mysz 3D, aby skalibrować jej położenie spoczynkowe
+	3D mouse connected	Mysz 3D podłączona
+	3D mouse busy, possibly 3DxWare or missing device permissions	Mysz 3D zajęta; możliwe, że używa jej 3DxWare lub brakuje uprawnień urządzenia
+	3D mouse disconnected	Mysz 3D odłączona
+	3D mouse input could not be started	Nie można uruchomić obsługi myszy 3D
+	Enable 3D mouse navigation	Włącz nawigację myszą 3D
+	Pan sensitivity	Czułość przesuwania
+	Zoom sensitivity	Czułość powiększania
+	Reverse zoom direction	Odwróć kierunek powiększania
+	Calibrate	Kalibruj
+	Move sideways to pan; push/pull or twist to zoom.	Przesuń urządzenie w bok, aby przesunąć widok; pchnij, pociągnij lub obróć, aby zmienić powiększenie.
+	Left device button: zoom extents. Right device button: calibrate.	Lewy przycisk urządzenia: dopasuj widok do całości. Prawy przycisk: kalibruj.
+	More toolbar commands	Więcej poleceń paska narzędzi
+	Default save version	Domyślna wersja zapisu
+	Automatic save every	Automatyczny zapis co
+	min	min
+	Automatic save file location	Lokalizacja plików automatycznego zapisu
+	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Rysunki bez przypisanego pliku są zapisywane w domyślnej wersji. Wartość 0 minut wyłącza automatyczne zapisywanie.
+	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Kliknięcie prawym przyciskiem zależne od czasu: szybkie kliknięcie działa jak Enter, przytrzymanie otwiera menu
+	Turned off, a right-click while a command runs always opens the shortcut menu.	Po wyłączeniu tej opcji kliknięcie prawym przyciskiem podczas działania polecenia zawsze otwiera menu kontekstowe.
+	Hatch Pattern	Wzór kreskowania
+	Search for pattern	Szukaj wzoru
+	Run Script...	Uruchom skrypt...
+	Query Texts	Wyszukaj teksty
+	Hatch Pick	Wskaż kreskowanie
+	Hatch and Gradient	Kreskowanie i gradient
+	Color 1	Kolor 1
+	Color 2	Kolor 2
+	Shape	Kształt
+	Curved	Zakrzywiony
+	Spherical	Sferyczny
+	Hemispherical	Półkulisty
+	Inverted	Odwrócony
+	Centered	Wyśrodkowany
+	Hatch origin	Punkt początkowy kreskowania
+	Use current origin	Użyj bieżącego punktu początkowego
+	Specified origin	Określony punkt początkowy
+	Click to set new origin	Kliknij, aby ustawić nowy punkt początkowy
+	Default to boundary extents	Domyślnie użyj granic obszaru
+	Bottom left	Lewy dolny
+	Bottom right	Prawy dolny
+	Top left	Lewy górny
+	Top right	Prawy górny
+	Boundaries	Obwiednie
+	Add: Pick points	Dodaj: wskaż punkty
+	Add: Select objects	Dodaj: wybierz obiekty
+	Boundaries picked: {n}	Wybrane obwiednie: {n}
+	Associative	Skojarzone
+	Create separate hatches	Utwórz osobne kreskowania
+	Island detection	Wykrywanie wysp
+	Outer	Zewnętrzny
+	Ignore	Ignoruj
+	Origin: {x}, {y}	Punkt początkowy: {x}, {y}
+	Sheet Books to PDF...	Arkusze do PDF...
+	Not a number or distance: {text}	To nie jest liczba ani odległość: {text}
+	Dynamic Block Data	Dane bloku dynamicznego
+	Custom	Niestandardowy
+	Dynamic Block Reference	Odnośnik do bloku dynamicznego
+	Set Dynamic Property	Ustaw właściwość dynamiczną
+	Dynamic Block Grips	Uchwyty bloku dynamicznego
+	Drag Dynamic Grip	Przeciągnij uchwyt dynamiczny
+	Save Block	Zapisz blok
+	Save Block As	Zapisz blok jako
+	Close Block Editor	Zamknij edytor bloków
+	Edit Block Definition	Edytuj definicję bloku
+	Block to create or edit	Blok do utworzenia lub edycji
+	Open in Block Editor	Otwórz w edytorze bloków
+	This drawing	Ten rysunek
+	contains authoring elements. Open in Block Editor?	zawiera elementy definiujące. Otworzyć w edytorze bloków?
+	New block	Nowy blok
+	Italic	Kursywa
+	Underline	Podkreślenie
+	Overline	Nadkreślenie
+	Justify	Wyrównanie
+	Text color	Kolor tekstu
+	Click the ruler to add a tab stop, right-click to remove one	Kliknij linijkę, aby dodać tabulator; kliknij prawym przyciskiem, aby go usunąć

@@ -9,42 +9,69 @@ use crate::CadApp;
 use crate::theme::Tokens;
 
 pub fn show(app: &mut CadApp, ctx: &egui::Context) {
-    mtext_editor(app, ctx);
+    crate::mtext_editor::show(app, ctx);
     crate::quick::quick_properties(app, ctx);
     let Some(d) = app.ui.dialog.clone() else { return };
     let mut open = true;
     match d.as_str() {
+        "spacemouse" => crate::spacemouse::dialog(app, ctx, &mut open),
         "language" => language(app, ctx, &mut open),
         "layers" => crate::layers::dialog(app, ctx, &mut open),
         "qselect" => crate::quick::qselect_dialog(app, ctx, &mut open),
         "parameters" => crate::parametric::parameters_dialog(app, ctx, &mut open),
         "dsettings" => dsettings(app, ctx, &mut open),
         "units" => units(app, ctx, &mut open),
+        "hatch" => crate::hatchdlg::dialog(app, ctx, &mut open),
         "about" => about(ctx, &mut open),
+        "preview" => crate::exchange::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),
+        "bedit" => crate::bedit::dialog(app, ctx, &mut open),
+        "authoring" => crate::bedit::authoring_dialog(app, ctx, &mut open),
+        "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
+        o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }
-    if !open {
+    // A dialog that closed by opening another (Plot Preview back to Plot) keeps the new one.
+    if !open && app.ui.dialog.as_deref() == Some(d.as_str()) {
         app.ui.dialog = None;
     }
 }
 
 fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
+    let settings = app.session.drafting_settings();
+    let (mut snapunit, mut gridunit) = (settings.snapunit, settings.gridunit);
     egui::Window::new(crate::tl!("Drafting Settings")).id(egui::Id::new("Drafting Settings")).open(open).resizable(false).show(ctx, |ui| {
         let s = &mut app.session.settings;
         ui.heading(crate::tl!("Snap and Grid"));
         ui.checkbox(&mut s.snapmode, crate::tl!("Snap On (F9)"));
+        // SNAPSTYL: the isometric snap and grid (ISODRAFT).
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut s.isodraft, false, crate::tl!("Rectangular snap"));
+            ui.radio_value(&mut s.isodraft, true, crate::tl!("Isometric snap"));
+        });
         ui.horizontal(|ui| {
             ui.label(crate::tl!("Snap X spacing"));
-            ui.add(egui::DragValue::new(&mut s.snapunit.x).speed(0.05).range(0.0001..=1e6));
+            ui.add(egui::DragValue::new(&mut snapunit.x).speed(0.05).range(0.0001..=1e6).clamp_existing_to_range(false));
             ui.label(crate::tl!("Y"));
-            ui.add(egui::DragValue::new(&mut s.snapunit.y).speed(0.05).range(0.0001..=1e6));
+            ui.add(egui::DragValue::new(&mut snapunit.y).speed(0.05).range(0.0001..=1e6).clamp_existing_to_range(false));
+        });
+        // SNAPTYPE and POLARDIST.
+        ui.horizontal(|ui| {
+            ui.label(crate::tl!("Snap type"));
+            ui.radio_value(&mut s.polarsnap, false, crate::tl!("Grid snap"));
+            ui.radio_value(&mut s.polarsnap, true, crate::tl!("PolarSnap"));
+        });
+        ui.add_enabled_ui(s.polarsnap, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(crate::tl!("Polar distance"));
+                ui.add(egui::DragValue::new(&mut s.polardist).speed(0.05).range(0.0..=1e6));
+            });
         });
         ui.checkbox(&mut s.gridmode, crate::tl!("Grid On (F7)"));
         ui.horizontal(|ui| {
             ui.label(crate::tl!("Grid spacing"));
-            ui.add(egui::DragValue::new(&mut s.gridunit.x).speed(0.05).range(0.0001..=1e6));
+            ui.add(egui::DragValue::new(&mut gridunit.x).speed(0.05).range(0.0..=1e6).clamp_existing_to_range(false));
             ui.label(crate::tl!("Major line every"));
             ui.add(egui::DragValue::new(&mut s.gridmajor).range(1..=100));
         });
@@ -61,6 +88,7 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             });
         });
         s.polarang = deg.to_radians();
+        tracking_options(ui, s);
         ui.separator();
         ui.heading(crate::tl!("Object Snap"));
         let mut on = s.osmode & cadcraft_engine::snap::mode::OFF == 0;
@@ -100,9 +128,61 @@ fn dsettings(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                     ui.radio_value(&mut s.dynpi_absolute, false, crate::tl!("Relative"));
                     ui.radio_value(&mut s.dynpi_absolute, true, crate::tl!("Absolute"));
                 });
+                // DYNPROMPT: the prompt and its options (Down Arrow) beside the cursor.
+                ui.checkbox(&mut s.dynprompt, crate::tl!("Show command prompting near the crosshairs"));
             });
         });
         ui.checkbox(&mut s.orthomode, crate::tl!("Ortho (F8)"));
+    });
+    // Drawing edits go through the same command as the CLI, including dirty state and undo.
+    for (name, before, after) in [("SNAPUNIT", settings.snapunit, snapunit), ("GRIDUNIT", settings.gridunit, gridunit)] {
+        if before != after {
+            let _ = app.run("setvar", json!({ "name": name, "value": [after.x, after.y] }));
+        }
+    }
+}
+
+/// The polar and object snap tracking options of Drafting Settings: additional angles
+/// (POLARMODE bit 4, POLARADDANG), tracking on every polar angle (bit 2) and angles relative to
+/// the last segment (bit 1).
+fn tracking_options(ui: &mut egui::Ui, s: &mut cadcraft_engine::Settings) {
+    use cadcraft_engine::snap::tracking::polarmode;
+    /// A radio button for POLARMODE `bit` being `on`.
+    fn flag(ui: &mut egui::Ui, flags: &mut u32, bit: u32, on: bool, label: &str) {
+        if ui.radio((*flags & bit != 0) == on, label).clicked() {
+            *flags = if on { *flags | bit } else { *flags & !bit };
+        }
+    }
+    let mut additional = s.polar_flags & polarmode::ADDITIONAL != 0;
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut additional, crate::tl!("Additional angles")).changed() {
+            s.polar_flags ^= polarmode::ADDITIONAL;
+        }
+        // The list as typed (degrees separated by `;`), kept while it doesn't parse yet.
+        let id = ui.id().with("polaraddang");
+        let shown = cadcraft_engine::sysvars::format_angle_list(&s.polaraddang);
+        let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
+        let resp = ui.add_enabled(additional, egui::TextEdit::singleline(&mut text).desired_width(140.0));
+        if resp.changed()
+            && let Some(angles) = cadcraft_engine::sysvars::parse_angle_list(&text)
+        {
+            s.polaraddang = angles;
+        }
+        if resp.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, text));
+        } else {
+            ui.data_mut(|d| d.remove::<String>(id));
+        }
+    });
+    ui.label(crate::tl!("Object Snap Tracking Settings"));
+    ui.horizontal(|ui| {
+        flag(ui, &mut s.polar_flags, polarmode::TRACK_POLAR, false, crate::tl!("Track orthogonally only"));
+        flag(ui, &mut s.polar_flags, polarmode::TRACK_POLAR, true, crate::tl!("Track using all polar angle settings"));
+    });
+    ui.label(crate::tl!("Polar angle measurement"));
+    ui.horizontal(|ui| {
+        flag(ui, &mut s.polar_flags, polarmode::RELATIVE, false, crate::tl!("Absolute"));
+        flag(ui, &mut s.polar_flags, polarmode::RELATIVE, true, crate::tl!("Relative to last segment"));
     });
 }
 
@@ -317,87 +397,11 @@ fn blocks(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 /// the insertion point.
 fn insert_block(app: &mut CadApp, name: &str) {
     app.start("insert");
-    if !app.session.running.as_ref().is_some_and(|r| r.id == "insert") {
+    if app.session.running.as_ref().is_none_or(|r| r.id != "insert") {
         return;
     }
     if let Err(e) = app.session.input(cadcraft_engine::Input::Text(name.to_string())) {
         app.session.echo(e.to_string());
-    }
-}
-
-/// The multiline text editor shown while MTEXT asks for its contents.
-fn mtext_editor(app: &mut CadApp, ctx: &egui::Context) {
-    let active = app.session.running.as_ref().is_some_and(|r| r.id == "mtext")
-        && app.session.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point);
-    let id = egui::Id::new("mtext_editor_buffer");
-    if !active {
-        ctx.data_mut(|d| d.remove::<String>(id));
-        return;
-    }
-    let mut buf = ctx.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_default();
-    let mut submit = None;
-    let mut cancel = false;
-    egui::Window::new(crate::tl!("Text Editor"))
-        .id(egui::Id::new("Text Editor"))
-        .collapsible(false)
-        .resizable(true)
-        .default_size(vec2(460.0, 220.0))
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(crate::tl!("Style: Standard"));
-                ui.separator();
-                let h = app.session.doc().map(|d| d.header.f64("TEXTSIZE", 0.2)).unwrap_or(0.2);
-                ui.label(crate::tf!("Height: {height}", height = format!("{h:.4}")));
-                ui.separator();
-                if ui.button(crate::tl!("B")).on_hover_text(crate::tl!("Bold")).clicked() {
-                    buf.push_str("{\\fArial|b1;}");
-                }
-                if ui.button("⅟").on_hover_text(crate::tl!("Stack (type 1/2 then select)")).clicked() {
-                    buf.push_str("\\S1/2;");
-                }
-                if ui.button("°").on_hover_text(crate::tl!("Degree")).clicked() {
-                    buf.push_str("%%d");
-                }
-                if ui.button("±").on_hover_text(crate::tl!("Plus/minus")).clicked() {
-                    buf.push_str("%%p");
-                }
-                if ui.button("⌀").on_hover_text(crate::tl!("Diameter")).clicked() {
-                    buf.push_str("%%c");
-                }
-            });
-            let r = ui.add(
-                egui::TextEdit::multiline(&mut buf)
-                    .desired_rows(6)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(crate::tl!("Type text; Enter starts a new paragraph")),
-            );
-            if !r.has_focus() && buf.is_empty() {
-                r.request_focus();
-            }
-            ui.horizontal(|ui| {
-                if ui.button(crate::tl!("OK")).clicked() || (r.has_focus() && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter))) {
-                    submit = Some(buf.replace('\n', "\\P"));
-                }
-                if ui.button(crate::tl!("Cancel")).clicked() {
-                    cancel = true;
-                }
-                let finish = if ui.ctx().os().is_mac() { crate::tl!("⌘↩ to finish") } else { crate::tl!("Ctrl+Enter to finish") };
-                ui.label(RichText::new(finish).small());
-            });
-        });
-    ctx.data_mut(|d| d.insert_temp(id, buf));
-    if let Some(t) = submit {
-        ctx.data_mut(|d| d.remove::<String>(id));
-        // The editor holds the whole contents: one input, then Enter ends MTEXT's text entry.
-        if !t.is_empty() {
-            let _ = app.session.input(cadcraft_engine::Input::Text(t));
-        }
-        if app.session.running.as_ref().is_some_and(|r| r.id == "mtext") {
-            let _ = app.session.input(cadcraft_engine::Input::Enter);
-        }
-    } else if cancel {
-        ctx.data_mut(|d| d.remove::<String>(id));
-        app.session.cancel();
     }
 }
 
@@ -437,8 +441,10 @@ mod tests {
         assert_eq!(app.session.current_prompt().map(|p| p.message), Some("Specify insertion point".to_string()));
 
         app.session.input(Input::Point(Vec2::new(5.0, 6.0))).unwrap();
-        app.session.input(Input::Enter).unwrap();
-        app.session.input(Input::Enter).unwrap();
+        // X scale, Y scale and rotation take their defaults.
+        for _ in 0..3 {
+            app.session.input(Input::Enter).unwrap();
+        }
         assert!(app.session.running.is_none());
         let d = app.session.doc().unwrap();
         let mut ins = Vec::new();
