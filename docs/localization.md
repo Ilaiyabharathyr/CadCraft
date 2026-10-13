@@ -1,7 +1,8 @@
 # Interface languages
 
 Choose **Edit → Interface Language** and select **Auto (system language)**, **English**,
-**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, or **Čeština** (Czech).
+**Українська**, **Português (Brasil)**, **Deutsch**, **Español**, **Čeština** (Czech), **Русский**,
+**Français**, **简体中文** or **ไทย** (Thai).
 The interface updates without restarting, including the native macOS menus.
 The choice is saved with the other interface preferences (`cadcraft.prefs`, beside the theme):
 eframe storage on the desktop, browser local storage on the web. Installations without a saved
@@ -10,7 +11,7 @@ choice use Auto.
 Auto uses the first supported language in the operating system's preferred locales, or the
 browser's `navigator.languages` on the web. BCP 47 and POSIX tags select their primary language:
 `uk-UA` → `uk`, `de_AT.UTF-8` → `de`, `es-MX` → `es`, `pt_BR.UTF-8` → `pt-BR`,
-`cs-CZ` and `cs_CZ.UTF-8` → `cs`. Unsupported languages fall back to English.
+`cs-CZ` and `cs_CZ.UTF-8` → `cs`, `th-TH` → `th`. Unsupported languages fall back to English.
 Set `CADCRAFT_LOCALE=cs-CZ` to override the desktop's locale for a launch.
 An explicit saved language choice takes precedence over that override.
 
@@ -21,7 +22,7 @@ Automation can select the language through the existing control channel:
 ```
 
 The `ui.set` method also accepts `{"interfaceLanguage":"cs"}`. Supported values are `auto`,
-`en`, `uk`, `pt-BR`, `de`, `es`, and `cs`; invalid values are rejected without changing the current
+`en`, `uk`, `pt-BR`, `de`, `es`, `cs`, `ru`, `fr`, `zh` and `th`; invalid values are rejected without changing the current
 selection. Resetting palettes keeps the language choice.
 
 ## Translation coverage
@@ -47,7 +48,20 @@ system's own file-picker controls follow the existing behavior.
 
 The bundled egui fonts cover Ukrainian (`Ґґ Єє Іі Її`), German (`ÄÖÜ äöü ß`), and Czech
 (`ÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ áčďéěíňóřšťúůýž`, including typographic quotes `„…“`).
-The translations add no font assets and work on the web without system fonts.
+These translations add no font assets and work on the web without system fonts.
+
+Chinese and Thai are not in the bundled fonts, and no font is added for them: the interface
+loads one the computer already has (`theme::cjk_font`, `theme::thai_font`: Thonburi or Tahoma on
+macOS, Leelawadee UI or Tahoma on Windows, Noto Sans Thai or a TLWG font elsewhere). The Thai font is
+loaded in every interface language, so Thai file names and text read too. Without a font, and
+on the web, the interface stays English and choosing the language says why. egui places
+one glyph per code point without OpenType shaping, so Thai vowels and tone marks sit where the
+font's own glyph offsets put them: readable, but a tone mark above an upper vowel is not raised
+the way a shaping engine would raise it.
+
+Thai has 1,231 catalog rows covering the reference catalog (AI-assisted, by @NakaSato). CAD
+terms Thai drafters use in English are transliterated (เลเยอร์, บล็อก, แฮทช์, โพลีไลน์, วิวพอร์ต,
+สแนป); command IDs and typed keywords stay English.
 
 ## Adding translations
 
@@ -63,6 +77,7 @@ The implementation follows the display-time catalog pattern used by
 - `@plural` entries hold the language's forms for integer counts: Ukrainian `one|few|many`,
   German and Spanish `one|other`, Brazilian Portuguese `one|other` (0 and 1 are `one`),
   Czech `one|few|other` (1; 2–4; everything else, including 0, 11, 21 and 22).
+  Chinese and Thai have no plural: both forms of their `one|other` rows read the same.
   The API takes `u64`, so fractional counts are not accepted.
 - Register a new catalog in `i18n::LANGUAGES`, add its preference variant and code/name,
   and set its integer plural rule and form count on the `Language` row.
