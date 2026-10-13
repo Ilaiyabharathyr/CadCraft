@@ -255,6 +255,7 @@ fn menubar_has_no_overlaps() {
         for menu in menus::MENUS {
             let mut h = harness(scale);
             open(&mut h, menu);
+            snapshot(&mut h, &format!("{}-{scale}", menu.to_lowercase()));
             let shapes = clipped(&h);
             let fill = Tokens::get().menu_bg;
             let (at, popup) = shapes
