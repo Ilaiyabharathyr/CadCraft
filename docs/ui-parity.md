@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Properties Inspector shows block insertion X, Y and stored Z) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (compact About window) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How CADCraft's interaction compares with AutoCAD's: point entry, object snaps, tracking, dynamic
 input, grips, selection, the command line, chrome and navigation. A drafter's speed in AutoCAD
@@ -167,6 +167,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 | Options / Preferences dialog | many tabs | **no** (issue #23) |
 | Customisation (CUI, aliases editor, tool palettes) | yes | no |
 | Themes | Dark, Light | Dark, Light, System (#179) |
+| About window | compact, fixed size | compact 400 pt window: app icon, version with build id, architecture, licence, project links; Escape closes it without cancelling the running command |
 | Accessibility | VoiceOver basics | AccessKit through eframe; screen-reader coverage untested; magnifier issue #39 |
 
 ## Navigation (≈ 55%)
@@ -201,6 +202,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | About window redesigned: compact and fixed at 400 pt, app icon, version with build id, architecture, licence and project links; the Contributors and Models tabs are no longer shown there |
 | 2026-10-12 | minor | Block references now show their stored insertion X/Y/Z in the Properties Inspector, including nonzero Z; fields are read-only |
 | 2026-10-11 | minor | Isometric drafting (#556): isometric snap and grid, ISODRAFT, ISOPLANE (F5), ortho along isoplane axes, ELLIPSE Isocircle |
 | 2026-10-11 | minor | Object snap tracking, Extension, Parallel, Apparent Intersection, additional polar angles (#379): tracking 30% → 70%, object snaps 40% → 45%; total 43% → 48% |
