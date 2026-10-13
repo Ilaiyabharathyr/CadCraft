@@ -19,8 +19,11 @@ fn dxf(src: &str) -> String {
     out
 }
 
-/// The DOOR drawing as `code value` lines (shared with the engine's dynamic grip tests).
-const FIXTURE: &str = include_str!("data/dynblock_door.txt");
+/// The DOOR drawing as `code value` lines (shared with the engine's dynamic grip tests), with
+/// LF line ends whatever a checkout gave the file.
+fn fixture() -> String {
+    include_str!("data/dynblock_door.txt").replace("\r\n", "\n")
+}
 
 fn h(hex: &str) -> Handle {
     Handle::parse_hex(hex).unwrap()
@@ -28,7 +31,7 @@ fn h(hex: &str) -> Handle {
 
 #[test]
 fn a_dynamic_block_reads_its_parameters_and_actions() {
-    let d = read_dxf(dxf(FIXTURE).as_bytes()).unwrap();
+    let d = read_dxf(dxf(&fixture()).as_bytes()).unwrap();
     assert_eq!(d.block("DOOR").unwrap().entities.len(), 3);
     let m = dynamic_block(&d, "door").expect("Door is a dynamic block");
     assert!(dynamic_block(&d, "*Model_Space").is_none(), "model space has no graph here");
@@ -70,7 +73,7 @@ fn a_dynamic_block_reads_its_parameters_and_actions() {
 
 #[test]
 fn a_saved_drawing_keeps_the_dynamic_block_as_read() {
-    let d = read_dxf(dxf(FIXTURE).as_bytes()).unwrap();
+    let d = read_dxf(dxf(&fixture()).as_bytes()).unwrap();
     let before = dynamic_block(&d, "Door").unwrap();
     let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
     // The objects may get new handles on save; the block's objects keep theirs, and the graph's
@@ -112,7 +115,7 @@ fn by_node(mut m: DynamicBlock) -> DynamicBlock {
 fn damaged_dynamic_block_data_is_skipped_not_trusted() {
     // Counts far beyond the groups present, values that aren't numbers, a graph member that
     // doesn't exist and a dictionary entry with no graph: reading must not panic or hang.
-    let src = FIXTURE
+    let src = fixture()
         .replace("93 2\n331 31", "93 999999999\n331 31")
         .replace("92 2\n303 Open", "92 -7\n303 Open")
         .replace("175 3", "175 2147483647")
@@ -128,7 +131,7 @@ fn damaged_dynamic_block_data_is_skipped_not_trusted() {
     assert!(m.other.is_empty(), "a member that doesn't exist is skipped");
 
     let tags = |v: &[(i32, &str)]| v.iter().map(|(c, s)| RawTag { code: *c, value: (*s).into() }).collect::<Vec<_>>();
-    let mut d = read_dxf(dxf(FIXTURE).as_bytes()).unwrap();
+    let mut d = read_dxf(dxf(&fixture()).as_bytes()).unwrap();
     let f = std::sync::Arc::make_mut(&mut d.foreign);
     if let Some(dict) = f.objects.iter_mut().find(|o| o.handle == h("60")) {
         dict.tags = tags(&[(100, "AcDbDictionary"), (3, "ACAD_ENHANCEDBLOCK")]);
@@ -179,7 +182,7 @@ fn with_references() -> String {
         ]
         .concat()
     };
-    let src = dxf(FIXTURE);
+    let src = dxf(&fixture());
     let lines = |s: String| dxf(&s);
     src.replace("0\nENDTAB\n", &format!("{}0\nENDTAB\n", lines(record("A1", "*U1") + &record("B1", "*U2"))))
         .replace(
@@ -347,8 +350,8 @@ fn a_lookup_value_sets_its_distance() {
 #[test]
 fn connections_are_read_in_either_group_order() {
     // AutoCAD writes 92 301 93 302; the DWG bridge 92 93 301 302.
-    let src = FIXTURE.replace("92 2\n93 2\n301 EndXDelta\n302 EndYDelta", "92 2\n301 EndXDelta\n93 2\n302 EndYDelta");
-    assert_ne!(src, FIXTURE);
+    let src = fixture().replace("92 2\n93 2\n301 EndXDelta\n302 EndYDelta", "92 2\n301 EndXDelta\n93 2\n302 EndYDelta");
+    assert_ne!(src, fixture());
     let d = read_dxf(dxf(&src).as_bytes()).unwrap();
     let m = dynamic_block(&d, "Door").unwrap();
     assert_eq!(m.actions[0].connections, [(2, "EndXDelta".to_string()), (2, "EndYDelta".to_string())]);
@@ -358,7 +361,7 @@ fn connections_are_read_in_either_group_order() {
 fn parameters_in_a_stretch_selection_are_carried_along() {
     // A point parameter (Position1 at (35, 0), inside the stretch frame) in the stretch's selection.
     let point = "0 BLOCKPOINTPARAMETER\n5 68\n330 61\n100 AcDbEvalExpr\n90 7\n98 33\n99 232\n100 AcDbBlockElement\n300 Point\n98 33\n99 232\n1071 0\n100 AcDbBlockParameter\n280 1\n281 0\n100 AcDbBlock1PtParameter\n1010 35\n1020 0\n1030 0\n93 12\n170 0\n171 0\n100 AcDbBlockPointParameter\n303 Position1\n304\n1011 35\n1021 4\n1031 0\n";
-    let src = FIXTURE
+    let src = fixture()
         .replace("71 1\n330 30\n1010 40", "71 2\n330 30\n330 68\n1010 40")
         .replace("91 5\n93 32\n95 6\n360 67", "91 5\n93 32\n95 6\n360 67\n92 -1\n92 -1\n92 -1\n92 -1\n91 6\n93 32\n95 7\n360 68")
         .replace("0 BLOCKFLIPGRIP", &format!("{point}0 BLOCKFLIPGRIP"));
@@ -456,7 +459,7 @@ fn a_change_is_recorded_in_the_references_history_and_data() {
 /// grip 8 has no object) and the visibility parameter's grip (10).
 fn with_grips() -> cadcraft_doc::Drawing {
     let grip = "0 BLOCKLINEARGRIP\n5 68\n330 61\n100 AcDbEvalExpr\n90 9\n98 33\n99 232\n100 AcDbBlockElement\n300 End Grip\n98 33\n99 232\n1071 0\n";
-    let src = FIXTURE
+    let src = fixture()
         .replace("170 4\n91 0\n91 0\n", "170 4\n91 8\n91 9\n")
         .replace("1030 0\n93 0\n170 0\n171 0\n100 AcDbBlockVisibilityParameter", "1030 0\n93 10\n170 0\n171 0\n100 AcDbBlockVisibilityParameter")
         .replace("91 5\n93 32\n95 6\n360 67", "91 5\n93 32\n95 6\n360 67\n92 -1\n92 -1\n92 -1\n92 -1\n91 6\n93 32\n95 9\n360 68")
