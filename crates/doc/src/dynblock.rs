@@ -68,7 +68,15 @@ pub struct Parameter {
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ParameterKind {
     /// A distance between two points (Distance1).
-    Linear { base: Vec3, end: Vec3, label: String, description: String, values: ValueSet },
+    Linear {
+        base: Vec3,
+        end: Vec3,
+        label: String,
+        description: String,
+        values: ValueSet,
+        /// The value changes the end point (`false`) or both points from the midpoint (`true`).
+        from_midpoint: bool,
+    },
     /// A distance and an angle from a base point.
     Polar { base: Vec3, end: Vec3 },
     /// Horizontal and vertical distances from a base point.
@@ -189,7 +197,11 @@ pub enum ActionKind {
         columns: Vec<LookupColumn>,
         rows: Vec<Vec<String>>,
     },
-    Move,
+    /// Moves the objects by the change of the parameter values it follows.
+    Move {
+        multiplier: f64,
+        angle_offset: f64,
+    },
     Scale,
     Rotate,
     Flip,
@@ -336,7 +348,8 @@ fn parameter(kind: &str, secs: &[(&str, &[RawTag])]) -> ParameterKind {
             let mut c = Cursor::new(section(secs, "AcDbBlockLinearParameter"));
             let label = c.string(305);
             let description = c.string(306);
-            ParameterKind::Linear { base, end, label, description, values: value_set(&mut c) }
+            let from_midpoint = Cursor::new(section(secs, "AcDbBlock2PtParameter")).int(177) == 1;
+            ParameterKind::Linear { base, end, label, description, values: value_set(&mut c), from_midpoint }
         }
         "BLOCKPOINTPARAMETER" => {
             let mut c = Cursor::new(section(secs, "AcDbBlockPointParameter"));
@@ -403,7 +416,12 @@ fn action(handle: Handle, node: i32, name: String, kind: &str, secs: &[(&str, &[
     let (connections, kind) = match kind {
         "BLOCKSTRETCHACTION" => stretch(section(secs, "AcDbBlockStretchAction")),
         "BLOCKLOOKUPACTION" => (Vec::new(), lookup(section(secs, "AcDbBlockLookupAction"))),
-        "BLOCKMOVEACTION" => (two_connections(section(secs, "AcDbBlockMoveAction")), ActionKind::Move),
+        "BLOCKMOVEACTION" => {
+            let tags = section(secs, "AcDbBlockMoveAction");
+            let mut c = Cursor::new(tags);
+            let (multiplier, angle_offset) = (c.real(140), c.real(141));
+            (two_connections(tags), ActionKind::Move { multiplier, angle_offset })
+        }
         "BLOCKSCALEACTION" => (Vec::new(), ActionKind::Scale),
         "BLOCKROTATEACTION" => (Vec::new(), ActionKind::Rotate),
         "BLOCKFLIPACTION" => (Vec::new(), ActionKind::Flip),
@@ -414,12 +432,12 @@ fn action(handle: Handle, node: i32, name: String, kind: &str, secs: &[(&str, &[
     Action { node, handle, name, at, selection, connections, kind }
 }
 
-/// Two connections: parameter ids (92, 93) and the values they read (301, 302).
+/// Two connections: parameter ids (92, 93) and the values they read (301, 302). Writers order
+/// these groups differently (92 93 301 302, or 92 301 93 302), so each is read on its own.
 fn two_connections(tags: &[RawTag]) -> Vec<(i32, String)> {
-    let mut c = Cursor::new(tags);
-    let (a, b) = (c.int(92), c.int(93));
-    let (na, nb) = (c.string(301), c.string(302));
-    vec![(a, na), (b, nb)]
+    let first = |code: i32| Cursor::new(tags).next(code).unwrap_or_default().to_string();
+    let int = |code: i32| first(code).trim().parse().unwrap_or(0);
+    vec![(int(92), first(301)), (int(93), first(302))]
 }
 
 /// A stretch action: its two connections, the frame (72 count, 1011/1021 points), the objects

@@ -682,17 +682,95 @@ fn changing_the_visibility_state_makes_a_new_anonymous_block() {
 }
 
 #[test]
-fn what_can_not_be_changed_yet_is_refused_and_changes_nothing() {
+fn bad_values_are_refused_and_change_nothing() {
     let mut d = read_dxf(with_references().as_bytes()).unwrap();
     let before = d.clone();
-    // Size's table sets Width (a distance), which needs the stretch action.
     let ps = cadcraft_doc::dynblock::custom_properties(&d, h("80")).unwrap().1;
     let editable: Vec<(&str, bool)> = ps.iter().map(|p| (p.name.as_str(), p.editable)).collect();
-    assert_eq!(editable, [("Visibility1", true), ("Width", false), ("Size", false)]);
-    for (name, value) in [("Size", "Narrow"), ("Width", "30"), ("Visibility1", "Ajar"), ("Nope", "x"), ("", "")] {
+    assert_eq!(editable, [("Visibility1", true), ("Width", true), ("Size", true)]);
+    for (name, value) in
+        [("Visibility1", "Ajar"), ("Size", "Huge"), ("Width", "wide"), ("Width", "0"), ("Width", "-3"), ("Width", "inf"), ("Nope", "x"), ("", "")]
+    {
         assert!(cadcraft_doc::dynblock::set_property(&mut d, h("80"), name, value).is_err(), "{name}={value}");
     }
     assert!(cadcraft_doc::dynblock::set_property(&mut d, h("30"), "Visibility1", "Open").is_err(), "not a reference");
     assert!(cadcraft_doc::dynblock::set_property(&mut d, h("FFFF"), "Visibility1", "Open").is_err());
     assert_eq!(d, before);
+}
+
+/// The ends of the lines of the block reference `insert` shows, in block coordinates.
+fn line_ends(d: &cadcraft_doc::Drawing, insert: &str) -> Vec<(f64, f64)> {
+    let b = d.block(&block_of(d, insert)).unwrap();
+    b.entities.iter().filter_map(|e| if let cadcraft_doc::EntityKind::Line(l) = &e.kind { Some((l.b.x, l.b.y)) } else { None }).collect()
+}
+
+#[test]
+fn a_distance_stretches_the_block_and_snaps_to_its_values() {
+    let mut d = read_dxf(with_references().as_bytes()).unwrap();
+    // Width 36 → 30: the stretch moves the leaf's end (line 30, vertex 1) by -6 in x.
+    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Width", "30").unwrap();
+    assert_eq!(line_ends(&d, "80")[0], (30.0, 0.0));
+    let p = props(&d, "80").1;
+    assert_eq!((p[1].1.as_str(), p[2].1.as_str()), ("30.0000", "Narrow"), "the lookup follows");
+    // 33 is not in Width's list (30, 32, 36): the nearest is taken.
+    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "width", "33").unwrap();
+    assert_eq!(line_ends(&d, "80")[0], (32.0, 0.0));
+    assert_eq!(props(&d, "80").1[2].1, "Custom", "no Size row has 32");
+    // Lengths are in drawing units: reference 81 is scaled 2, so 72 is Width 36.
+    cadcraft_doc::dynblock::set_property(&mut d, h("81"), "Width", "72").unwrap();
+    assert_eq!(props(&d, "81").1[1].1, "72.0000");
+    // A save keeps the stretched geometry and the values.
+    let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
+    assert_eq!(line_ends(&again, "80")[0], (32.0, 0.0));
+    assert_eq!(props(&again, "80").1[1].1, "32.0000");
+}
+
+#[test]
+fn a_lookup_value_sets_its_distance() {
+    let mut d = read_dxf(with_references().as_bytes()).unwrap();
+    cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Size", "narrow").unwrap();
+    assert_eq!(line_ends(&d, "80")[0], (30.0, 0.0));
+    let p = props(&d, "80").1;
+    assert_eq!((p[1].1.as_str(), p[2].1.as_str()), ("30.0000", "Narrow"));
+}
+
+#[test]
+fn connections_are_read_in_either_group_order() {
+    // AutoCAD writes 92 301 93 302; the DWG bridge 92 93 301 302.
+    let src = FIXTURE.replace("92 2\n93 2\n301 EndXDelta\n302 EndYDelta", "92 2\n301 EndXDelta\n93 2\n302 EndYDelta");
+    assert_ne!(src, FIXTURE);
+    let d = read_dxf(dxf(&src).as_bytes()).unwrap();
+    let m = dynamic_block(&d, "Door").unwrap();
+    assert_eq!(m.actions[0].connections, [(2, "EndXDelta".to_string()), (2, "EndYDelta".to_string())]);
+}
+
+#[test]
+fn parameters_in_a_stretch_selection_are_carried_along() {
+    // A point parameter (Position1 at (35, 0), inside the stretch frame) in the stretch's selection.
+    let point = "0 BLOCKPOINTPARAMETER\n5 68\n330 61\n100 AcDbEvalExpr\n90 7\n98 33\n99 232\n100 AcDbBlockElement\n300 Point\n98 33\n99 232\n1071 0\n100 AcDbBlockParameter\n280 1\n281 0\n100 AcDbBlock1PtParameter\n1010 35\n1020 0\n1030 0\n93 0\n170 0\n171 0\n100 AcDbBlockPointParameter\n303 Position1\n304\n1011 35\n1021 4\n1031 0\n";
+    let src = FIXTURE
+        .replace("71 1\n330 30\n1010 40", "71 2\n330 30\n330 68\n1010 40")
+        .replace("91 5\n93 32\n95 6\n360 67", "91 5\n93 32\n95 6\n360 67\n92 -1\n92 -1\n92 -1\n92 -1\n91 6\n93 32\n95 7\n360 68")
+        .replace("0 BLOCKFLIPGRIP", &format!("{point}0 BLOCKFLIPGRIP"));
+    let mut d = read_dxf(dxf(&src).as_bytes()).unwrap();
+    assert!(dynamic_block(&d, "Door").unwrap().parameters.iter().any(|p| p.kind.label() == Some("Position1")));
+    // A reference to Door with Door's own values.
+    let at = d.model.iter().count();
+    assert_eq!(at, 0);
+    let ins = cadcraft_doc::Insert {
+        block: "Door".into(),
+        insert: cadcraft_doc::geom::Vec3::new(0.0, 0.0, 0.0),
+        scale: cadcraft_doc::geom::Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: Vec::new(),
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+    };
+    let r = d.add(&cadcraft_doc::Space::Model, cadcraft_doc::Common::default(), cadcraft_doc::EntityKind::Insert(ins)).unwrap();
+    cadcraft_doc::dynblock::set_property(&mut d, r, "Width", "30").unwrap();
+    let ps = cadcraft_doc::dynblock::custom_properties(&d, r).unwrap().1;
+    let pos: Vec<(&str, &str)> = ps.iter().filter(|p| p.name.starts_with("Position1")).map(|p| (p.name.as_str(), p.value.as_str())).collect();
+    assert_eq!(pos, [("Position1 X", "29.0000"), ("Position1 Y", "0.0000")]);
 }
