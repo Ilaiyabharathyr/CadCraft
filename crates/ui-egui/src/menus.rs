@@ -33,6 +33,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
     ("ui.panel.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
+    ("ui.toggle.accesskeys", "Menu Access Keys", &["View", "Accessibility", "Menu Access Keys"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
     ("ui.animations.off", "Off", &["View", "Accessibility", "Animation Effects", "Off"], None),
@@ -242,6 +243,12 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             toggle(&mut app.ui.system_cursor, params);
             Ok(Value::Null)
         }
+        "ui.toggle.accesskeys" => {
+            let mut on = app.menu_access_keys();
+            toggle(&mut on, params);
+            app.ui.menu_access_keys = Some(on);
+            Ok(json!({ "on": on }))
+        }
         "ui.toggle.viewcube" => {
             toggle(&mut app.ui.show_viewcube, params);
             Ok(Value::Null)
@@ -318,7 +325,17 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         "ui.resetpalettes" => {
             let (menu, theme, interface_language, save_format) = (app.ui.in_window_menu, app.ui.theme, app.ui.interface_language, app.ui.save_format);
             let (animations, save_version) = (app.ui.animations, std::mem::take(&mut app.ui.save_version));
-            app.ui = crate::UiState { in_window_menu: menu, theme, animations, interface_language, save_format, save_version, ..Default::default() };
+            let menu_access_keys = app.ui.menu_access_keys;
+            app.ui = crate::UiState {
+                in_window_menu: menu,
+                menu_access_keys,
+                theme,
+                animations,
+                interface_language,
+                save_format,
+                save_version,
+                ..Default::default()
+            };
             Ok(Value::Null)
         }
         "ui.start" => {
@@ -489,6 +506,7 @@ fn mark_for(app: &CadApp, id: &str) -> Option<Mark> {
         "ui.toggle.ucsicon" => Mark::Check(ui.show_ucs_icon),
         "ui.toggle.viewcube" => Mark::Check(ui.show_viewcube),
         "ui.toggle.systemcursor" => Mark::Check(ui.system_cursor),
+        "ui.toggle.accesskeys" => Mark::Check(app.menu_access_keys()),
         "ui.toggle.toolbar" => Mark::Check(ui.show_toolbar),
         "ui.toggle.filetabs" => Mark::Check(ui.show_file_tabs),
         "ui.toggle.statusbar" => Mark::Check(ui.show_status_bar),
@@ -887,6 +905,8 @@ struct Access {
     /// Alt is down, and nothing else was pressed since it went down.
     alt_down: bool,
     alt_alone: bool,
+    /// Alt and a letter opens a menu (`CadApp::menu_access_keys`): the letters may be underlined.
+    letters: bool,
     /// The keyboard drives the menus: access keys are underlined.
     keyboard: bool,
     /// A menu of the bar was open on the last frame.
@@ -931,7 +951,18 @@ fn keep_arrows(ui: &egui::Ui, resp: &egui::Response) {
 }
 
 fn pressed(ui: &egui::Ui, key: egui::Key) -> bool {
-    ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key))
+    take_key(ui.ctx(), key)
+}
+
+/// Whether `key` was pressed; the menus then answer it. egui moves the focus on an arrow key by
+/// itself when the focused widget has not claimed the arrows yet (`keep_arrows` takes a frame),
+/// which would carry the focus a second step: that move is called off.
+fn take_key(ctx: &egui::Context, key: egui::Key) -> bool {
+    let taken = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key));
+    if taken {
+        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
+    taken
 }
 
 /// Open the submenu of the row `row`, its first row focused.
@@ -943,6 +974,11 @@ fn open_submenu(ui: &egui::Ui, row: egui::Id) {
     // one after its row was drawn, so it shows on the next.
     MenuState::mark_shown(ui.ctx(), id);
     access_mut(ui.ctx(), |a| a.focus_first = Some(id));
+}
+
+/// A typed character as rows are matched by: letters without their case.
+fn fold(c: char) -> Option<char> {
+    c.to_uppercase().next()
 }
 
 /// A row as the keyboard sees it.
@@ -958,8 +994,9 @@ struct Shown<'a> {
 fn entry_row<'a>(ui: &mut egui::Ui, e: &'a Entry, keys: &[(&str, char)], clicked: &mut Option<String>) -> Option<Shown<'a>> {
     use egui::containers::menu::{MenuState, SubMenu};
     let key_of = |name: &str| keys.iter().find(|(target, _)| *target == name).map(|(_, key)| *key);
-    let underline = access(ui.ctx()).keyboard || ui.input(|i| i.modifiers.alt);
-    let initial = |label: &str| label.chars().next().map(|c| c.to_ascii_uppercase());
+    let a = access(ui.ctx());
+    let underline = a.letters && (a.keyboard || ui.input(|i| i.modifiers.alt));
+    let initial = |label: &str| label.chars().next().and_then(fold);
     match e {
         Entry::Item { label, id, shortcut, enabled, icon, mark } => {
             let key = key_of(id);
@@ -1050,7 +1087,8 @@ fn menu_keys(ui: &mut egui::Ui, shown: &[Shown], menu: egui::Id, clicked: &mut O
         focus(rows.first());
         return;
     }
-    if rows.is_empty() || MenuState::from_ui(ui, |state, _| state.open_item.is_some()) {
+    // Keys typed into a text field are that field's.
+    if rows.is_empty() || ui.ctx().text_edit_focused() || MenuState::from_ui(ui, |state, _| state.open_item.is_some()) {
         return;
     }
     let focused = ui.memory(|m| m.focused());
@@ -1065,12 +1103,14 @@ fn menu_keys(ui: &mut egui::Ui, shown: &[Shown], menu: egui::Id, clicked: &mut O
     } else if pressed(ui, egui::Key::End) {
         focus(rows.last());
     }
+    // A key names a Latin letter or a digit; a letter of another script arrives as typed text.
     let typed: Vec<char> = ui.input(|i| {
         let letter = |e: &egui::Event| match e {
             egui::Event::Key { key, pressed: true, modifiers, .. } if !modifiers.ctrl && !modifiers.command => {
                 let mut name = key.name().chars();
                 name.next().filter(|c| c.is_ascii_alphanumeric() && name.next().is_none())
             }
+            egui::Event::Text(text) => text.chars().next().filter(|c| !c.is_ascii()).and_then(fold),
             _ => None,
         };
         i.events.iter().filter_map(letter).collect()
@@ -1135,26 +1175,36 @@ fn bar_button(
     resp
 }
 
-/// What the Alt key asks of the bar this frame: the menu to open (Alt and its letter), and
-/// whether to put the focus on the bar (Alt pressed and released alone, where that is the custom).
-fn access_keys(ctx: &egui::Context, alt: bool, tree: &[(String, Vec<Entry>)]) -> (Option<usize>, bool) {
+/// What the Alt key asks of the bar this frame.
+#[derive(Default)]
+struct AltKey {
+    /// Alt and this menu's letter were pressed: open it.
+    open: Option<usize>,
+    /// Alt was pressed and released alone: put the focus on the bar,
+    focus_bar: bool,
+    /// or, with the keyboard already in charge, leave the bar.
+    leave: bool,
+}
+
+fn access_keys(ctx: &egui::Context, alt: bool, tree: &[(String, Vec<Entry>)]) -> AltKey {
     // Not while a text field has the focus: there Alt and a letter types a character.
-    let ours = access(ctx).keyboard || !ctx.egui_wants_keyboard_input();
-    let mut open = None;
-    if ours {
-        ctx.input_mut(|i| {
-            for (n, (name, _)) in tree.iter().enumerate() {
-                let key = menu_key(name).and_then(|key| egui::Key::from_name(key.encode_utf8(&mut [0; 4])));
-                if key.is_some_and(|key| i.consume_key(egui::Modifiers::ALT, key)) {
-                    open = Some(n);
-                }
-            }
-            if open.is_some() {
-                i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
-            }
-        });
+    let mut asked = AltKey::default();
+    if !access(ctx).letters || ctx.text_edit_focused() {
+        access_mut(ctx, |a| (a.alt_down, a.alt_alone) = (alt, false));
+        return asked;
     }
-    let busy = open.is_some()
+    ctx.input_mut(|i| {
+        for (n, (name, _)) in tree.iter().enumerate() {
+            let key = menu_key(name).and_then(|key| egui::Key::from_name(key.encode_utf8(&mut [0; 4])));
+            if key.is_some_and(|key| i.consume_key(egui::Modifiers::ALT, key)) {
+                asked.open = Some(n);
+            }
+        }
+        if asked.open.is_some() {
+            i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
+        }
+    });
+    let busy = asked.open.is_some()
         || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::PointerButton { .. })));
     let tapped = access_mut(ctx, |a| {
         if alt && !a.alt_down {
@@ -1168,23 +1218,18 @@ fn access_keys(ctx: &egui::Context, alt: bool, tree: &[(String, Vec<Entry>)]) ->
         tapped
     });
     // On macOS the Option key alone does nothing.
-    if !tapped || ctx.os().is_mac() || !ours {
-        return (open, false);
+    if tapped && !ctx.os().is_mac() {
+        if access(ctx).keyboard {
+            asked.leave = true;
+        } else {
+            access_mut(ctx, |a| a.keyboard = true);
+            asked.focus_bar = true;
+        }
     }
-    if access(ctx).keyboard {
-        leave_keyboard(ctx);
-        return (open, false);
-    }
-    access_mut(ctx, |a| a.keyboard = true);
-    (open, true)
+    asked
 }
 
-/// Back to the pointer: close the open menu and give up the focus the menus held.
-fn leave_keyboard(ctx: &egui::Context) {
-    egui::Popup::close_all(ctx);
-    release_focus(ctx);
-}
-
+/// Give up the focus the menus held, so typing reaches the command line again.
 fn release_focus(ctx: &egui::Context) {
     access_mut(ctx, |a| (a.keyboard, a.focus_first) = (false, None));
     ctx.memory_mut(|m| {
@@ -1198,7 +1243,7 @@ fn release_focus(ctx: &egui::Context) {
 /// menu when one is open; down opens the focused name's menu. `buttons` are the names' widget
 /// and popup ids; `starting` when this frame put the keyboard in charge.
 fn bar_keys(ctx: &egui::Context, buttons: &[(egui::Id, egui::Id)], starting: bool) {
-    let key = |key| ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key));
+    let key = |key| take_key(ctx, key);
     let focused = ctx.memory(|m| m.focused());
     let on_bar = buttons.iter().position(|(id, _)| Some(*id) == focused);
     let open = buttons.iter().position(|(_, popup)| egui::Popup::is_id_open(ctx, *popup));
@@ -1244,9 +1289,9 @@ fn bar_keys(ctx: &egui::Context, buttons: &[(egui::Id, egui::Id)], starting: boo
     }
     let any_open = buttons.iter().any(|(_, popup)| egui::Popup::is_id_open(ctx, *popup));
     access_mut(ctx, |a| a.any_open = any_open);
-    if any_open {
-        // An open menu takes the keys: nothing typed reaches the command line. Escape stays,
-        // for egui to close the menu with.
+    if any_open && !ctx.text_edit_focused() {
+        // An open menu takes the keys: nothing typed reaches the command line (a text field
+        // with the focus keeps its own). Escape stays, for egui to close the menu with.
         ctx.input_mut(|i| {
             i.events.retain(|e| !matches!(e, egui::Event::Text(_)) && !matches!(e, egui::Event::Key { key, .. } if *key != egui::Key::Escape))
         });
@@ -1257,6 +1302,7 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
     use egui::containers::menu::MenuConfig;
     let t = crate::theme::Tokens::get();
     let tree = tree(app);
+    let letters = app.menu_access_keys();
     let mut clicked = None;
     egui::Panel::top("cc_menubar").exact_size(BAR_HEIGHT).frame(egui::Frame::NONE.fill(t.list_bg)).show(ui, |ui| {
         let bar = ui.max_rect();
@@ -1287,10 +1333,11 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
 
         let ctx = ui.ctx().clone();
         let alt = ctx.input(|i| i.modifiers.alt && !i.modifiers.ctrl && !i.modifiers.command);
-        let (open_now, focus_bar) = access_keys(&ctx, alt, &tree);
+        access_mut(&ctx, |a| a.letters = letters);
+        let asked = access_keys(&ctx, alt, &tree);
         // With one menu open, pointing at another name opens that menu instead.
         let was_open = access(&ctx).any_open;
-        let underline = alt || access(&ctx).keyboard;
+        let underline = letters && (alt || access(&ctx).keyboard);
         let font = egui::FontId::proportional(13.0);
         let mut buttons = Vec::new();
         for (n, (name, entries)) in tree.iter().enumerate() {
@@ -1314,13 +1361,16 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             keep_arrows(ui, &resp);
             let popup = egui::Popup::default_response_id(&resp);
             let open = egui::Popup::is_id_open(&ctx, popup);
-            if open_now == Some(n) {
+            if asked.leave && open {
+                egui::Popup::close_id(&ctx, popup);
+            }
+            if asked.open == Some(n) {
                 egui::Popup::open_id(&ctx, popup);
                 access_mut(&ctx, |a| (a.keyboard, a.focus_first) = (true, Some(popup)));
             } else if was_open && !open && resp.hovered() && !access(&ctx).keyboard {
                 egui::Popup::open_id(&ctx, popup);
             }
-            if focus_bar && n == 0 {
+            if asked.focus_bar && n == 0 {
                 resp.request_focus();
             }
             if resp.has_focus() && !open && resp.clicked() && !resp.clicked_by(egui::PointerButton::Primary) {
@@ -1338,7 +1388,10 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
                 .show(|ui| menu_rows(ui, entries, MENU_ROW_WIDTH, true, row_keys(name), popup, &mut clicked));
         }
-        bar_keys(&ctx, &buttons, open_now.is_some() || focus_bar);
+        if asked.leave {
+            release_focus(&ctx);
+        }
+        bar_keys(&ctx, &buttons, asked.open.is_some() || asked.focus_bar);
     });
     if let Some(id) = clicked {
         activate(app, &id);

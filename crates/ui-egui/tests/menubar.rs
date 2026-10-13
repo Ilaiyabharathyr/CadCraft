@@ -446,3 +446,100 @@ fn alt_alone_puts_the_focus_on_the_bar() {
     h.run_steps(3);
     assert!(h.ctx.memory(|m| m.focused()).is_none());
 }
+
+#[test]
+fn option_and_a_letter_types_on_macos_unless_access_keys_are_on() {
+    let mut h = harness(1.0);
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.run_steps(2);
+    assert!(!h.state().menu_access_keys(), "off by default on macOS");
+    // Option+E is a dead key there: it must reach the command line, not open Edit.
+    let option_e = |h: &mut Harness<'static, CadApp>| {
+        h.event(egui::Event::Text("é".into()));
+        alt(h, egui::Key::E);
+    };
+    option_e(&mut h);
+    assert!(!is_open(&h, "Undo"), "Option+E opens no menu on macOS");
+    assert_eq!(h.state().cmd.buffer, "é", "the character reaches the command line");
+    assert!(!underlined(&h, "Edit"));
+
+    // Arrows and letters still work in a menu opened with the pointer.
+    open(&mut h, "Edit");
+    press(&mut h, egui::Key::ArrowDown);
+    assert!(focused_row(&h, "Undo"));
+    assert!(!underlined(&h, "Undo"), "no access keys to underline");
+    press(&mut h, egui::Key::Escape);
+
+    // View ▸ Accessibility ▸ Menu Access Keys turns them on.
+    h.state_mut().cmd.buffer.clear();
+    h.state_mut().run("ui.toggle.accesskeys", serde_json::json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().menu_access_keys());
+    alt(&mut h, egui::Key::E);
+    assert!(focused_row(&h, "Undo") && underlined(&h, "Edit"));
+}
+
+/// A key and the character it types arrive in one frame (the harness above sends one event per
+/// frame): the character of Alt and a menu's letter is swallowed with the key where access
+/// keys are on, and typed where they are off.
+#[test]
+fn the_character_of_an_access_key_is_not_typed() {
+    for (os, typed) in [(egui::os::OperatingSystem::Nix, ""), (egui::os::OperatingSystem::Mac, "é")] {
+        let mut app = CadApp::new(Session::default(), Services::default());
+        app.run("new", serde_json::json!({})).unwrap();
+        app.ui.start_tab = false;
+        app.ui.in_window_menu = true;
+        let ctx = egui::Context::default();
+        ctx.set_os(os);
+        let frame = |app: &mut CadApp, events: Vec<egui::Event>, modifiers: egui::Modifiers| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 760.0))),
+                events: std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect(),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            out.textures_delta.clear(); // no renderer here
+        };
+        for _ in 0..3 {
+            frame(&mut app, Vec::new(), egui::Modifiers::NONE);
+        }
+        let key = egui::Event::Key { key: egui::Key::E, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
+        frame(&mut app, vec![key, egui::Event::Text("é".into())], egui::Modifiers::ALT);
+        frame(&mut app, Vec::new(), egui::Modifiers::NONE);
+        assert_eq!(app.cmd.buffer, typed, "{os:?}");
+        assert_eq!(
+            ctx.memory(|m| m.focused()).is_some(),
+            typed.is_empty(),
+            "{os:?}: the Edit menu opens with a row focused only where access keys are on"
+        );
+    }
+}
+
+#[test]
+fn letters_of_other_scripts_step_through_rows_by_their_initial() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness(1.0);
+    h.state_mut().run("ui.language", serde_json::json!({"lang": "ru"})).unwrap();
+    h.run_steps(3);
+    let file = find(&h, "Файл", BAR_BUTTON).expect("the bar is in Russian");
+    click(&mut h, file);
+    let focused = |h: &Harness<'static, CadApp>| -> Option<String> {
+        h.query_all(egui_kittest::kittest::By::new().predicate(|n| n.is_focused()))
+            .filter(|n| (n.rect().height() - ROW).abs() < 0.5)
+            .find_map(|n| n.accesskit_node().label())
+    };
+    let type_s = |h: &mut Harness<'static, CadApp>| {
+        h.event(egui::Event::Text("с".into()));
+        h.run_steps(4);
+    };
+    type_s(&mut h);
+    let first = focused(&h).expect("a row starting with С takes the focus");
+    assert!(first.starts_with('С'), "{first}");
+    type_s(&mut h);
+    let second = focused(&h).expect("the next row starting with С");
+    assert!(second.starts_with('С') && second != first, "{first} then {second}");
+    assert_eq!(h.state().cmd.buffer, "", "the typing stays in the menu");
+}

@@ -158,6 +158,7 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
                 Icon::Accessibility,
                 &[
                     cmd("ui.toggle.systemcursor"),
+                    cmd("ui.toggle.accesskeys"),
                     sub("Animation Effects", &[cmd("ui.animations.system"), cmd("ui.animations.on"), cmd("ui.animations.off")]),
                 ],
             ),
@@ -530,6 +531,7 @@ pub const ACCESS_KEYS: &[(&str, char, &[(&str, char)])] = &[
             ("new", 'N'),
             ("ui.newtemplate", 'T'),
             ("open", 'O'),
+            ("Open Recent", 'R'),
             ("close", 'C'),
             ("closeall", 'E'),
             ("qsave", 'S'),
@@ -538,6 +540,7 @@ pub const ACCESS_KEYS: &[(&str, char, &[(&str, char)])] = &[
             ("import", 'I'),
             ("export", 'E'),
             ("exportpdf", 'F'),
+            ("pdfbook", 'K'),
             ("plot", 'P'),
             ("preview", 'V'),
             ("pagesetup", 'G'),
@@ -614,6 +617,7 @@ pub const ACCESS_KEYS: &[(&str, char, &[(&str, char)])] = &[
         'T',
         &[
             ("script", 'R'),
+            ("appload", 'L'),
             ("compare", 'C'),
             ("dataextraction", 'X'),
             ("group", 'G'),
@@ -624,6 +628,8 @@ pub const ACCESS_KEYS: &[(&str, char, &[(&str, char)])] = &[
             ("count", 'N'),
             ("Parametric", 'P'),
             ("xopen", 'X'),
+            ("bedit", 'B'),
+            ("Xref and Block In-place Editing", 'E'),
             ("dsettings", 'F'),
             ("ui.spacemouse", '3'),
             ("options", 'O'),
@@ -890,6 +896,8 @@ mod tests {
                     Row::Sub { label, .. } => Some(*label),
                     Row::Sep => None,
                 })
+                // Built from the recent files, not from the layout.
+                .chain((*menu == "File").then_some(menus::OPEN_RECENT))
                 .collect();
             let mut seen = BTreeSet::new();
             for (target, key) in *keys {
