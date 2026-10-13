@@ -127,7 +127,8 @@ impl Frame {
 /// `Break`: the frame ends here (a click made another tile current).
 pub(super) fn navigate(app: &mut CadApp, ui: &mut egui::Ui, frame: &mut Frame) -> ControlFlow<()> {
     let Frame { rect, scale, xf, hover_pos, scroll, middle_down, pressed_primary, dbl_middle, inside, .. } = *frame;
-    let (resp, tiles) = (&frame.resp, &frame.tiles);
+    let resp = frame.resp.clone();
+    let tiles = &frame.tiles;
     // Which device is scrolling? On macOS, trackpads (and Magic Mouse) report precise point
     // deltas; notched mouse wheels report lines. The answer is sticky because egui spreads a wheel
     // notch over several frames. Elsewhere (browsers, Wayland smooth-scroll mice) ordinary wheels
@@ -217,8 +218,9 @@ pub(super) fn navigate(app: &mut CadApp, ui: &mut egui::Ui, frame: &mut Frame) -
 /// press-and-drag selection window, right-click menus and the hover highlight.
 /// `Break`: the frame ends here (a double-click switched spaces or started TEXTEDIT).
 pub(super) fn clicks(app: &mut CadApp, ui: &mut egui::Ui, frame: &mut Frame) -> ControlFlow<()> {
-    let Frame { rect, scale, xf, xf_paper, hover_pos, mods, middle_down, pressed_secondary, dbl_primary, inside, .. } = *frame;
-    let (resp, active_vp, active_clip) = (&frame.resp, &frame.active_vp, &frame.active_clip);
+    let Frame { rect, scale, xf, xf_paper, hover_pos, mods, middle_down, pressed_primary, pressed_secondary, dbl_primary, inside, .. } = *frame;
+    let resp = frame.resp.clone();
+    let (active_vp, active_clip) = (&frame.active_vp, &frame.active_clip);
     // Double-click a viewport to work inside it; double-click the sheet outside it to return.
     if inside
         && dbl_primary
@@ -272,8 +274,8 @@ pub(super) fn clicks(app: &mut CadApp, ui: &mut egui::Ui, frame: &mut Frame) -> 
     let point_prompt = app.session.current_prompt().is_some_and(|p| cadcraft_engine::pointmod::accepts(&p))
         && app.session.pending_window.is_none()
         && !app.session.realtime_zoom_active();
-    frame.pressed_primary = frame.pressed_primary || (point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary));
-    if point_prompt && inside && frame.pressed_primary && !middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
+    let pressed_primary = pressed_primary || (point_prompt && resp.drag_stopped_by(egui::PointerButton::Primary));
+    if point_prompt && inside && pressed_primary && !middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
         let releases: Vec<egui::Pos2> = ui.input(|i| {
             i.events
                 .iter()
@@ -341,7 +343,7 @@ pub(super) fn clicks(app: &mut CadApp, ui: &mut egui::Ui, frame: &mut Frame) -> 
 
     // A click on the Dynamic Input options menu picks the keyword; elsewhere it closes the menu.
     let mut picked = false;
-    if frame.pressed_primary && app.cmd.options.is_some() {
+    if pressed_primary && app.cmd.options.is_some() {
         match hover_pos.and_then(|h| app.cmd.option_at(h)) {
             Some(k) => {
                 crate::cmdline::pick_option(app, k);
@@ -357,10 +359,10 @@ pub(super) fn clicks(app: &mut CadApp, ui: &mut egui::Ui, frame: &mut Frame) -> 
         app.session.pending_window = None;
         app.canvas.drag_window = false;
     }
-    frame.pressed_primary = frame.pressed_primary && !picked && !hatch_dialog && !idle_dbl;
+    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl;
     // Clicks.
     if inside
-        && frame.pressed_primary
+        && pressed_primary
         && !middle_down
         && let Some(p) = app.canvas.cursor
     {
@@ -432,9 +434,9 @@ pub(super) fn clicks(app: &mut CadApp, ui: &mut egui::Ui, frame: &mut Frame) -> 
     }
     crate::dyngrips::menu(app, ui.ctx(), &xf);
     if idle && !app.canvas.snap_menu && app.canvas.grip_menu.is_some() {
-        grip_menu(app, resp);
+        grip_menu(app, &resp);
     } else if idle || app.canvas.snap_menu {
-        crate::context_menu::show(app, resp);
+        crate::context_menu::show(app, &resp);
     }
 
     // Hover highlight (throttled to cursor movement).
