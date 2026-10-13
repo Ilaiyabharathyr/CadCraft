@@ -67,6 +67,7 @@ mod native {
         let mut doc = std::panic::catch_unwind(|| acadrust::DwgReader::from_stream(Cursor::new(bytes)).read())
             .map_err(|_| "the DWG reader failed on this file".to_string())?
             .map_err(|e| format!("DWG: {e}"))?;
+        viewport_ids(&mut doc);
         table_merges(&mut doc);
         table_style_rows(&mut doc, false);
         let mut out = CappedWriter { buf: Vec::new(), limit: limits.max_dxf_bytes, exceeded: false };
@@ -82,6 +83,30 @@ mod native {
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
         Ok(add_header_vars(out.buf, &doc.header))
+    }
+
+    /// DWG has no viewport ids; they follow the order in each paper-space block, starting
+    /// with the overall sheet view (1). acadrust 0.6.3 assigns them only in the active layout,
+    /// leaving the others at 0. Restore those ids before the DXF writer exports them.
+    fn viewport_ids(doc: &mut acadrust::CadDocument) {
+        use acadrust::tables::TableEntry;
+        let blocks: Vec<_> = doc
+            .block_records
+            .iter()
+            .filter(|b| b.name().to_ascii_uppercase().starts_with("*PAPER_SPACE"))
+            .map(|b| b.entity_handles.clone())
+            .collect();
+        for handles in blocks {
+            let mut id = 0i16;
+            for handle in handles {
+                if let Some(acadrust::entities::EntityType::Viewport(v)) = doc.get_entity_mut(handle) {
+                    id = id.saturating_add(1);
+                    if v.id == 0 {
+                        v.id = id;
+                    }
+                }
+            }
+        }
     }
 
     /// Merged table cells onto the cells. acadrust 0.6.3 reads a 2010+ (AC1024+) DWG table's

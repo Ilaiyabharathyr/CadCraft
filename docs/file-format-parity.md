@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (unvisited native layouts initialize on first activation; prior format support unchanged) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (native layout visibility, attribute alignment, MTEXT indents and Finder document delivery corrected) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -39,7 +39,9 @@ title/header suppression.
 
 On macOS the app accepts both its fallback DWG type and `com.autodesk.autocad.dwg`, the
 type AutoCAD registers for the extension, so Finder's Open With can offer CADCraft even
-when AutoCAD is installed. The handler remains an alternate; it does not change the default app.
+when AutoCAD is installed. Open Documents Apple events are queued during launch and handled
+through the same OPEN command as the dialog, including when the app is already running. The
+handler remains an alternate; it does not change the default app.
 
 | DWG version | Code | AutoCAD 2027 | CADCraft read | CADCraft write | Tested how |
 |---|---|---|---|---|---|
@@ -76,7 +78,7 @@ early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% wr
 |---|---|---|---|
 | LINE, POINT, CIRCLE, ARC, ELLIPSE, LWPOLYLINE (widths, bulges, elevation), SPLINE, RAY, XLINE | yes | yes | round-trip tests |
 | POLYLINE 2D/3D | yes | yes (as LWPOLYLINE / 3D POLYLINE) | polyface and polygon meshes flattened: lossy |
-| TEXT, MTEXT, ATTDEF, INSERT + ATTRIB | yes | yes | ATTDEF prompt kept (#137) |
+| TEXT, MTEXT, ATTDEF, INSERT + ATTRIB | yes | yes | ATTDEF prompt kept (#137); attributes use vertical group 74 independently of field-length group 73; MTEXT distinguishes absolute `\\pi` and height-relative `\\pxi` indents |
 | DIMENSION (all 7 kinds) | yes | yes, with anonymous `*D` blocks | a reopened dimension's `*D` block is regenerated under its name, unreferenced ones dropped (#495); DIMASSOC objects written |
 | LEADER | yes | yes | |
 | MULTILEADER | yes (#459) | yes, native MULTILEADER with MLEADERSTYLE (#459) | several landings per multileader are folded into one; per-object overrides and annotative scale contexts not kept |
@@ -139,10 +141,22 @@ unvisited, unsized layouts reproduced the empty-sheet discrepancy. The corrected
 app shows the model in the initialized landscape presentation. The user file and reference
 screenshots remain outside the repository; regression tests use synthetic drawings.
 
+Manual checks on 2026-10-13 also covered a user-provided R2013 drawing template and synthetic
+text in AutoCAD 2026. The corrected import keeps attributes vertically centred, uses the WCS
+view target for untwisted top views, restores viewport ids in inactive DWG layouts, and reads
+native viewport-frozen layer handles (including the overall paper view). Absolute `\pi`
+indents and height-relative `\pxi` were compared at text heights 2 and 4 in AutoCAD. ISOCP
+outline fonts missing from system font directories can use installed narrow sans regular,
+italic and bold faces, after FONTALT; this is an approximation, not exact proprietary glyphs.
+Original font names remain in saved files. Private application bundles are never searched.
+The source template's missing externally referenced image remains unresolved. No reference
+files, fonts or screenshots are committed.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Native Finder document delivery (cold and running), attribute group 74, absolute/relative MTEXT paragraph lengths, ISOCP system-font substitution, top-view targets, native viewport freeze lists and inactive-layout viewport ids; synthetic regressions and manual template/AutoCAD checks; exact missing-font glyphs and absent external images remain limitations |
 | 2026-10-13 | minor | First activation initializes imported, unsized empty layouts with landscape media and a model viewport; configured or populated sheets and erased viewports stay unchanged. Unvisited state survives DXF/DWG save; paper framing fits custom media and narrow drawing areas. Synthetic regression tests and a local user-DWG check added; weighted percentages not re-measured |
 | 2026-10-11 | minor | Rows refreshed for merged work: code pages and `\M+` (#505), MULTILEADER (#459), IMAGE, MLINE/HELIX/REGION/TOLERANCE, VPORT/VIEW/UCS tables, modelled and raw objects, foreign data (#528), DWT templates and user `.lin`/`.pat`/`.pgp` files (#552), PDF output (#567, #571), plotter devices (#564), data extraction (#433, #534); weighted percentages not re-measured |
 | 2026-10-11 | minor | DXF (ASCII and binary) and DWG saved at 2000–2018, 2018 by default (#421) |

@@ -97,6 +97,8 @@ struct OsnapRef {
 /// Handles and names the entity writer needs from the rest of the file.
 #[derive(Default)]
 struct Ctx {
+    /// Upper-case layer name → LAYER record handle (native viewport freeze lists).
+    layers: HashMap<String, String>,
     /// Multiline styles: MLINESTYLE handles and their dictionary.
     mlines: crate::dxf_mline::Plan,
     /// First viewport of each layout that has no paper-space viewport (id 1) → the layout's index;
@@ -969,6 +971,11 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             let clip = v.clip.filter(|h| *h != e.handle && d.entity(*h).is_some());
             let flags = 32768 | if v.locked { 16384 } else { 0 } | if clip.is_some() { 65536 } else { 0 } | if v.on { 0 } else { 131072 };
             w.i(90, flags);
+            for name in &v.frozen_layers {
+                if let Some(h) = cx.layers.get(&name.to_ascii_uppercase()) {
+                    w.s(331, h);
+                }
+            }
             if let Some(h) = clip {
                 w.s(340, h.hex());
             }
@@ -1754,7 +1761,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // LAYER
     let th = table_head(&mut w, "LAYER", d.layers.len());
     for l in &d.layers {
-        record_head(&mut w, "LAYER", &th, "AcDbLayerTableRecord");
+        let h = record_head(&mut w, "LAYER", &th, "AcDbLayerTableRecord");
+        cx.layers.insert(l.name.to_ascii_uppercase(), h);
         w.s(2, &l.name);
         w.i(70, i64::from(l.frozen) | if l.vp_freeze_new { 2 } else { 0 } | if l.locked { 4 } else { 0 });
         let aci = match l.color {

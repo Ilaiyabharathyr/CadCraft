@@ -105,7 +105,7 @@ fn attrib_props(t: &T, insert_layer: &str) -> AttribProps {
     }
 }
 
-fn text_from(t: &T) -> Text {
+fn text_from(t: &T, attribute: bool) -> Text {
     let h = match t.i(72).unwrap_or(0) {
         1 => HAlign::Center,
         2 => HAlign::Right,
@@ -114,7 +114,8 @@ fn text_from(t: &T) -> Text {
         5 => HAlign::Fit,
         _ => HAlign::Left,
     };
-    let v = match t.i(73).or_else(|| t.i(74)).unwrap_or(0) {
+    // ATTRIB/ATTDEF group 73 is the unused field length, not vertical justification.
+    let v = match t.i(if attribute { 74 } else { 73 }).unwrap_or(0) {
         1 => VAlign::Bottom,
         2 => VAlign::Middle,
         3 => VAlign::Top,
@@ -167,6 +168,18 @@ fn mirror_text(t: &mut Text, align: Option<Vec3>, insert: Vec3) {
             t.insert = insert;
             t.align_pt = align;
         }
+    }
+}
+
+/// Our 2D viewport centre is in WCS, whereas DXF group 12 is relative to the view target
+/// (group 17). For an untwisted top view the conversion is a translation. Keep the existing
+/// projection for other directions/twists, which the 2D viewport model does not yet represent.
+fn viewport_center(t: &T) -> Vec2 {
+    let center = Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0));
+    if t.fd(16, 0.0).abs() < 1e-12 && t.fd(26, 0.0).abs() < 1e-12 && t.fd(36, 1.0) > 0.0 && t.fd(51, 0.0).abs() < 1e-12 {
+        center + t.p(17).xy()
+    } else {
+        center
     }
 }
 
@@ -292,7 +305,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         "HELIX" => EntityKind::Helix(helix(tags)),
         "RAY" => EntityKind::Ray(RayLine { base: t.p(10), dir: t.p(11) }),
         "XLINE" => EntityKind::XLine(RayLine { base: t.p(10), dir: t.p(11) }),
-        "TEXT" => EntityKind::Text(text_from(&t)),
+        "TEXT" => EntityKind::Text(text_from(&t, false)),
         "MTEXT" => {
             // Contents: code 3 chunks followed by code 1.
             let mut contents = String::new();
@@ -336,7 +349,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
         }
         "ATTDEF" => EntityKind::AttDef(Attrib {
             tag: t.s(2).unwrap_or_default(),
-            text: text_from(&t),
+            text: text_from(&t, true),
             invisible: t.i(70).unwrap_or(0) & 1 != 0,
             constant: t.i(70).unwrap_or(0) & 2 != 0,
             prompt: t.s(3).unwrap_or_default(),
@@ -440,7 +453,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             center: t.p(10),
             width: t.fd(40, 1.0),
             height: t.fd(41, 1.0),
-            view_center: Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0)),
+            view_center: viewport_center(&t),
             view_height: t.fd(45, 1.0),
             id: t.i(69).unwrap_or(0) as u32,
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
@@ -901,6 +914,8 @@ fn native_gradient(tags: &[Tag]) -> Option<Gradient> {
 /// Handle maps and references gathered while reading.
 #[derive(Default)]
 struct Rx {
+    /// LAYER record handle (upper case) → layer name (native VIEWPORT group 331).
+    layers: HashMap<String, String>,
     /// STYLE record handle (upper case) → text style name.
     styles: HashMap<String, String>,
     /// BLOCK_RECORD handle (upper case) → block name.
@@ -983,6 +998,13 @@ fn entity_plot_style(tags: &[Tag], rx: &Rx) -> Option<String> {
 /// needs the file's handle maps.
 fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &mut Rx) {
     match (kind, k) {
+        ("VIEWPORT", EntityKind::Viewport(v)) => {
+            for layer in tags.iter().filter(|t| t.code == 331).take(4096).filter_map(|t| rx.layers.get(&t.str().trim().to_ascii_uppercase())) {
+                if !v.frozen_layers.iter().any(|n| n.eq_ignore_ascii_case(layer)) {
+                    v.frozen_layers.push(layer.clone());
+                }
+            }
+        }
         ("DIMENSION", EntityKind::Dimension(dm)) => {
             dm.overrides = crate::dxf_ext::read_dstyle(tags, &rx.styles, &rx.brs, &rx.ltypes);
             dm.assoc = crate::dxf_ext::read_assoc(tags);
@@ -1104,7 +1126,7 @@ fn parse_entities(recs: &[(String, Vec<Tag>)], d: &mut Drawing, rx: &mut Rx) -> 
                             let tt = T(t2);
                             attribs.push(Attrib {
                                 tag: tt.s(2).unwrap_or_default(),
-                                text: text_from(&tt),
+                                text: text_from(&tt, true),
                                 invisible: tt.i(70).unwrap_or(0) & 1 != 0,
                                 constant: false,
                                 prompt: String::new(),
@@ -1294,6 +1316,9 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
         let t = T(tg);
         let (Some(h), Some(n)) = (t.s(5), t.s(2)) else { continue };
         match kind.as_str() {
+            "LAYER" => {
+                rx.layers.insert(h.trim().to_ascii_uppercase(), n);
+            }
             "STYLE" => {
                 rx.styles.insert(h.trim().to_ascii_uppercase(), n);
             }
