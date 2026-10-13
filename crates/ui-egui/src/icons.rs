@@ -174,6 +174,20 @@ pub enum Icon {
     Group,
     DrawOrder,
     Mouse3d,
+    Polyline3d,
+    Multiline,
+    Helix,
+    CenterMark,
+    CenterLine,
+    Dimension,
+    DimJogged,
+    DimSpace,
+    DimBreak,
+    Tolerance,
+    Inspection,
+    Oblique,
+    AlignText,
+    DimOverride,
 }
 
 #[derive(Clone, Copy)]
@@ -958,6 +972,8 @@ pub fn paint_tinted(p: &Painter, rect: Rect, icon: Icon, dim: bool, tint: Option
         Regen | NamedViews | Viewports | Ucs | Theme | Accessibility | Xref | DataLink | Layout | LayerState | ColorWheel | Linetype | TextStyle
         | DimStyle | Units | Rename => menu_icon(&Pen { g: 20.0, ..pen }, icon),
         Script | Compare | Group | DrawOrder | Mouse3d => menu_icon(&Pen { g: 20.0, ..pen }, icon),
+        Polyline3d | Multiline | Helix | CenterMark | CenterLine | Dimension | DimJogged | DimSpace | DimBreak | Tolerance | Inspection | Oblique
+        | AlignText | DimOverride => menu_icon(&Pen { g: 20.0, ..pen }, icon),
         // MENU-ARMS
     }
 }
@@ -1178,6 +1194,105 @@ fn menu_icon(m: &Pen, icon: Icon) {
             m.la(7.0, 12.0, 7.0, 7.0);
             m.arc(10.0, 7.0, 3.0, 0.0, 180.0, a);
             m.la(13.0, 7.0, 13.0, 12.0);
+        }
+        Polyline3d => {
+            // A polyline climbing off its base line.
+            m.l(3.0, 15.0, 6.0, 15.0);
+            m.poly(&[(3.0, 15.0), (7.0, 9.0), (11.0, 12.0), (17.0, 5.0)], false, a);
+            m.fill_c(7.0, 9.0, 1.3, m.pt);
+            m.fill_c(11.0, 12.0, 1.3, m.pt);
+        }
+        Multiline => {
+            // Two parallel lines, capped.
+            m.la(3.0, 8.0, 17.0, 8.0);
+            m.la(3.0, 12.0, 17.0, 12.0);
+            m.l(3.0, 8.0, 3.0, 12.0);
+            m.l(17.0, 8.0, 17.0, 12.0);
+        }
+        Helix => {
+            // A spring seen from the side.
+            let coil: Vec<(f32, f32)> = (0..=54)
+                .map(|i| i as f32 * 20.0f32.to_radians())
+                .map(|t| (10.0 + 5.0 * t.cos(), 4.0 + t * 12.0 / (6.0 * std::f32::consts::PI)))
+                .collect();
+            m.poly(&coil, false, a);
+        }
+        CenterMark => {
+            // A cross with a gap round its centre.
+            m.l(10.0, 3.0, 10.0, 7.0);
+            m.l(10.0, 13.0, 10.0, 17.0);
+            m.l(3.0, 10.0, 7.0, 10.0);
+            m.l(13.0, 10.0, 17.0, 10.0);
+            m.la(9.0, 10.0, 11.0, 10.0);
+            m.la(10.0, 9.0, 10.0, 11.0);
+        }
+        CenterLine => {
+            // A dashed line midway between two lines.
+            m.l(5.0, 4.0, 5.0, 16.0);
+            m.l(15.0, 4.0, 15.0, 16.0);
+            for (y0, y1) in [(2.0, 5.0), (7.0, 9.0), (11.0, 13.0), (15.0, 18.0)] {
+                m.la(10.0, y0, 10.0, y1);
+            }
+        }
+        Dimension => {
+            // A dimension line between two extension lines.
+            m.l(3.0, 6.0, 3.0, 14.0);
+            m.l(17.0, 6.0, 17.0, 14.0);
+            m.la(3.0, 10.0, 17.0, 10.0);
+        }
+        DimJogged => {
+            // An arc with a jogged radius line.
+            m.arc(15.0, 15.0, 12.0, 180.0, 90.0, b);
+            m.poly(&[(15.0, 15.0), (12.0, 11.0), (14.0, 10.0), (10.0, 6.0)], false, a);
+        }
+        DimSpace => {
+            // Evenly spaced dimension lines.
+            for y in [6.0, 10.0, 14.0] {
+                m.l(3.0, y, 14.0, y);
+            }
+            m.la(17.0, 4.0, 17.0, 16.0);
+            m.la(16.0, 6.0, 18.0, 6.0);
+            m.la(16.0, 10.0, 18.0, 10.0);
+            m.la(16.0, 14.0, 18.0, 14.0);
+        }
+        DimBreak => {
+            // A dimension line broken where another line crosses.
+            m.l(3.0, 10.0, 8.0, 10.0);
+            m.l(12.0, 10.0, 17.0, 10.0);
+            m.la(9.0, 6.0, 11.0, 14.0);
+        }
+        Tolerance => {
+            // A feature control frame.
+            m.rect(3.0, 6.0, 14.0, 8.0, b);
+            m.l(8.0, 6.0, 8.0, 14.0);
+            m.l(12.0, 6.0, 12.0, 14.0);
+            m.c(5.5, 10.0, 1.3, a);
+        }
+        Inspection => {
+            // An inspection frame with round ends.
+            m.l(6.0, 7.0, 14.0, 7.0);
+            m.l(6.0, 13.0, 14.0, 13.0);
+            m.arc(6.0, 10.0, 3.0, 90.0, 270.0, b);
+            m.arc(14.0, 10.0, 3.0, -90.0, 90.0, b);
+            m.la(8.0, 7.0, 8.0, 13.0);
+            m.la(12.0, 7.0, 12.0, 13.0);
+        }
+        Oblique => {
+            // Slanted extension lines.
+            m.l(5.0, 4.0, 3.0, 16.0);
+            m.l(17.0, 4.0, 15.0, 16.0);
+            m.la(4.0, 10.0, 16.0, 10.0);
+        }
+        AlignText => {
+            // Text centred between two lines.
+            m.l(3.0, 6.0, 17.0, 6.0);
+            m.la(6.0, 10.0, 14.0, 10.0);
+            m.l(3.0, 14.0, 17.0, 14.0);
+        }
+        DimOverride => {
+            // A pencil.
+            m.poly(&[(4.0, 13.0), (11.0, 6.0), (14.0, 9.0), (7.0, 16.0), (4.0, 16.0)], true, b);
+            m.la(12.0, 5.0, 15.0, 8.0);
         }
         // MENU-ICONS
         _ => {}
