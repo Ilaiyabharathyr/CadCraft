@@ -87,6 +87,8 @@ pub struct Tokens {
     pub icon_accent: Color32,
     pub icon_point: Color32,
     pub accent: Color32,
+    /// Foreground for controls filled with the blue accent.
+    pub on_accent: Color32,
     pub selection: Color32,
     pub hover: Color32,
     pub grip: Color32,
@@ -127,26 +129,28 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    // ArtCraft native dark UI roles. Drafting canvas and selection highlights remain independent.
     pub const DARK: Tokens = Tokens {
-        chrome: Color32::from_rgb(0x3b, 0x44, 0x53),
-        chrome_dark: Color32::from_rgb(0x31, 0x38, 0x44),
-        panel: Color32::from_rgb(0x3c, 0x44, 0x52),
-        tab_active: Color32::from_rgb(0x4e, 0x5a, 0x6e),
-        control: Color32::from_rgb(0x50, 0x5a, 0x6d),
-        control_hover: Color32::from_rgb(0x5c, 0x67, 0x7c),
-        border: Color32::from_rgb(0x23, 0x29, 0x30),
+        chrome: Color32::from_rgb(0x0A, 0x0A, 0x0C),
+        chrome_dark: Color32::from_rgb(0x12, 0x13, 0x16),
+        panel: Color32::from_rgb(0x10, 0x10, 0x14),
+        tab_active: Color32::from_rgb(0x1E, 0x1F, 0x22),
+        control: Color32::from_rgb(0x1E, 0x1F, 0x22),
+        control_hover: Color32::from_rgb(0x32, 0x33, 0x37),
+        border: Color32::from_rgb(0x36, 0x37, 0x3A),
         canvas: Color32::from_rgb(0x22, 0x28, 0x2f),
         grid_minor: Color32::from_rgb(0x29, 0x30, 0x3a),
         grid_major: Color32::from_rgb(0x31, 0x39, 0x45),
         axis_x: Color32::from_rgb(0x56, 0x28, 0x29),
         axis_y: Color32::from_rgb(0x28, 0x4a, 0x2e),
-        text: Color32::from_rgb(0xd7, 0xdb, 0xe0),
-        text_dim: Color32::from_rgb(0xa3, 0xaa, 0xb4),
-        text_faint: Color32::from_rgb(0x87, 0x8d, 0x96),
-        icon: Color32::from_rgb(0xcf, 0xd4, 0xdb),
-        icon_accent: Color32::from_rgb(0x4f, 0xa3, 0xf7),
+        text: Color32::from_rgb(0xF2, 0xF1, 0xEE),
+        text_dim: Color32::from_rgb(0xA6, 0xA6, 0xA8),
+        text_faint: Color32::from_rgb(0x71, 0x71, 0x76),
+        icon: Color32::from_rgb(0xF2, 0xF1, 0xEE),
+        icon_accent: Color32::from_rgb(0x2D, 0x81, 0xFF),
         icon_point: Color32::from_rgb(0xf0, 0x7a, 0x3a),
-        accent: Color32::from_rgb(0x3d, 0x8b, 0xfd),
+        accent: Color32::from_rgb(0x2D, 0x81, 0xFF),
+        on_accent: Color32::from_rgb(0x06, 0x06, 0x07),
         selection: Color32::from_rgb(0x4a, 0x8f, 0xff),
         hover: Color32::from_rgb(0x9c, 0xc6, 0xff),
         grip: Color32::from_rgb(0x2f, 0x6b, 0xff),
@@ -159,16 +163,16 @@ impl Tokens {
         window_stroke: Color32::from_rgb(0x6f, 0xa8, 0xff),
         crossing_stroke: Color32::from_rgb(0x7f, 0xe0, 0x7f),
         cmd_bg: Color32::from_rgba_premultiplied(0x34, 0x3c, 0x4a, 0xf0),
-        toggle_on: Color32::from_rgb(0x3d, 0x8b, 0xfd),
-        field: Color32::from_rgb(0x31, 0x38, 0x44),
-        select_bg: Color32::from_rgb(0x3d, 0x8b, 0xfd),
+        toggle_on: Color32::from_rgb(0x2D, 0x81, 0xFF),
+        field: Color32::from_rgb(0x06, 0x06, 0x07),
+        select_bg: Color32::from_rgb(0x20, 0x3B, 0x65),
         canvas_ink: Color32::from_rgb(0xa3, 0xaa, 0xb4),
         cmd_history: Color32::from_rgba_unmultiplied_const(0x2a, 0x30, 0x3a, 170),
-        cmd_border: Color32::from_rgb(0x55, 0x5f, 0x70),
-        cmd_keyword: Color32::from_rgb(0x8f, 0xc1, 0xff),
-        cmd_keyword_hover: Color32::from_rgb(0x2f, 0x5e, 0xa8),
-        list_bg: Color32::from_rgb(0x2b, 0x31, 0x3b),
-        list_row: Color32::from_rgb(0x3a, 0x42, 0x50),
+        cmd_border: Color32::from_rgb(0x77, 0x78, 0x7C),
+        cmd_keyword: Color32::from_rgb(0x59, 0xA7, 0xFF),
+        cmd_keyword_hover: Color32::from_rgb(0x32, 0x33, 0x37),
+        list_bg: Color32::from_rgb(0x10, 0x10, 0x14),
+        list_row: Color32::from_rgb(0x1E, 0x1F, 0x22),
         warn: Color32::from_rgb(0xff, 0xd0, 0x80),
         crosshair: Color32::from_rgb(0xe8, 0xe8, 0xe8),
         paper: Color32::WHITE,
@@ -191,6 +195,7 @@ impl Tokens {
         icon_accent: Color32::from_rgb(0x1b, 0x6f, 0xd6),
         icon_point: Color32::from_rgb(0xd3, 0x5a, 0x1c),
         accent: Color32::from_rgb(0x2f, 0x7c, 0xf6),
+        on_accent: Color32::from_rgb(0x1d, 0x23, 0x2b),
         cmd_bg: Color32::from_rgba_unmultiplied_const(0xf9, 0xfa, 0xfb, 0xf0),
         toggle_on: Color32::from_rgb(0x2f, 0x7c, 0xf6),
         field: Color32::from_rgb(0xff, 0xff, 0xff),
@@ -647,8 +652,12 @@ fn visuals(theme: Theme) -> Visuals {
     v.widgets.inactive.fg_stroke.color = t.text;
     v.widgets.hovered.bg_fill = t.control_hover;
     v.widgets.hovered.weak_bg_fill = t.control_hover;
+    if theme == Theme::Dark {
+        v.widgets.hovered.bg_stroke.color = Color32::from_rgb(0x74, 0xAA, 0xFF);
+    }
     v.widgets.active.bg_fill = t.accent;
     v.widgets.active.weak_bg_fill = t.accent;
+    v.widgets.active.fg_stroke.color = t.on_accent;
     v.selection.bg_fill = t.select_bg;
     v.window_stroke = egui::Stroke::new(1.0, t.border);
     let shadow = Color32::from_black_alpha(if theme == Theme::Dark { 90 } else { 40 });
@@ -681,6 +690,23 @@ pub fn apply(ctx: &egui::Context, theme: Theme, follow_system: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn artcraft_dark_roles_preserve_drafting_and_light() {
+        let dark = super::Tokens::DARK;
+        let light = super::Tokens::LIGHT;
+        assert_eq!(dark.chrome, egui::Color32::from_rgb(0x0A, 0x0A, 0x0C));
+        assert_eq!(dark.panel, egui::Color32::from_rgb(0x10, 0x10, 0x14));
+        assert_eq!(dark.accent, egui::Color32::from_rgb(0x2D, 0x81, 0xFF));
+        assert_eq!(dark.on_accent, egui::Color32::from_rgb(0x06, 0x06, 0x07));
+        assert_eq!(dark.select_bg, egui::Color32::from_rgb(0x20, 0x3B, 0x65));
+        assert_eq!(dark.canvas, light.canvas);
+        assert_eq!(dark.selection, light.selection);
+        assert_eq!(dark.snap, light.snap);
+        assert_eq!(super::visuals(super::Theme::Dark).selection.bg_fill, dark.select_bg);
+        assert_eq!(super::visuals(super::Theme::Dark).widgets.active.fg_stroke.color, dark.on_accent);
+        assert_eq!(light.chrome, egui::Color32::from_rgb(0xE4, 0xE7, 0xEB));
+    }
+
     #[test]
     fn korean_font_rejects_invalid_or_glyphless_files() {
         for bytes in [vec![], vec![0xff; 32], vec![0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]] {
