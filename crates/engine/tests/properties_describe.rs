@@ -153,3 +153,15 @@ fn hostile_requests_never_panic() {
     // Duplicates count once.
     assert_eq!(describe(&mut s, json!({ "handles": [t, t] }))["count"], 1);
 }
+
+#[test]
+fn empty_arrowheads_read_as_the_ones_drawn() {
+    use cadcraft_engine::doc::DimStyle;
+    use cadcraft_engine::properties::{DIM_PROPS, dim_value};
+    let st = serde_json::to_value(DimStyle { arrow_block: "_DOT".into(), ..DimStyle::default() }).unwrap();
+    let p = |field: &str| DIM_PROPS.iter().find(|p| p.field == field).unwrap();
+    // An empty per-end arrowhead draws DIMBLK's; an empty leader arrowhead is closed filled.
+    assert_eq!(dim_value(p("arrowBlock1"), &st), json!("_DOT"));
+    assert_eq!(dim_value(p("arrowBlock"), &st), json!("_DOT"));
+    assert_eq!(dim_value(p("leaderArrowBlock"), &st), json!(""));
+}
