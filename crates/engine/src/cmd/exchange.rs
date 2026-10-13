@@ -313,7 +313,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let sheet = Sheet::from_page(&page, paper::paper_unit_mm(d));
     let lineweights = p.get("lineweights").and_then(Value::as_bool).unwrap_or(if space.is_paper() { page.lineweights } else { true });
-    let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(!space.is_paper());
+    let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(matches!(space, Space::Model));
     let scale = p.get("scale").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
     let width = p.get("width").and_then(Value::as_u64).unwrap_or(PREVIEW_PX).clamp(16, MAX_PREVIEW_PX);
     let height = ((width as f64) * sheet.size.y / sheet.size.x).round();
@@ -333,7 +333,7 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
     let list = cadcraft_render::build_plot(d, &space, &ropts);
     let b = list.bounds;
     // Paper point q shows drawing point (q - to) / k + from.
-    let (from, k, to) = if fit || !space.is_paper() {
+    let (from, k, to) = if fit || space == Space::Model {
         (if b.is_empty() { Vec2::ZERO } else { b.center() }, plot_scale(&b, &sheet, fit, scale), sheet.printable.center())
     } else {
         (Vec2::ZERO, plot_scale(&b, &sheet, fit, scale), Vec2::ZERO)
