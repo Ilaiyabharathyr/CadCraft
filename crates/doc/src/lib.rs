@@ -15,6 +15,7 @@ mod header;
 pub mod library;
 mod plotstyle;
 mod plotter;
+mod refedit;
 mod store;
 mod tables;
 
@@ -30,6 +31,7 @@ pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;
 pub use plotter::*;
+pub use refedit::{RefEdit, WorkItem};
 pub use store::EntityStore;
 pub use tables::*;
 
@@ -57,6 +59,26 @@ pub enum Space {
     #[default]
     Model,
     Paper(String),
+}
+
+impl Space {
+    /// Whether this is a layout's paper space.
+    pub fn is_paper(&self) -> bool {
+        matches!(self, Space::Paper(_))
+    }
+
+    /// The layout whose paper space this is; `None` for model space.
+    pub fn layout(&self) -> Option<&str> {
+        match self {
+            Space::Paper(n) => Some(n),
+            Space::Model => None,
+        }
+    }
+
+    /// The tab name (CTAB): `Model`, or the layout's name.
+    pub fn tab_name(&self) -> &str {
+        self.layout().unwrap_or("Model")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -95,6 +117,9 @@ pub struct Drawing {
     /// Objects hidden for this session by ISOLATEOBJECTS / HIDEOBJECTS. Never written to a file:
     /// a drawing opens with everything shown again.
     pub hidden_objects: BTreeSet<Handle>,
+    /// The in-place block reference edit in progress (REFEDIT). Never written to a file; files are
+    /// written from [`Drawing::committed`].
+    pub refedit: Option<RefEdit>,
 }
 
 impl Default for Drawing {
@@ -148,6 +173,7 @@ impl Drawing {
             scales: imperial_scales(),
             handseed: 0x100,
             hidden_objects: BTreeSet::new(),
+            refedit: None,
         }
     }
 
