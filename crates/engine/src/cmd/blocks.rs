@@ -181,6 +181,7 @@ pub(crate) fn insert_with(
                 prompt: String::new(),
                 props: Default::default(),
                 multiline: ad.multiline.as_ref().map(|ml| ml.transformed(&m)),
+                modes: ad.modes.for_reference(),
             });
         }
     }
@@ -254,6 +255,7 @@ fn attdef_kind(s: &Session, tag: &str, prompt: &str, default: &str, at: Vec2, he
         prompt: prompt.into(),
         props: Default::default(),
         multiline: None,
+        modes: Default::default(),
     })
 }
 
