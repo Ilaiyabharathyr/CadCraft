@@ -85,6 +85,7 @@ mod tests {
                 Some("Arab") => '\u{0628}',
                 Some("Thai") => '\u{0e01}',
                 Some("Hang" | "Kore") => '가',
+                Some("Thai") => '\u{0e01}',
                 _ => 'A',
             };
             assert!(face.is_some_and(|x| x.has_glyph(sample)), "{} lacks {sample}", f.family);
