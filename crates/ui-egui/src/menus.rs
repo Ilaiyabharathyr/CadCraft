@@ -1200,9 +1200,6 @@ fn access_keys(ctx: &egui::Context, alt: bool, tree: &[(String, Vec<Entry>)]) ->
                 asked.open = Some(n);
             }
         }
-        if asked.open.is_some() {
-            i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
-        }
     });
     let busy = asked.open.is_some()
         || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::PointerButton { .. })));
