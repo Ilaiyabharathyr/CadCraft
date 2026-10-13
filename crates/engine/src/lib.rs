@@ -38,7 +38,7 @@ use serde_json::Value;
 pub use cadcraft_doc as doc;
 pub use cadcraft_geom as geom;
 pub use cadcraft_render as render;
-pub use cmd::hatch::{PatternChoice, pattern_choices};
+pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use prompt::{Accept, Drag, Input, Interactive, Picker, Prompt, Step};
 
@@ -78,6 +78,10 @@ impl Default for View {
     fn default() -> Self {
         View { center: Vec2::new(6.0, 4.5), height: 10.0 }
     }
+}
+
+fn usable_view(v: &View) -> bool {
+    v.center.is_finite() && v.height.is_finite() && v.height > 1e-12
 }
 
 /// Tiled model viewports (VPORTS): the session side of the drawing's `*Active` configuration.
@@ -221,7 +225,9 @@ impl DocState {
         }
     }
     /// Map a requested screen view to the paper view, or (in MSPACE) to the viewport's model view.
-    fn store_view(&mut self, v: View) {
+    /// A finite request can still map to a view too large to represent: then nothing changes and
+    /// this returns false.
+    fn store_view(&mut self, v: View) -> bool {
         if let Some((h, vp)) = self.active_viewport() {
             let pv = self.paper_view();
             let k = v.height / pv.height.max(1e-12);
@@ -229,10 +235,17 @@ impl DocState {
                 // A locked viewport keeps its scale: pan/zoom the sheet instead.
                 let k0 = vp.view_height / vp.height;
                 let pc = vp.center.xy() + (v.center - vp.view_center) / k0;
-                self.put_paper_view(View { center: pc, height: v.height / k0 });
+                let paper = View { center: pc, height: v.height / k0 };
+                if !usable_view(&paper) {
+                    return false;
+                }
+                self.put_paper_view(paper);
             } else {
                 let center = v.center - (pv.center - vp.center.xy()) * k;
                 let height = vp.height * k;
+                if !usable_view(&View { center, height }) {
+                    return false;
+                }
                 let doc = Arc::make_mut(&mut self.doc);
                 if let Some(store) = doc.space_mut(&self.space.clone()) {
                     store.modify(h, |e| {
@@ -243,9 +256,10 @@ impl DocState {
                     });
                 }
             }
-            return;
+            return true;
         }
         self.put_paper_view(v);
+        true
     }
     fn put_paper_view(&mut self, v: View) {
         match self.views.iter_mut().find(|(s, _)| *s == self.space) {
@@ -253,18 +267,23 @@ impl DocState {
             None => self.views.push((self.space.clone(), v)),
         }
     }
-    pub fn set_view(&mut self, v: View) {
-        if !(v.center.is_finite() && v.height.is_finite() && v.height > 1e-12) {
-            return;
+    /// Set the view, recording view history. Returns false, changing nothing, when the view (or,
+    /// in MSPACE, the viewport view it maps to) isn't finite with a positive height.
+    pub fn set_view(&mut self, v: View) -> bool {
+        if !usable_view(&v) {
+            return false;
         }
         let old = self.view();
+        if !self.store_view(v) {
+            return false;
+        }
         if old != v {
             self.view_history.push(old);
             if self.view_history.len() > 50 {
                 self.view_history.remove(0);
             }
         }
-        self.store_view(v);
+        true
     }
     /// The active MSPACE viewport when ZOOM works on its own view, as in AutoCAD: extents and
     /// windows fit the viewport, and zooms keep its centre. A locked viewport keeps its scale, so
@@ -559,6 +578,11 @@ pub struct Session {
     /// The last segment given at a point prompt (its base point and the point): polar angles
     /// relative to the last segment (POLARMODE bit 1) are measured from it.
     pub last_segment: Option<(Vec2, Vec2)>,
+    /// The last typed `@distance<angle` input, as `(distance, angle in radians)`.
+    /// Set by [`Session::typed`] and consumed by commands that resolve a deferred
+    /// tangent first point (e.g. [`cmd::draw::LineM`]) when the next point is typed
+    /// rather than clicked. Cleared at [`Session::start`].
+    pub last_polar: Option<(f64, f64)>,
     /// Point modifiers pending at the current point prompt (`FROM`, `M2P`, `.x`, `<a`…).
     pub point_mods: Vec<pointmod::Frame>,
     /// Cursor position in world coordinates (from the UI; used for direct distance entry).
@@ -595,6 +619,8 @@ pub struct Session {
     lisp: lisp::LispState,
     /// How the last LISP run ended (its value or error message).
     lisp_last: Option<std::result::Result<lisp::value::Value, String>>,
+    /// What the last HATCHPICK kept (the Hatch and Gradient dialog's picks).
+    pub hatch_picks: Option<cmd::hatch::HatchPicks>,
 }
 
 impl Default for Session {
@@ -622,6 +648,7 @@ impl Session {
             last_command: None,
             last_point: Vec2::ZERO,
             last_segment: None,
+            last_polar: None,
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
@@ -641,6 +668,7 @@ impl Session {
             plot_window: None,
             lisp: lisp::LispState::default(),
             lisp_last: None,
+            hatch_picks: None,
         }
     }
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -648,6 +676,7 @@ impl Session {
         let d = if metric { Drawing::new_metric() } else { Drawing::new_imperial() };
         let mut st = DocState::new(d, &format!("Drawing{}", self.untitled_counter), None);
         st.set_view_quiet(if metric { View { center: Vec2::new(210.0, 148.5), height: 297.0 } } else { View::default() });
+        self.end_running();
         self.docs.push(st);
         self.active = self.docs.len() - 1;
         self.active
@@ -661,9 +690,31 @@ impl Session {
                 height: (ext.height().max(ext.width() * self.viewport_px.1 / self.viewport_px.0.max(1.0)) * 1.1).max(1e-6),
             });
         }
+        self.end_running();
         self.docs.push(st);
         self.active = self.docs.len() - 1;
         self.active
+    }
+    /// A command still waiting for input belongs to the drawing it started in: end it there
+    /// before another drawing becomes current, so its undo step lands in that drawing.
+    fn end_running(&mut self) {
+        if self.running.is_some() {
+            self.cancel();
+        }
+    }
+
+    /// Add a file read off-thread with [`cmd::file::read_file`] as the active drawing (OPEN's fast
+    /// half). A panic while adding it is reported as an error, never propagated.
+    pub fn finish_open(&mut self, f: cmd::file::ReadFile) -> Result<Value> {
+        let n = self.docs.len();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd::file::finish_open(self, f))) {
+            Ok(r) => r,
+            Err(_) => {
+                self.docs.truncate(n);
+                self.active = self.active.min(self.docs.len().saturating_sub(1));
+                Err(EngineError::Internal("open".into(), "panic".into()))
+            }
+        }
     }
 
     pub fn state(&self) -> Result<&DocState> {
@@ -780,6 +831,11 @@ impl Session {
                 return Err(EngineError::Internal(id.into(), msg));
             }
         };
+        let violation = before.as_ref().and_then(|b| cmd::blocks::refedit::after_command(self, &b.0, spec.id));
+        let result = match (violation, result) {
+            (Some(m), Ok(_)) => Err(EngineError::Other(m)),
+            (_, r) => r,
+        };
         cmd::groups::after_command(self, before.as_ref().map(|b| &b.0));
         cmd::constraints::after_command(self, before.as_ref().map(|b| &b.0), spec.undoable && result.is_ok());
         assoc::after_command(self, before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2));
@@ -813,6 +869,7 @@ impl Session {
 
     /// Start a command by name or alias as if typed at the command line.
     pub fn start(&mut self, name: &str) -> Result<()> {
+        self.last_polar = None;
         let name = name.trim();
         let (transparent, name) = match name.strip_prefix('\'') {
             Some(n) => (true, n),
@@ -832,6 +889,12 @@ impl Session {
                 self.echo(format!("Command: {}", lower.to_ascii_uppercase()));
                 return self.lisp_run_command(&lower, f);
             }
+            // A bare system variable name (ORTHOMODE, GRIDMODE…) acts as SETVAR on that variable.
+            let var = lower.to_ascii_uppercase();
+            if !name.starts_with(['_', '.', '-']) && sysvars::get(self, &var).is_some() {
+                self.start(if transparent { "'setvar" } else { "setvar" })?;
+                return self.input(Input::Text(var));
+            }
             return Err(EngineError::UnknownCommand(name.to_string()));
         };
         if transparent && spec.transparent && self.running.is_some() {
@@ -846,6 +909,12 @@ impl Session {
             }
         }
         let nested = transparent && spec.transparent && self.running.is_some() && spec.interactive.is_some();
+        // Ctrl+Z / U / UNDO while a command's prompt offers its own Undo keyword (LINE, PLINE…)
+        // takes back the last segment and keeps the command running, as the keyword does.
+        if !nested && matches!(spec.id, "u" | "undo") && self.current_prompt().is_some_and(|p| p.keywords.iter().any(|k| k == "Undo")) {
+            self.echo(format!("Command: {}", spec.id.to_ascii_uppercase()));
+            return self.input(Input::Keyword("Undo".into()));
+        }
         if !nested && self.running.is_some() {
             self.cancel();
         }
@@ -1143,6 +1212,9 @@ impl Session {
         self.select_mode = None;
         let label = find_command(&run.id).map(|c| c.label).unwrap_or("Command");
         let _ = cancelled;
+        if let Some(m) = cmd::blocks::refedit::after_command(self, &run.before, &run.id) {
+            self.echo(m);
+        }
         cmd::groups::after_command(self, Some(&run.before));
         cmd::constraints::after_command(self, Some(&run.before), true);
         assoc::after_command(self, Some(&run.before), None);
@@ -1377,6 +1449,7 @@ impl Session {
         }
         if prompt.accept.point {
             if let Some(p) = prompt::parse_point_with(tt, self.last_point, &self.angle_settings()) {
+                self.last_polar = prompt::parse_polar_text(tt, &self.angle_settings());
                 return self.input(Input::Point(p));
             }
             // Direct distance entry along the tracking path the cursor is on, from the point it
@@ -1391,7 +1464,7 @@ impl Session {
                 && !prompt.accept.number
             {
                 let mut c = self.cursor;
-                if self.settings.orthomode {
+                if self.settings.orthomode && !prompt.corner {
                     c = snap::iso::constrain(&self.drafting_settings(), base, c);
                 }
                 let dir = (c - base).normalized();
