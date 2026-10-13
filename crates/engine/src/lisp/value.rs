@@ -1,9 +1,18 @@
 //! AutoLISP values: integers (32-bit, wrapping as AutoLISP's do), reals, strings, symbols,
 //! lists built of cons cells, entity names, selection sets, files and functions.
 //!
-//! Values are shared (`Arc`) so a session stays `Send`. A cons chain is dropped iteratively:
-//! a list a million long would otherwise overflow the stack when it goes away.
+//! Values are shared (`Arc`) so a session stays `Send`. Cons cells (and functions) are dropped
+//! iteratively: a list a million long, or nested a million deep, would otherwise overflow the
+//! stack when it goes away.
+//!
+//! Memory is bounded so a runaway routine fails with a LISP error instead of the process running
+//! out of memory (which no panic guard can catch): live cons cells are counted ([`live_cells`],
+//! checked by the evaluator at every step), no string a built-in makes may be longer than
+//! [`MAX_STRING`], and the strings and printed text a run makes share a byte budget
+//! ([`charge_bytes`]).
 
+use std::cell::Cell;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cadcraft_doc::Handle;
@@ -30,16 +39,113 @@ pub struct Cons {
     pub cdr: Value,
 }
 
+/// Most cons cells alive at once (about 64 bytes each): far above real routines (a list of
+/// every entity of a large drawing, its `entget` lists), well below memory trouble.
+pub const MAX_CELLS: usize = 5_000_000;
+/// Longest string a built-in may make, in bytes.
+pub const MAX_STRING: usize = 8 << 20;
+/// Bytes of new strings, printed text and files read one run may make in all.
+pub const STRING_BUDGET: u64 = 2 << 30;
+
+/// Cons cells alive in the process.
+static LIVE_CELLS: AtomicUsize = AtomicUsize::new(0);
+
+/// Tests that make or cap many cells run one at a time: the count is shared by the process.
+#[cfg(test)]
+pub(crate) static HEAVY_CELLS: Mutex<()> = Mutex::new(());
+
+/// Cons cells alive now (all sessions).
+pub fn live_cells() -> usize {
+    LIVE_CELLS.load(Ordering::Relaxed)
+}
+
+thread_local! {
+    /// The running slice's string budget: bytes made so far and the most allowed.
+    static STRING_BYTES: Cell<(u64, u64)> = const { Cell::new((0, STRING_BUDGET)) };
+    /// The running slice's cap on live cons cells.
+    static CELL_LIMIT: Cell<usize> = const { Cell::new(MAX_CELLS) };
+}
+
+/// Start a slice of a run on this thread: it fails when more than `limit` cells are alive.
+pub fn set_cell_limit(limit: usize) {
+    CELL_LIMIT.with(|c| c.set(limit));
+}
+
+/// Too many cons cells are alive: the error that stops the run.
+pub fn check_cells() -> Result<(), LispError> {
+    if live_cells() > CELL_LIMIT.with(Cell::get) { Err(LispError::quit("out of memory: too many list cells")) } else { Ok(()) }
+}
+
+/// Start a slice of a run on this thread: it has made `used` bytes of its `budget`.
+pub fn set_string_budget(used: u64, budget: u64) {
+    STRING_BYTES.with(|c| c.set((used, budget)));
+}
+
+/// The bytes the run has made so far on this thread.
+pub fn string_bytes_used() -> u64 {
+    STRING_BYTES.with(|c| c.get().0)
+}
+
+/// Count `n` new bytes (a string, printed text, a file read) against the run's budget.
+pub fn charge_bytes(n: usize) -> Result<(), LispError> {
+    STRING_BYTES.with(|c| {
+        let (used, budget) = c.get();
+        let used = used.saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
+        c.set((used, budget));
+        if used > budget { Err(LispError::quit("out of memory: the routine made too much text")) } else { Ok(()) }
+    })
+}
+
+/// A string of `len` bytes may be made.
+pub fn check_string_len(len: usize) -> Result<(), LispError> {
+    if len > MAX_STRING { Err(LispError::quit(format!("out of memory: string longer than {MAX_STRING} bytes"))) } else { Ok(()) }
+}
+
+/// A built-in's result: a new string (one nothing else holds) is checked and charged.
+pub fn charge_result(v: &Value) -> Result<(), LispError> {
+    if let Value::Str(s) = v
+        && Arc::strong_count(s) == 1
+    {
+        check_string_len(s.len())?;
+        charge_bytes(s.len())?;
+    }
+    Ok(())
+}
+
 impl Drop for Cons {
     fn drop(&mut self) {
-        // Unlink the rest of the chain one cell at a time while this is its only owner.
-        let mut next = std::mem::replace(&mut self.cdr, Value::Nil);
-        while let Value::Cons(c) = next {
-            match Arc::try_unwrap(c) {
-                Ok(mut cell) => next = std::mem::replace(&mut cell.cdr, Value::Nil),
-                Err(_) => break,
+        // Cells are only made by `Value::cons`, which counts them; never wrap below zero.
+        if LIVE_CELLS.fetch_sub(1, Ordering::Relaxed) == 0 {
+            LIVE_CELLS.fetch_add(1, Ordering::Relaxed);
+        }
+        // Unlink everything this cell alone holds (the rest of the list, nested lists in its
+        // car, function bodies) one cell at a time, so nothing recurses on the stack.
+        let mut work = Vec::new();
+        keep_for_drop(&mut work, std::mem::take(&mut self.car));
+        keep_for_drop(&mut work, std::mem::take(&mut self.cdr));
+        while let Some(v) = work.pop() {
+            match v {
+                Value::Cons(c) => {
+                    if let Ok(mut cell) = Arc::try_unwrap(c) {
+                        keep_for_drop(&mut work, std::mem::take(&mut cell.car));
+                        keep_for_drop(&mut work, std::mem::take(&mut cell.cdr));
+                    }
+                }
+                Value::Func(f) => {
+                    if let Ok(mut func) = Arc::try_unwrap(f) {
+                        keep_for_drop(&mut work, std::mem::take(&mut func.body));
+                    }
+                }
+                _ => {}
             }
         }
+    }
+}
+
+/// Values that can hold others go on the work list; atoms are dropped here.
+fn keep_for_drop(work: &mut Vec<Value>, v: Value) {
+    if matches!(v, Value::Cons(_) | Value::Func(_)) {
+        work.push(v);
     }
 }
 
@@ -113,6 +219,7 @@ impl Value {
         Value::Sym(Sym::new(s))
     }
     pub fn cons(car: Value, cdr: Value) -> Value {
+        LIVE_CELLS.fetch_add(1, Ordering::Relaxed);
         Value::Cons(Arc::new(Cons { car, cdr }))
     }
     pub fn is_nil(&self) -> bool {
@@ -323,10 +430,21 @@ fn trim_fraction(s: &str) -> String {
 pub fn to_text(v: &Value, escape: bool) -> String {
     let mut out = String::new();
     write_value(&mut out, v, escape, 0);
+    if out.len() > MAX_STRING {
+        let mut end = MAX_STRING;
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
+    }
     out
 }
 
 fn write_value(out: &mut String, v: &Value, escape: bool, depth: usize) {
+    // Text past the string cap is cut (a list sharing its parts can print exponentially long).
+    if out.len() > MAX_STRING {
+        return;
+    }
     if depth > MAX_DEPTH {
         out.push_str("...");
         return;
@@ -379,7 +497,7 @@ fn write_value(out: &mut String, v: &Value, escape: bool, depth: usize) {
                         write_value(out, &c.car, escape, depth + 1);
                         cur = c.cdr.clone();
                         count += 1;
-                        if count > 1_000_000 {
+                        if count > 1_000_000 || out.len() > MAX_STRING {
                             out.push_str(" ...");
                             break;
                         }
@@ -423,6 +541,7 @@ mod tests {
 
     #[test]
     fn a_long_list_drops_without_overflowing_the_stack() {
+        let _heavy = HEAVY_CELLS.lock().unwrap_or_else(|e| e.into_inner());
         let mut l = Value::Nil;
         for i in 0..2_000_000 {
             l = Value::cons(Value::Int(i), l);

@@ -470,3 +470,84 @@ fn startup_files_load_from_the_support_folder() {
     assert!(s.lisp_var("DOCVAR").is_nil());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn deeply_nested_lists_drop_without_overflowing_the_stack() {
+    let _heavy = super::value::HEAVY_CELLS.lock().unwrap_or_else(|e| e.into_inner());
+    // Nested in the car a million deep: dropping it must not recurse.
+    let mut v = Value::Nil;
+    for _ in 0..1_000_000 {
+        v = Value::list(vec![v]);
+    }
+    drop(v);
+    // Functions nested in function bodies too.
+    let mut f = Value::Nil;
+    for _ in 0..200_000 {
+        f = Value::Func(std::sync::Arc::new(super::value::Func { name: None, params: Vec::new(), locals: Vec::new(), body: Value::list(vec![f]) }));
+    }
+    drop(f);
+    // The same built by a routine and dropped when the variable is cleared.
+    let mut s = session();
+    assert_eq!(ok(&mut s, "(setq x nil) (repeat 100000 (setq x (list x))) (setq x nil) 1"), "1");
+}
+
+#[test]
+fn too_many_list_cells_stop_the_routine() {
+    let _heavy = super::value::HEAVY_CELLS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = session();
+    s.lisp.limits.cells = 50_000;
+    let e = eval(&mut s, "(setq l nil) (repeat 2000000 (setq l (cons 1 l)))").unwrap_err();
+    assert!(e.contains("too many list cells"), "{e}");
+    // The variable still holds what was made, but the drawing's LISP stays usable.
+    assert_eq!(ok(&mut s, "(setq l nil) (+ 1 2)"), "3");
+    // A doubling list is stopped as well.
+    let e = eval(&mut s, "(setq l '(1)) (repeat 100 (setq l (append l l)))").unwrap_err();
+    assert!(e.contains("too many list cells"), "{e}");
+    assert_eq!(ok(&mut s, "(setq l nil) (length '(1 2 3))"), "3");
+}
+
+#[test]
+fn strings_are_capped() {
+    let _heavy = super::value::HEAVY_CELLS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = session();
+    // A string doubled until it would not fit in memory.
+    let e = eval(&mut s, "(setq s \"x\") (repeat 100 (setq s (strcat s s)))").unwrap_err();
+    assert!(e.contains("string longer than"), "{e}");
+    // Printing a list that shares its parts (exponentially long text) is cut.
+    let t = ok(&mut s, "(setq x '(1 2)) (repeat 40 (setq x (list x x))) (strlen (vl-prin1-to-string x))");
+    assert!(t.parse::<usize>().unwrap() <= super::value::MAX_STRING + 64, "{t}");
+    ok(&mut s, "(setq x nil s nil)");
+    // Many strings, each short, add up to the run's budget.
+    s.lisp.limits.string_bytes = 1_000_000;
+    let e = eval(&mut s, "(setq a \"0123456789\") (repeat 20000 (setq b (strcat a a a a a a a a a a)))").unwrap_err();
+    assert!(e.contains("too much text"), "{e}");
+    let e = eval(&mut s, "(repeat 200000 (princ \"0123456789\"))").unwrap_err();
+    assert!(e.contains("too much text"), "{e}");
+    // The budget is per run: the next one starts afresh.
+    assert_eq!(ok(&mut s, "(strcat \"a\" \"b\")"), "\"ab\"");
+}
+
+#[test]
+fn a_panic_inside_a_routine_ends_it_with_an_error() {
+    let mut s = session();
+    let n = |s: &Session| s.doc().unwrap().model.handles().len();
+    let before = n(&s);
+    let e = eval(&mut s, "(entmake '((0 . \"LINE\") (10 0 0 0) (11 5 0 0))) (cadcraft-test-panic)").unwrap_err();
+    assert!(e.contains("internal error"), "{e}");
+    assert_eq!(n(&s), before, "the drawing is put back");
+    assert_eq!(ok(&mut s, "(+ 1 2)"), "3");
+
+    // A routine carried on by the per-frame tick.
+    let r = s.lisp_eval("(repeat 500000 (setq i 1)) (cadcraft-test-panic)", false, false, Vec::new()).unwrap();
+    assert!(r.is_none(), "the routine gave the interface a frame");
+    assert!(s.lisp_busy());
+    for _ in 0..100 {
+        if !s.lisp_busy() {
+            break;
+        }
+        s.lisp_tick();
+    }
+    assert!(!s.lisp_running());
+    assert!(s.log.iter().any(|l| l.contains("internal error")), "{:?}", s.log);
+    assert_eq!(ok(&mut s, "(+ 1 2)"), "3");
+}

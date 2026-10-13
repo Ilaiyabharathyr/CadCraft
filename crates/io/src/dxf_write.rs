@@ -1513,7 +1513,13 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let committed = d.committed();
     let d: &Drawing = &committed;
     // Structural handles start above every entity handle.
-    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new(), layers: HashMap::new(), reactors: hatch_reactors(d) };
+    let mut w = W {
+        t: Vec::new(),
+        next: d.handseed.max(0x100).saturating_add(0x1000),
+        pstyles: HashMap::new(),
+        layers: HashMap::new(),
+        reactors: hatch_reactors(d),
+    };
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
@@ -2590,7 +2596,13 @@ fn cadcraft_fonts_name() -> &'static str {
 /// VERTEXes, gives its first). Handles of objects outside the entity (owner, styles) are left
 /// out. AutoLISP's `entget` is built on it.
 pub fn entity_groups(d: &Drawing, e: &Entity) -> (String, Vec<Tag>) {
-    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+    let mut w = W {
+        t: Vec::new(),
+        next: d.handseed.max(0x100).saturating_add(0x1000),
+        pstyles: HashMap::new(),
+        layers: HashMap::new(),
+        reactors: HashMap::new(),
+    };
     let cx = Ctx { target: Version::R2018, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadcraft_doc::Space::Model));
     entity(&mut w, d, e, "0", paper, &cx);

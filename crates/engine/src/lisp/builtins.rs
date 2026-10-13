@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use super::eval::{Ctx, Flow, Special};
-use super::value::{Builtin, BuiltinKind, Sym, Value, eq, equal, real_text, to_text};
+use super::value::{Builtin, BuiltinKind, Sym, Value, charge_bytes, check_string_len, eq, equal, real_text, to_text};
 use super::{Env, LispError, drawing, input, read};
 
 type R = Result<Value, LispError>;
@@ -474,11 +474,10 @@ fn acad_strlsort(a: &[Value]) -> R {
 // ---------------- strings ----------------
 
 fn strcat(a: &[Value]) -> R {
-    let mut s = String::new();
-    for v in a {
-        s.push_str(&string(v)?);
-    }
-    Ok(Value::str(&s))
+    let parts = a.iter().map(string).collect::<Result<Vec<_>, _>>()?;
+    // Check the length before joining: many long arguments could join to more than memory.
+    check_string_len(parts.iter().fold(0usize, |n, p| n.saturating_add(p.len())))?;
+    Ok(Value::str(&parts.concat()))
 }
 fn strlen(a: &[Value]) -> R {
     let mut n = 0usize;
@@ -823,6 +822,7 @@ fn inters(a: &[Value]) -> R {
 
 /// Text printed to a file (an open file argument) or the command line.
 fn emit(ctx: &mut Ctx<'_>, text: &str, file: Option<&Value>) -> Result<(), LispError> {
+    charge_bytes(text.len())?;
     match file {
         None | Some(Value::Nil) => {
             ctx.env.print(text);
@@ -867,7 +867,9 @@ fn print(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
 }
 fn prompt(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 1, 1)?;
-    ctx.env.print(&string(&a[0])?);
+    let text = string(&a[0])?;
+    charge_bytes(text.len())?;
+    ctx.env.print(&text);
     Ok(Flow::Value(Value::Nil))
 }
 fn terpri(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
@@ -879,6 +881,7 @@ fn alert(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     arity(&a, 1, 1)?;
     // No dialog from LISP: the message goes to the command line.
     let msg = string(&a[0])?;
+    charge_bytes(msg.len())?;
     let out = std::mem::take(&mut ctx.env.out);
     if !out.is_empty() {
         ctx.s.echo(out);
@@ -913,7 +916,10 @@ fn open(ctx: &mut Ctx<'_>, a: Vec<Value>) -> Result<Flow, LispError> {
     let mut f = LispFile { path: path.clone(), writing, append, lines: Default::default(), text: String::new() };
     if !writing {
         match read_text_file(&path) {
-            Some(t) => f.lines = t.lines().map(str::to_string).collect(),
+            Some(t) => {
+                charge_bytes(t.len())?;
+                f.lines = t.lines().map(str::to_string).collect();
+            }
             None => return Ok(Flow::Value(Value::Nil)),
         }
     } else if !can_write(&path) {
@@ -1455,6 +1461,17 @@ pub fn install(env: &mut Env) {
     env.globals.insert(Sym::new("T"), Value::t());
     env.globals.insert(Sym::new("PI"), Value::Real(std::f64::consts::PI));
     env.globals.insert(Sym::new("PAUSE"), Value::str("\\"));
+    #[cfg(test)]
+    env.globals.insert(Sym::new(TEST_PANIC.name), Value::Subr(&TEST_PANIC));
+}
+
+/// Tests only: a built-in that panics, to prove the guards around the machine.
+#[cfg(test)]
+static TEST_PANIC: Builtin = Builtin { name: "CADCRAFT-TEST-PANIC", kind: BuiltinKind::Pure(test_panic) };
+#[cfg(test)]
+#[allow(clippy::panic)]
+fn test_panic(_a: &[Value]) -> R {
+    panic!("test panic")
 }
 
 /// A real as `princ` shows it (for messages).

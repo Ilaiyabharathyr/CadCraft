@@ -208,6 +208,8 @@ impl Machine {
                     Some(frame) => self.ret(ctx, frame, v),
                 },
             };
+            // A runaway routine stops before it takes all memory.
+            let r = r.and_then(|()| super::value::check_cells());
             if let Err(e) = r {
                 self.need = None;
                 if let Some(o) = self.unwind(ctx, e) {
@@ -516,9 +518,16 @@ impl Machine {
     fn call(&mut self, ctx: &mut Ctx<'_>, f: Value, args: Vec<Value>) -> Result<(), LispError> {
         match &f {
             Value::Subr(b) => match b.kind {
-                BuiltinKind::Pure(func) => self.state = State::Ret(func(&args)?),
+                BuiltinKind::Pure(func) => {
+                    let v = func(&args)?;
+                    super::value::charge_result(&v)?;
+                    self.state = State::Ret(v);
+                }
                 BuiltinKind::Ctx(func) => {
                     let flow = func(ctx, args)?;
+                    if let Flow::Value(v) = &flow {
+                        super::value::charge_result(v)?;
+                    }
                     self.flow(flow);
                 }
                 BuiltinKind::Special(_) => return Err(LispError::new(format!("bad function: {}", b.name))),
@@ -632,7 +641,9 @@ impl Ctx<'_> {
         if let Value::Subr(b) = f
             && let BuiltinKind::Pure(func) = b.kind
         {
-            return func(&args);
+            let v = func(&args)?;
+            super::value::charge_result(&v)?;
+            return Ok(v);
         }
         let mut m = Machine::calling(f.clone(), args);
         let mut sub = Ctx { s: &mut *self.s, env: &mut *self.env, depth: self.depth + 1 };

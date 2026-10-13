@@ -115,6 +115,23 @@ pub struct LispState {
     autoloaded: std::collections::HashSet<u64>,
     /// `acad.lsp` was loaded this session.
     acad_loaded: bool,
+    /// Memory caps (lowered by tests).
+    pub(crate) limits: Limits,
+}
+
+/// What a run may use (see [`value`]'s memory notes).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Limits {
+    /// Live cons cells (all sessions).
+    pub cells: usize,
+    /// Bytes of strings, printed text and files read per run.
+    pub string_bytes: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits { cells: value::MAX_CELLS, string_bytes: value::STRING_BUDGET }
+    }
 }
 
 impl std::fmt::Debug for LispState {
@@ -143,6 +160,11 @@ struct Run {
     steps: u64,
     /// The `*error*` handler is the one running.
     handler: bool,
+    /// Bytes of strings and printed text the run has made ([`value::charge_bytes`]).
+    string_bytes: u64,
+    /// Cons cells alive when the run started: cells the drawing's variables already hold don't
+    /// stop a run (it can still set them to nil) unless it adds more.
+    cells_at_start: usize,
 }
 
 /// Steps per slice before the interface gets a frame.
@@ -218,8 +240,20 @@ impl Session {
         let st = self.state()?;
         let before = Some((st.doc.clone(), st.selection.clone()));
         let uid = st.uid;
-        self.lisp.run =
-            Some(Box::new(Run { machine, uid, waiting: None, print, label, before, inputs: inputs.into(), blocking, steps: 0, handler: false }));
+        self.lisp.run = Some(Box::new(Run {
+            machine,
+            uid,
+            waiting: None,
+            print,
+            label,
+            before,
+            inputs: inputs.into(),
+            blocking,
+            steps: 0,
+            handler: false,
+            string_bytes: 0,
+            cells_at_start: value::live_cells(),
+        }));
         self.lisp_drive();
         if blocking {
             // A blocking run that waits for a command's input (`pause`) can't get it: cancel.
@@ -233,6 +267,14 @@ impl Session {
     /// Call once per frame: loads the startup files into a drawing seen for the first time, and
     /// carries on a routine that gave the interface a frame.
     pub fn lisp_tick(&mut self) {
+        // Called every frame, outside any command: a panic in it ends the routine with an error
+        // instead of taking down the app.
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.lisp_tick_unguarded())) {
+            self.lisp_internal_error(&crate::guard::message(&*p));
+        }
+    }
+
+    fn lisp_tick_unguarded(&mut self) {
         // A drawing seen for the first time gets its startup files.
         self.lisp_autoload();
         if self.lisp.run.as_ref().is_some_and(|r| matches!(r.waiting, Some(Need::Yield))) {
@@ -263,9 +305,27 @@ impl Session {
                 return;
             }
             let mut env = self.lisp_env_take();
+            value::set_string_budget(run.string_bytes, self.lisp.limits.string_bytes);
+            value::set_cell_limit(self.lisp.limits.cells.max(run.cells_at_start));
             let outcome = {
+                let machine = &mut run.machine;
                 let mut ctx = Ctx { s: self, env: &mut env, depth: 0 };
-                run.machine.run(&mut ctx, SLICE)
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.run(&mut ctx, SLICE)))
+            };
+            run.string_bytes = value::string_bytes_used();
+            let outcome = match outcome {
+                Ok(o) => o,
+                Err(p) => {
+                    // A panic inside a built-in: put the drawing back as the routine found it.
+                    if let Some((doc, sel)) = &run.before
+                        && let Some(st) = self.docs.iter_mut().find(|d| d.uid == run.uid)
+                    {
+                        st.doc = doc.clone();
+                        st.selection = sel.clone();
+                    }
+                    run.handler = true;
+                    Outcome::Error(LispError::quit(format!("internal error: {}", crate::guard::message(&*p))))
+                }
             };
             let uid = run.uid;
             self.lisp_flush(&mut env, false);
@@ -402,6 +462,25 @@ impl Session {
         self.lisp_env_put(uid, env);
         self.echo(format!("; error: {}", e.msg));
         self.lisp_end(Err(e.msg));
+    }
+
+    /// A panic escaped the LISP machinery outside a routine's steps: end the routine, if any,
+    /// with an error, so the session stays usable.
+    fn lisp_internal_error(&mut self, msg: &str) {
+        let msg = format!("internal error: {msg}");
+        if self.lisp.run.is_some() {
+            if let Some(r) = self.lisp.run.as_mut() {
+                // Don't run the routine's own `*error*` after an internal failure.
+                r.handler = true;
+            }
+            self.lisp_error(LispError::quit(msg));
+        } else if self.lisp.active {
+            self.lisp.active = false;
+            self.echo(format!("; error: {msg}"));
+            self.lisp_last = Some(Err(msg));
+        } else {
+            self.echo(format!("; error: {msg}"));
+        }
     }
 
     /// Stop the routine (Esc while it waits, its drawing closed) with `msg` as its error.
