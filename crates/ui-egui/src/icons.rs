@@ -221,8 +221,16 @@ impl Pen<'_> {
 
 /// Paint `icon` into `rect` (square), with `dim` for disabled.
 pub fn paint(p: &Painter, rect: Rect, icon: Icon, dim: bool) {
+    paint_tinted(p, rect, icon, dim, None);
+}
+
+/// [`paint`] in the one colour `tint` (an icon on a highlighted row), or in its own colours.
+pub fn paint_tinted(p: &Painter, rect: Rect, icon: Icon, dim: bool, tint: Option<Color32>) {
     let t = Tokens::get();
-    let alpha = |c: Color32| if dim { c.gamma_multiply(0.4) } else { c };
+    let alpha = |c: Color32| {
+        let c = tint.unwrap_or(c);
+        if dim { c.gamma_multiply(0.4) } else { c }
+    };
     let pen = Pen { p, r: rect, w: (rect.width() / 16.0).clamp(1.0, 1.6), base: alpha(t.icon), acc: alpha(t.icon_accent), pt: alpha(t.icon_point) };
     let (b, a) = (pen.base, pen.acc);
     use Icon::*;

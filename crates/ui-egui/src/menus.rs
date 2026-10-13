@@ -1,9 +1,13 @@
 //! Menus (in-window menu bar; the native macOS menu is built from the same tree), UI-only
 //! commands and keyboard shortcuts.
 
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 
 use crate::CadApp;
+use crate::icons::Icon;
+use crate::menu_layout::{FLAT, MENU_LAYOUT, Row};
 
 /// The top-level menus, in order.
 pub const MENUS: &[&str] = &["File", "Edit", "View", "Insert", "Format", "Tools", "Draw", "Dimension", "Modify", "Window", "Help"];
@@ -54,6 +58,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.dialog.parameters", "Parameters Manager", &["Window", "Parameters Manager"], None),
     ("ui.dialog.dsettings", "Drafting Settings...", &[], None),
     ("ui.dialog.about", "About CADCraft", &["Help", "About CADCraft"], None),
+    ("ui.discord", "Join the ArtCraft Discord…", &[], None),
     ("ui.dialog.commands", "Command Reference", &["Help", "CADCraft Help"], Some("F1")),
     ("ui.toggle.history", "Command History", &["Window", "Command History"], Some("F2")),
     ("ui.cmdline.lines", "Command Line History Lines", &[], None),
@@ -63,6 +68,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.noop", "", &[], None),
     ("ui.quit", "Quit CADCraft", &[], Some("Cmd+Q")),
 ];
+
+/// Where Help ▸ Join the ArtCraft Discord goes.
+pub const DISCORD_URL: &str = "https://discord.gg/artcraft";
 
 pub fn is_ui_command(id: &str) -> bool {
     UI_COMMANDS.iter().any(|c| c.0 == id)
@@ -314,6 +322,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.dialog = None;
             Ok(Value::Null)
         }
+        "ui.discord" => {
+            app.open_url = Some(DISCORD_URL.to_string());
+            Ok(Value::Null)
+        }
         "ui.quit" => {
             app.quit_requested = true;
             Ok(Value::Null)
@@ -394,54 +406,216 @@ fn theme_json(app: &CadApp) -> Value {
     json!({ "theme": app.ui.theme.as_str(), "shown": if shown == egui::Theme::Light { "light" } else { "dark" } })
 }
 
+/// The state a menu row shows in its icon slot: one choice of a group, or an on/off setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    Radio(bool),
+    Check(bool),
+}
+
+impl Mark {
+    pub fn on(self) -> bool {
+        match self {
+            Mark::Radio(on) | Mark::Check(on) => on,
+        }
+    }
+}
+
+/// The mark of command `id`, read from the app's settings and the current drawing.
+fn mark_for(app: &CadApp, id: &str) -> Option<Mark> {
+    use crate::docking::Panel;
+    let ui = &app.ui;
+    let panel = |p: Panel| Mark::Check(ui.docking.layout.contains(&p));
+    if let Some(format) = id.strip_prefix("ui.saveformat.") {
+        return Some(Mark::Radio(crate::SaveFormat::parse(format) == Some(ui.save_format)));
+    }
+    if let Some(version) = id.strip_prefix("ui.saveversion.") {
+        let year = |name: &str| crate::SaveVersion::parse(name).map(|v| v.year());
+        return Some(Mark::Radio(year(version).is_some() && year(version) == year(&ui.save_version)));
+    }
+    if let Some(theme) = id.strip_prefix("ui.theme.") {
+        return Some(Mark::Radio(crate::theme::ThemePref::parse(theme) == Some(ui.theme)));
+    }
+    Some(match id {
+        "annovisible.all" | "annovisible.current" => Mark::Radio(app.session.doc().ok()?.anno_all_visible() == (id == "annovisible.all")),
+        "ui.toggle.ucsicon" => Mark::Check(ui.show_ucs_icon),
+        "ui.toggle.viewcube" => Mark::Check(ui.show_viewcube),
+        "ui.toggle.systemcursor" => Mark::Check(ui.system_cursor),
+        "ui.toggle.toolbar" => Mark::Check(ui.show_toolbar),
+        "ui.toggle.filetabs" => Mark::Check(ui.show_file_tabs),
+        "ui.toggle.statusbar" => Mark::Check(ui.show_status_bar),
+        "ui.toggle.cmdline" => Mark::Check(ui.show_command_line),
+        "ui.toggle.menubar" => Mark::Check(ui.in_window_menu),
+        "ui.toggle.toolsets" => panel(Panel::ToolSets),
+        "ui.panel.properties" => panel(Panel::Properties),
+        "ui.panel.layers" => panel(Panel::Layers),
+        "ui.panel.quickcalc" => panel(Panel::QuickCalc),
+        "xref" => panel(Panel::ExternalRefs),
+        _ => return None,
+    })
+}
+
 /// A menu entry.
 #[derive(Clone, Debug)]
 pub enum Entry {
-    Item { label: String, id: String, shortcut: Option<String>, enabled: bool },
-    Sub { label: String, children: Vec<Entry> },
+    Item { label: String, id: String, shortcut: Option<String>, enabled: bool, icon: Option<Icon>, mark: Option<Mark> },
+    Sub { label: String, children: Vec<Entry>, icon: Option<Icon> },
+    Separator,
 }
 
-/// The full menu tree from the command registry plus UI commands, in registration order.
-pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
-    let mut out: Vec<(String, Vec<Entry>)> = MENUS.iter().map(|m| (m.to_string(), Vec::new())).collect();
-    let mut add = |path: &[&str], label: &str, id: &str, shortcut: Option<&str>, enabled: bool| {
-        let Some((top, rest)) = path.split_first() else { return };
-        let Some((_, entries)) = out.iter_mut().find(|(m, _)| m == top) else { return };
-        let mut cur = entries;
-        let n = rest.len();
-        for (i, seg) in rest.iter().enumerate() {
-            if i + 1 == n {
-                cur.push(Entry::Item {
-                    label: if seg.is_empty() { label.to_string() } else { seg.to_string() },
-                    id: id.to_string(),
-                    shortcut: shortcut.map(str::to_string),
-                    enabled,
-                });
-            } else {
-                let pos = cur.iter().position(|e| matches!(e, Entry::Sub { label, .. } if label == seg));
-                let idx = match pos {
-                    Some(p) => p,
-                    None => {
-                        cur.push(Entry::Sub { label: seg.to_string(), children: Vec::new() });
-                        cur.len() - 1
-                    }
-                };
-                let Some(Entry::Sub { children, .. }) = cur.get_mut(idx) else { return };
-                cur = children;
-            }
-        }
-    };
-    for c in cadcraft_engine::command_specs() {
-        if !c.menu.is_empty() {
-            add(c.menu, c.label, c.id, c.shortcut, (c.enabled)(&app.session).is_ok());
+/// A command as the menus see it.
+struct Known {
+    id: &'static str,
+    label: &'static str,
+    menu: &'static [&'static str],
+    shortcut: Option<&'static str>,
+    enabled: bool,
+}
+
+impl Known {
+    /// The label a menu shows: the last segment of the menu path, else the command's label.
+    fn menu_label(&self) -> &'static str {
+        self.menu.last().copied().filter(|s| !s.is_empty()).unwrap_or(self.label)
+    }
+
+    fn item(&self, label: Option<&str>, icon: Option<Icon>, mark: Option<Mark>) -> Entry {
+        Entry::Item {
+            label: label.unwrap_or(self.menu_label()).to_string(),
+            id: self.id.to_string(),
+            shortcut: self.shortcut.map(str::to_string),
+            enabled: self.enabled,
+            icon,
+            mark,
         }
     }
-    for (id, label, menu, sc) in UI_COMMANDS {
-        if !menu.is_empty() {
-            add(menu, label, id, *sc, true);
+}
+
+/// The full menu tree: the rows of [`MENU_LAYOUT`] in its order, then, after a separator, every
+/// command with a menu path that the layout does not name (in registration order).
+pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
+    let mut known: Vec<Known> = cadcraft_engine::command_specs()
+        .iter()
+        .map(|c| Known { id: c.id, label: c.label, menu: c.menu, shortcut: c.shortcut, enabled: (c.enabled)(&app.session).is_ok() })
+        .collect();
+    known.extend(UI_COMMANDS.iter().map(|&(id, label, menu, shortcut)| Known { id, label, menu, shortcut, enabled: true }));
+    let index: HashMap<&str, usize> = known.iter().enumerate().map(|(i, k)| (k.id, i)).collect();
+    let mut placed = vec![false; known.len()];
+    let mut out: Vec<(String, Vec<Entry>)> = MENUS
+        .iter()
+        .map(|m| {
+            let rows = MENU_LAYOUT.iter().find(|(name, _)| name == m).map_or(&[][..], |(_, rows)| rows);
+            (m.to_string(), layout_entries(app, rows, &known, &index, &mut placed))
+        })
+        .collect();
+    for (_, entries) in &mut out {
+        *entries = tidy(std::mem::take(entries));
+    }
+    let mut separated = vec![false; out.len()];
+    for (k, _) in known.iter().zip(&placed).filter(|(k, placed)| !**placed && !k.menu.is_empty()) {
+        let Some((top, rest)) = k.menu.split_first() else { continue };
+        let Some(at) = out.iter().position(|(m, _)| m == top) else { continue };
+        let (Some((_, entries)), Some(separated)) = (out.get_mut(at), separated.get_mut(at)) else { continue };
+        append(entries, rest, k, mark_for(app, k.id), separated);
+    }
+    out
+}
+
+/// The entries of layout `rows`; ids the registry no longer has are left out.
+fn layout_entries(app: &CadApp, rows: &[Row], known: &[Known], index: &HashMap<&str, usize>, placed: &mut [bool]) -> Vec<Entry> {
+    let mut out = Vec::new();
+    for row in rows {
+        match *row {
+            Row::Cmd { id, icon, label } => {
+                let Some((i, k)) = index.get(id).and_then(|i| Some((*i, known.get(*i)?))) else { continue };
+                if let Some(p) = placed.get_mut(i) {
+                    *p = true;
+                }
+                out.push(k.item(label, icon, mark_for(app, id)));
+            }
+            Row::Sub { label, icon, rows } => {
+                out.push(Entry::Sub { label: label.to_string(), children: layout_entries(app, rows, known, index, placed), icon });
+            }
+            Row::Sep => out.push(Entry::Separator),
         }
     }
     out
+}
+
+/// Drop empty submenus and the separators that would open or close a menu or follow another.
+fn tidy(entries: Vec<Entry>) -> Vec<Entry> {
+    let mut out: Vec<Entry> = Vec::new();
+    for e in entries {
+        match e {
+            Entry::Sub { label, children, icon } => {
+                let children = tidy(children);
+                if !children.is_empty() {
+                    out.push(Entry::Sub { label, children, icon });
+                }
+            }
+            Entry::Separator => {
+                if !matches!(out.last(), None | Some(Entry::Separator)) {
+                    out.push(Entry::Separator);
+                }
+            }
+            item => out.push(item),
+        }
+    }
+    if matches!(out.last(), Some(Entry::Separator)) {
+        out.pop();
+    }
+    out
+}
+
+/// `entries` without the commands `ids` (the native macOS menu has its own Quit, for one).
+pub fn without(entries: Vec<Entry>, ids: &[&str]) -> Vec<Entry> {
+    fn strip(entries: Vec<Entry>, ids: &[&str]) -> Vec<Entry> {
+        entries
+            .into_iter()
+            .filter_map(|e| match e {
+                Entry::Item { ref id, .. } if ids.contains(&id.as_str()) => None,
+                Entry::Sub { label, children, icon } => Some(Entry::Sub { label, children: strip(children, ids), icon }),
+                e => Some(e),
+            })
+            .collect()
+    }
+    tidy(strip(entries, ids))
+}
+
+/// Add a command the layout does not name at its menu path: inside the submenu of that name when
+/// there is one, else at the end of the top menu, after one separator.
+fn append(entries: &mut Vec<Entry>, path: &[&str], k: &Known, mark: Option<Mark>, separated: &mut bool) {
+    let mut cur = entries;
+    let mut top = true;
+    for (i, seg) in path.iter().enumerate() {
+        let last = i + 1 == path.len();
+        let found = if last { None } else { cur.iter().position(|e| matches!(e, Entry::Sub { label, .. } if label == seg)) };
+        let at = match found {
+            Some(at) => at,
+            None => {
+                if top && !*separated && !cur.is_empty() {
+                    cur.push(Entry::Separator);
+                }
+                *separated |= top;
+                cur.push(if last { k.item(None, None, mark) } else { Entry::Sub { label: seg.to_string(), children: Vec::new(), icon: None } });
+                cur.len() - 1
+            }
+        };
+        if last {
+            return;
+        }
+        let Some(Entry::Sub { children, .. }) = cur.get_mut(at) else { return };
+        cur = children;
+        top = false;
+    }
+}
+
+/// An entry's label in `language`. A flattened row ("Constraint Bars › Show All") is translated
+/// part by part, so it needs no catalog entry of its own.
+pub fn entry_label(language: &str, label: &str) -> String {
+    match label.split_once(FLAT) {
+        Some((heading, item)) => format!("{}{FLAT}{}", crate::i18n::tr_menu(language, heading), crate::i18n::tr(language, item)),
+        None => crate::i18n::tr(language, label).to_string(),
+    }
 }
 
 /// Turn a registry shortcut ("Cmd+Shift+Z") into the form shown on this platform: macOS symbols ("⇧⌘Z") or
@@ -455,46 +629,314 @@ pub(crate) fn shortcut_label(s: &str, mac: bool) -> String {
     format!("{shift}{cmd}{}", s.replace("Cmd+", "").replace("Shift+", ""))
 }
 
-pub(crate) fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
-    match e {
-        Entry::Item { label, id, shortcut, enabled } => {
-            let mut b = egui::Button::new(crate::i18n::t(label));
-            if let Some(s) = shortcut {
-                b = b.shortcut_text(shortcut_label(s, ui.ctx().os().is_mac()));
+/// The measurements of a menu row.
+const ROW_HEIGHT: f32 = 26.0;
+const ROW_ICON: f32 = 18.0;
+const ROW_GAP: f32 = 10.0;
+const ROW_PAD_LEFT: f32 = 8.0;
+const ROW_PAD_RIGHT: f32 = 10.0;
+const ROW_SHORTCUT_MIN: f32 = 64.0;
+const ROW_ARROW: egui::Vec2 = egui::vec2(8.0, 10.0);
+const SEPARATOR_HEIGHT: f32 = 9.0;
+/// The least width of the rows of a menu opened from the bar, and of a submenu (316 and 300
+/// with the popup's padding and border).
+const MENU_ROW_WIDTH: f32 = 306.0;
+const SUBMENU_ROW_WIDTH: f32 = 290.0;
+/// How far a submenu overlaps the menu it opens from.
+const SUBMENU_OVERLAP: f32 = 4.0;
+
+/// The style of menu popups: dark rounded panels whose rows touch.
+pub(crate) fn popup_style(style: &mut egui::Style) {
+    let t = crate::theme::Tokens::get();
+    egui::containers::menu::menu_style(style);
+    style.visuals.window_fill = t.menu_bg;
+    style.visuals.window_stroke = egui::Stroke::new(1.0, t.list_row);
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(8);
+    style.visuals.popup_shadow = crate::theme::menu_shadow();
+    style.spacing.menu_margin = egui::Margin::same(4);
+    style.spacing.item_spacing = egui::vec2(0.0, 0.0);
+}
+
+/// Menus close when a row is chosen (`entry_ui`) or on a click outside them; a click on a
+/// disabled row or a separator leaves them open.
+fn menu_config() -> egui::containers::menu::MenuConfig {
+    egui::containers::menu::MenuConfig::new().style(popup_style).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+}
+
+fn row_font() -> egui::FontId {
+    egui::FontId::proportional(13.0)
+}
+
+fn shortcut_font() -> egui::FontId {
+    egui::FontId::proportional(12.0)
+}
+
+/// The width a row needs for a label and a shortcut of these widths.
+fn row_width(label: f32, shortcut: Option<f32>) -> f32 {
+    let shortcut = shortcut.map_or(ROW_SHORTCUT_MIN, |w| w.max(ROW_SHORTCUT_MIN));
+    ROW_PAD_LEFT + ROW_ICON + ROW_GAP + label + ROW_GAP + shortcut + ROW_GAP + ROW_ARROW.x + ROW_PAD_RIGHT
+}
+
+/// Make the menu as wide as its widest row needs, and at least `min`.
+pub(crate) fn set_menu_width<'a>(ui: &mut egui::Ui, entries: impl Iterator<Item = &'a Entry>, min: f32) {
+    let mac = ui.ctx().os().is_mac();
+    let text_width = |text: String, font| ui.painter().layout_no_wrap(text, font, egui::Color32::PLACEHOLDER).size().x;
+    let width = entries
+        .map(|e| match e {
+            Entry::Item { label, shortcut, .. } => row_width(
+                text_width(entry_label(crate::i18n::current(), label), row_font()),
+                shortcut.as_ref().map(|s| text_width(shortcut_label(s, mac), shortcut_font())),
+            ),
+            Entry::Sub { label, .. } => row_width(text_width(crate::i18n::menu(label).to_string(), row_font()), None),
+            Entry::Separator => 0.0,
+        })
+        .fold(min, f32::max);
+    ui.set_width(width.ceil());
+}
+
+/// What a menu row shows.
+struct RowSpec<'a> {
+    icon: Option<Icon>,
+    label: &'a str,
+    shortcut: Option<String>,
+    submenu: bool,
+    enabled: bool,
+    mark: Option<Mark>,
+}
+
+/// One row of a menu: icon slot, label, shortcut and submenu arrow. The row is highlighted under
+/// the pointer, with keyboard focus, and while `open` (its submenu shows).
+fn menu_row(ui: &mut egui::Ui, row: &RowSpec, open: impl FnOnce(&egui::Ui, &egui::Response) -> bool) -> egui::Response {
+    let t = crate::theme::Tokens::get();
+    let label = ui.painter().layout_no_wrap(row.label.to_string(), row_font(), t.text);
+    let shortcut = row.shortcut.as_ref().map(|s| ui.painter().layout_no_wrap(s.clone(), shortcut_font(), t.text_faint));
+    let needed = row_width(label.size().x, shortcut.as_ref().map(|g| g.size().x));
+    let sense = if row.enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(needed.max(ui.available_width()), ROW_HEIGHT), sense);
+    let hot = row.enabled && (resp.hovered() || resp.has_focus() || open(ui, &resp));
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        if hot {
+            p.rect_filled(rect, 4.0, t.accent);
+        }
+        let ink = |normal| {
+            if !row.enabled {
+                t.text_faint
+            } else if hot {
+                t.on_accent
+            } else {
+                normal
             }
-            if ui.add_enabled(*enabled, b).clicked() {
+        };
+        let slot = egui::Rect::from_min_size(egui::pos2(rect.left() + ROW_PAD_LEFT, rect.center().y - ROW_ICON / 2.0), egui::Vec2::splat(ROW_ICON));
+        match (row.mark, row.icon) {
+            (Some(Mark::Radio(true)), _) => {
+                p.circle_filled(slot.center(), 4.0, if hot { t.on_accent } else { t.accent });
+            }
+            (Some(Mark::Radio(false)), _) => {
+                p.circle_stroke(slot.center(), 3.25, egui::Stroke::new(1.5, ink(t.control_hover)));
+            }
+            (Some(Mark::Check(true)), _) => {
+                let at = |x: f32, y: f32| slot.min + egui::vec2(x, y) * (ROW_ICON / 20.0);
+                p.line(vec![at(4.5, 10.5), at(8.0, 14.0), at(15.5, 6.0)], egui::Stroke::new(1.5, ink(t.text)));
+            }
+            (Some(Mark::Check(false)), _) | (None, None) => {}
+            (None, Some(icon)) => crate::icons::paint_tinted(p, slot, icon, false, (hot || !row.enabled).then(|| ink(t.icon))),
+        }
+        p.galley_with_override_text_color(egui::pos2(slot.right() + ROW_GAP, rect.center().y - label.size().y / 2.0), label, ink(t.text));
+        let arrow = egui::Rect::from_min_size(egui::pos2(rect.right() - ROW_PAD_RIGHT - ROW_ARROW.x, rect.center().y - ROW_ARROW.y / 2.0), ROW_ARROW);
+        if let Some(g) = shortcut {
+            let at = egui::pos2(arrow.left() - ROW_GAP - g.size().x, rect.center().y - g.size().y / 2.0);
+            p.galley_with_override_text_color(at, g, if hot { t.on_accent.gamma_multiply(0.85) } else { t.text_faint });
+        }
+        if row.submenu {
+            let points = vec![
+                arrow.left_top() + egui::vec2(1.0, 1.0),
+                arrow.right_center() - egui::vec2(1.0, 0.0),
+                arrow.left_bottom() + egui::vec2(1.0, -1.0),
+            ];
+            p.add(egui::Shape::convex_polygon(points, ink(t.text_faint), egui::Stroke::NONE));
+        }
+    }
+    let enabled = row.enabled;
+    let on = row.mark.map(Mark::on);
+    resp.widget_info(|| match on {
+        Some(on) => egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, row.label),
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, row.label),
+    });
+    crate::control::record_widget(ui, &resp, row.label, "button", on);
+    resp
+}
+
+/// The line between two groups of a menu.
+pub(crate) fn menu_separator(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), SEPARATOR_HEIGHT), egui::Sense::hover());
+    ui.painter().hline(rect.shrink2(egui::vec2(6.0, 0.0)).x_range(), rect.center().y, egui::Stroke::new(1.0, crate::theme::Tokens::get().list_row));
+}
+
+pub(crate) fn entry_ui(ui: &mut egui::Ui, e: &Entry, clicked: &mut Option<String>) {
+    use egui::containers::menu::{MenuState, SubMenu};
+    match e {
+        Entry::Item { label, id, shortcut, enabled, icon, mark } => {
+            let label = entry_label(crate::i18n::current(), label);
+            let shortcut = shortcut.as_ref().map(|s| shortcut_label(s, ui.ctx().os().is_mac()));
+            if menu_row(ui, &RowSpec { icon: *icon, label: &label, shortcut, submenu: false, enabled: *enabled, mark: *mark }, |_, _| false).clicked()
+            {
                 *clicked = Some(id.clone());
                 ui.close();
             }
         }
-        Entry::Sub { label, children } => {
-            ui.menu_button(crate::i18n::menu(label), |ui| {
-                for c in children {
-                    entry_ui(ui, c, clicked);
-                }
-            });
+        Entry::Sub { label, children, icon } => {
+            let row = RowSpec { icon: *icon, label: crate::i18n::menu(label), shortcut: None, submenu: true, enabled: true, mark: None };
+            let resp = menu_row(ui, &row, |ui, resp| MenuState::from_ui(ui, |state, _| state.open_item == Some(SubMenu::id_from_widget_id(resp.id))));
+            // egui puts a submenu beside the row it opens from; a narrower anchor makes it
+            // overlap this menu, its first row level with this one.
+            let mut anchor = resp.clone();
+            anchor.interact_rect.max.x -= SUBMENU_OVERLAP + 2.0;
+            SubMenu::new().config(menu_config()).show(ui, &anchor, |ui| menu_rows(ui, children, SUBMENU_ROW_WIDTH, false, clicked));
         }
+        Entry::Separator => menu_separator(ui),
     }
 }
 
+/// The rows of a menu, scrolling when the window is too short for them all. A menu `below` the
+/// bar has the room under it; a submenu, which egui moves to fit, has the height of the window.
+fn menu_rows(ui: &mut egui::Ui, entries: &[Entry], min_width: f32, below: bool, clicked: &mut Option<String>) {
+    set_menu_width(ui, entries.iter(), min_width);
+    let window = ui.ctx().content_rect();
+    let room = if below { window.bottom() - ui.cursor().top() - 20.0 } else { window.height() - 24.0 }.max(ROW_HEIGHT * 4.0);
+    let height: f32 = entries.iter().map(|e| if matches!(e, Entry::Separator) { SEPARATOR_HEIGHT } else { ROW_HEIGHT }).sum();
+    let mut rows = |ui: &mut egui::Ui| {
+        for e in entries {
+            entry_ui(ui, e, clicked);
+        }
+    };
+    if height <= room {
+        rows(ui);
+    } else {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), room), egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+            egui::ScrollArea::vertical().auto_shrink(false).show(ui, rows);
+        });
+    }
+}
+
+/// Show `content` as the context menu of `resp`, in the look of the other menus.
+pub(crate) fn context_popup(resp: &egui::Response, content: impl FnOnce(&mut egui::Ui)) {
+    let config = menu_config();
+    egui::Popup::context_menu(resp)
+        .close_behavior(config.close_behavior)
+        .style(config.style.clone())
+        .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(egui::containers::menu::MenuConfig::MENU_CONFIG_TAG, config))
+        .show(content);
+}
+
+/// The height of the in-window menu bar and of its buttons.
+pub const BAR_HEIGHT: f32 = 30.0;
+const BAR_BUTTON_HEIGHT: f32 = 24.0;
+
+/// A button of the menu bar: `paint` draws its content inside the rounded background.
+fn bar_button(
+    ui: &mut egui::Ui,
+    width: f32,
+    open: impl FnOnce(&egui::Response) -> bool,
+    paint: impl FnOnce(&egui::Ui, egui::Rect, bool),
+) -> egui::Response {
+    let t = crate::theme::Tokens::get();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, BAR_BUTTON_HEIGHT), egui::Sense::click());
+    let open = open(&resp);
+    if ui.is_rect_visible(rect) {
+        if open {
+            ui.painter().rect_filled(rect, 5.0, t.tab_active);
+        } else if resp.hovered() || resp.has_focus() {
+            ui.painter().rect_filled(rect, 5.0, t.control.gamma_multiply(0.6));
+        }
+        paint(ui, rect, open);
+    }
+    resp
+}
+
 pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
+    use egui::containers::menu::MenuConfig;
     let t = crate::theme::Tokens::get();
     let tree = tree(app);
     let mut clicked = None;
-    egui::Panel::top("cc_menubar").exact_size(22.0).frame(egui::Frame::NONE.fill(t.chrome_dark).inner_margin(egui::Margin::symmetric(6, 0))).show(
-        ui,
-        |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                for (name, entries) in &tree {
-                    ui.menu_button(crate::i18n::menu(name), |ui| {
-                        for e in entries {
-                            entry_ui(ui, e, &mut clicked);
-                        }
-                    });
+    let drawing = match app.session.state() {
+        Ok(st) if !app.ui.start_tab => Some(format!("{}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" })),
+        _ => None,
+    };
+    egui::Panel::top("cc_menubar").exact_size(BAR_HEIGHT).frame(egui::Frame::NONE.fill(t.list_bg)).show(ui, |ui| {
+        let bar = ui.max_rect();
+        let inner = bar.shrink2(egui::vec2(8.0, 0.0));
+        let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let ui = &mut ui;
+        ui.spacing_mut().item_spacing.x = 2.0;
+
+        let about = bar_button(
+            ui,
+            30.0,
+            |_| false,
+            |ui, rect, _| {
+                let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(18.0, 18.0));
+                match crate::dialogs::about_icon(ui.ctx()) {
+                    Some(tex) => {
+                        egui::Image::new((tex.id(), icon.size())).paint_at(ui, icon);
+                    }
+                    None => crate::icons::paint(ui.painter(), icon, Icon::Switcher, false),
                 }
-            });
-        },
-    );
+            },
+        );
+        crate::icons::describe_control(ui, &about, "About CADCraft", None, false);
+        if about.on_hover_text(crate::tl!("About CADCraft")).clicked() {
+            clicked = Some("ui.dialog.about".to_string());
+        }
+        ui.add_space(2.0);
+
+        // With one menu open, pointing at another name opens that menu instead.
+        let any_open_id = egui::Id::new("cc_menubar_open");
+        let was_open = ui.data(|d| d.get_temp::<bool>(any_open_id)).unwrap_or(false);
+        let mut any_open = false;
+        let font = egui::FontId::proportional(13.0);
+        let mut right = inner.left();
+        for (name, entries) in &tree {
+            let label = crate::i18n::menu(name);
+            let galley = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text);
+            let resp = bar_button(
+                ui,
+                galley.size().x + 18.0,
+                |resp| egui::Popup::is_id_open(&resp.ctx, egui::Popup::default_response_id(resp)),
+                |ui, rect, open| {
+                    // White reads on the dark theme's open fill; the light theme's is pale.
+                    let color = if open && crate::theme::luminance(t.tab_active) < 0.6 { t.on_accent } else { t.text };
+                    ui.painter().galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley.clone(), color);
+                },
+            );
+            let popup = egui::Popup::default_response_id(&resp);
+            let open = egui::Popup::is_id_open(ui.ctx(), popup);
+            if was_open && !open && resp.hovered() {
+                egui::Popup::open_id(ui.ctx(), popup);
+            }
+            any_open |= open;
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, label));
+            crate::control::record_widget(ui, &resp, label, "button", Some(open));
+            right = resp.rect.right();
+            let config = menu_config();
+            egui::Popup::menu(&resp)
+                .gap(1.0)
+                .close_behavior(config.close_behavior)
+                .style(config.style.clone())
+                .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
+                .show(|ui| menu_rows(ui, entries, MENU_ROW_WIDTH, true, &mut clicked));
+        }
+        ui.data_mut(|d| d.insert_temp(any_open_id, any_open));
+
+        if let Some(name) = drawing {
+            let galley = ui.painter().layout_no_wrap(name, egui::FontId::proportional(12.0), t.text_faint);
+            let at = egui::pos2(inner.right() - galley.size().x, bar.center().y - galley.size().y / 2.0);
+            if at.x > right + 16.0 {
+                ui.painter().galley(at, galley, t.text_faint);
+            }
+        }
+    });
     if let Some(id) = clicked {
         activate(app, &id);
     }
@@ -647,11 +1089,68 @@ mod tests {
     }
 
     #[test]
+    fn discord_link_opens_on_the_next_frame() {
+        let (mut app, _) = app_with_picker(None);
+        app.start("ui.discord");
+        assert_eq!(app.open_url.as_deref(), Some(super::DISCORD_URL));
+        app.logic(&egui::Context::default());
+        assert!(app.open_url.is_none());
+    }
+
+    #[test]
     fn cancelled_export_writes_nothing() {
         let (mut app, asked) = app_with_picker(None);
         app.start("exportpdf");
         assert_eq!(asked.borrow().len(), 1);
         assert!(app.session.running.is_none());
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::{Entry, Known, append, tidy, without};
+
+    fn labels(entries: &[Entry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|e| match e {
+                Entry::Item { label, .. } => label.clone(),
+                Entry::Sub { label, children, .. } => format!("{label}[{}]", labels(children).join(",")),
+                Entry::Separator => "-".into(),
+            })
+            .collect()
+    }
+
+    fn known(id: &'static str, menu: &'static [&'static str]) -> Known {
+        Known { id, label: id, menu, shortcut: None, enabled: true }
+    }
+
+    #[test]
+    fn unplaced_commands_follow_one_separator_or_join_their_submenu() {
+        let mut entries =
+            vec![known("a", &["Tools", "A"]).item(None, None, None), Entry::Sub { label: "Sub".into(), children: Vec::new(), icon: None }];
+        let mut separated = false;
+        for k in [known("b", &["Tools", "B"]), known("c", &["Tools", "Sub", "C"]), known("d", &["Tools", "New", "D"]), known("e", &["Tools", ""])] {
+            append(&mut entries, k.menu.get(1..).unwrap_or_default(), &k, None, &mut separated);
+        }
+        assert_eq!(labels(&entries), ["A", "Sub[C]", "-", "B", "New[D]", "e"]);
+    }
+
+    #[test]
+    fn separators_never_lead_trail_or_double() {
+        let item = |id| known(id, &[]).item(None, None, None);
+        let sub = |children| Entry::Sub { label: "S".into(), children, icon: None };
+        let entries = vec![
+            Entry::Separator,
+            item("a"),
+            Entry::Separator,
+            Entry::Separator,
+            sub(vec![Entry::Separator]),
+            sub(vec![item("b"), Entry::Separator]),
+            Entry::Separator,
+        ];
+        assert_eq!(labels(&tidy(entries.clone())), ["a", "-", "S[b]"]);
+        assert_eq!(labels(&without(entries, &["b"])), ["a"]);
     }
 }
 
