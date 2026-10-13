@@ -212,14 +212,15 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
     (
         "Tools",
         &[
-            cmd("script"),
-            cmd("compare"),
+            ico("script", Icon::Script),
+            ico("compare", Icon::Compare),
             ico("dataextraction", Icon::DataLink),
             SEP,
-            cmd("group"),
+            ico("group", Icon::Group),
             cmd("ungroup"),
-            sub(
+            sub_ico(
                 "Draw Order",
+                Icon::DrawOrder,
                 &[
                     cmd("draworder.front"),
                     cmd("draworder.back"),
@@ -299,7 +300,7 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
             ico("xopen", Icon::Xref),
             SEP,
             ico("dsettings", Icon::Gear),
-            cmd("ui.spacemouse"),
+            ico("ui.spacemouse", Icon::Mouse3d),
             ico("options", Icon::Gear),
         ],
     ),

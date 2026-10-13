@@ -169,6 +169,11 @@ pub enum Icon {
     DimStyle,
     Units,
     Rename,
+    Script,
+    Compare,
+    Group,
+    DrawOrder,
+    Mouse3d,
 }
 
 #[derive(Clone, Copy)]
@@ -952,6 +957,7 @@ pub fn paint_tinted(p: &Painter, rect: Rect, icon: Icon, dim: bool, tint: Option
         Template | Pdf | Wrench | Quit | Cut | ClipCopy | Paste | SelectAll | Globe => menu_icon(&Pen { g: 20.0, ..pen }, icon),
         Regen | NamedViews | Viewports | Ucs | Theme | Accessibility | Xref | DataLink | Layout | LayerState | ColorWheel | Linetype | TextStyle
         | DimStyle | Units | Rename => menu_icon(&Pen { g: 20.0, ..pen }, icon),
+        Script | Compare | Group | DrawOrder | Mouse3d => menu_icon(&Pen { g: 20.0, ..pen }, icon),
         // MENU-ARMS
     }
 }
@@ -1134,6 +1140,44 @@ fn menu_icon(m: &Pen, icon: Icon) {
             m.la(16.0, 5.0, 16.0, 15.0);
             m.la(15.0, 5.0, 17.0, 5.0);
             m.la(15.0, 15.0, 17.0, 15.0);
+        }
+        Script => {
+            // A sheet with a command prompt.
+            m.rect(5.0, 3.0, 10.0, 14.0, b);
+            m.poly(&[(7.5, 8.0), (9.5, 10.0), (7.5, 12.0)], false, a);
+            m.la(11.0, 12.0, 13.0, 12.0);
+        }
+        Compare => {
+            // Two sheets side by side, one line apart.
+            m.rect(3.0, 4.0, 6.0, 12.0, b);
+            m.rect(11.0, 4.0, 6.0, 12.0, b);
+            m.l(5.0, 8.0, 7.0, 8.0);
+            m.l(13.0, 8.0, 15.0, 8.0);
+            m.l(5.0, 11.0, 7.0, 11.0);
+            m.la(13.0, 12.0, 15.0, 12.0);
+        }
+        Group => {
+            // Four boxes held together.
+            for (x, y) in [(3.0, 3.0), (12.0, 12.0)] {
+                m.rect(x, y, 5.0, 5.0, b);
+            }
+            for (x, y) in [(3.0, 12.0), (12.0, 3.0)] {
+                m.rect(x, y, 5.0, 5.0, a);
+            }
+        }
+        DrawOrder => {
+            // One box in front of another.
+            m.rect(4.0, 4.0, 8.0, 8.0, b);
+            m.rect(8.0, 8.0, 8.0, 8.0, a);
+        }
+        Mouse3d => {
+            // A 3D mouse: a cap on a round base.
+            let base: Vec<(f32, f32)> =
+                (0..24).map(|i| (i as f32 * 15.0f32).to_radians()).map(|t| (10.0 + 6.0 * t.cos(), 13.0 + 3.0 * t.sin())).collect();
+            m.poly(&base, true, b);
+            m.la(7.0, 12.0, 7.0, 7.0);
+            m.arc(10.0, 7.0, 3.0, 0.0, 180.0, a);
+            m.la(13.0, 7.0, 13.0, 12.0);
         }
         // MENU-ICONS
         _ => {}
