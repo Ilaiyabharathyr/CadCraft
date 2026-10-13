@@ -47,6 +47,7 @@
 	Apply true color	Aplicar cor verdadeira
 	Arc	Arco
 	Arc Length	Comprimento do arco
+	Architecture	Arquitetura
 	Area	Área
 	Arrange Panel	Organizar painel
 	Array	Matriz
@@ -80,6 +81,7 @@
 	Break	Quebrar
 	Break At Point	Quebrar no ponto
 	Bring to Front	Trazer para a frente
+	Built	Compilação
 	ByBlock	PorBloco
 	ByColor	PorCor
 	ByLayer	PorCamada
@@ -122,7 +124,7 @@
 	Command Reference	Referência de comandos
 	Commits	Commits
 	Company	Empresa
-	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	Projeto e desenho assistidos por computador: um aplicativo CAD de código aberto, desenvolvido em clean-room e escrito em Rust puro.
+	Computer-aided design and drafting. An open-source, clean-room CAD application written in pure Rust.	Projeto e desenho assistidos por computador. Um aplicativo CAD de código aberto, desenvolvido em clean-room e escrito em Rust puro.
 	Concentric	Concêntrico
 	Cone	Cone
 	Constraint Bars	Barras de restrição
@@ -182,6 +184,7 @@
 	Dimensional Constraint Parameters	Parâmetros de restrição dimensional
 	Dimensional Constraints	Restrições dimensionais
 	Disassociate Dimensions	Desassociar cotas
+	Discord	Discord
 	Display name	Nome de exibição
 	Distance	Distância
 	Divide	Dividir
@@ -297,6 +300,7 @@
 	Geometry	Geometria
 	Get Variable	Obter variável
 	Get View	Obter vista
+	GitHub	GitHub
 	Global	Global
 	Global width	Largura global
 	Grab bag	Lista
@@ -358,7 +362,6 @@
 	Isometric Drafting	Desenho isométrico
 	Join	Unir
 	Join the ArtCraft Discord…	Entrar no Discord do ArtCraft…
-	Join us on Discord	Junte-se a nós no Discord
 	Language	Idioma
 	Last	Último
 	Last commit	Último commit
@@ -386,6 +389,7 @@
 	Length X	Comprimento X
 	Length Y	Comprimento Y
 	Lengthen	Alongar
+	License	Licença
 	Light	Claro
 	Line	Linha
 	Line delta	Delta da linha
@@ -415,7 +419,6 @@
 	Lock Layer	Bloquear camada
 	Lock/Unlock	Bloquear/desbloquear
 	Loft	Loft
-	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OU Apache-2.0. Sem afiliação com a Autodesk, Inc.
 	MODEL	MODELO
 	MText	MText
 	Magenta	Magenta
@@ -472,6 +475,7 @@
 	No selection	Nenhuma seleção
 	Node	Nó
 	None	Nenhum
+	Not affiliated with Autodesk, Inc.	Sem afiliação com a Autodesk, Inc.
 	Not available	Não disponível
 	Not available yet	Ainda não disponível
 	OK	OK
@@ -486,7 +490,6 @@
 	Offset	Deslocar
 	On	Ativado
 	On/Off	Ativar/desativar
-	One of the Crafting Apps by the ArtCraft team and community.	Um dos Crafting Apps da equipe e da comunidade ArtCraft.
 	Open (⌘O)	Abrir (⌘O)
 	Open Sample Drawing	Abrir desenho de exemplo
 	Open sample drawing	Abrir desenho de exemplo
@@ -949,6 +952,7 @@
 	Value:	Valor:
 	Version	Versão
 	Version {version}	Versão {version}
+	Version {version} ({hash})	Versão {version} ({hash})
 	Vertical	Vertical
 	VerticalDistance	DistânciaVertical
 	View	Exibir
@@ -960,6 +964,7 @@
 	Viewports	Viewports
 	W	O
 	WCS ⌄	SCM ⌄
+	Website	Site
 	White	Branco
 	Width factor	Fator de largura
 	Window	Janela
@@ -982,6 +987,8 @@
 	{kind} (constraint {id})	{kind} (restrição {id})
 	{kind} constraint {name} = {expression}  (double-click to edit)	Restrição {kind} {name} = {expression}  (clique duas vezes para editar)
 	{name}: {distance} < {angle}°	{name}: {distance} < {angle}°
+	© ArtCraft Team and the CADCraft contributors	© Equipe ArtCraft e colaboradores do CADCraft
+	© {year} ArtCraft Team and the CADCraft contributors	© {year} Equipe ArtCraft e colaboradores do CADCraft
 	ƒx  New User Parameter	ƒx  Novo parâmetro do usuário
 	ΔLOC	Δlinhas
 	−Bin	−bin.
