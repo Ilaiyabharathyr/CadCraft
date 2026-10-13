@@ -49,6 +49,10 @@ pub struct Prompt {
     /// [`Input::Text`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub picker: Option<Picker>,
+    /// Shown as written, without keywords, a default or a colon added: an AutoLISP `get…`
+    /// prompt (the routine writes all of it).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub raw: bool,
 }
 
 /// A visual chooser for a prompt ([`Prompt::picker`]).
@@ -61,7 +65,17 @@ pub enum Picker {
 
 impl Prompt {
     pub fn new(message: impl Into<String>, accept: Accept) -> Self {
-        Prompt { message: message.into(), keywords: Vec::new(), default: None, accept, base: None, deferred: false, grip: None, picker: None }
+        Prompt {
+            message: message.into(),
+            keywords: Vec::new(),
+            default: None,
+            accept,
+            base: None,
+            deferred: false,
+            grip: None,
+            picker: None,
+            raw: false,
+        }
     }
     /// The grip being stretched (the `grip` field).
     pub fn grip(mut self, g: (Handle, usize)) -> Self {
@@ -102,6 +116,9 @@ impl Prompt {
     }
     /// "Specify next point or [Undo/Close] <default>:".
     pub fn display(&self) -> String {
+        if self.raw {
+            return self.message.trim_matches(['\n', '\r']).to_string();
+        }
         let mut s = self.message.clone();
         if !self.keywords.is_empty() {
             // A question offers its answers ("Fix any errors detected? [Yes/No]"); anything else
