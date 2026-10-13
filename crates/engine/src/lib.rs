@@ -11,12 +11,14 @@
 pub mod assoc;
 pub mod audit;
 pub mod autosave;
+pub mod blockedit;
 pub mod cmd;
 mod finite;
 pub mod grip_dims;
 pub mod grips;
 mod guard;
 pub mod lisp;
+pub mod mtext_edit;
 pub mod pointmod;
 pub mod prompt;
 mod recent;
@@ -137,6 +139,9 @@ pub struct DocState {
     pub uid: u64,
     /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
     pub binary_dxf: bool,
+    /// The Block Editor (BEDIT), when it is open: `doc` is then the editor's drawing, and the
+    /// drawing itself waits in it ([`DocState::drawing`]).
+    pub block_edit: Option<blockedit::BlockEdit>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -162,10 +167,13 @@ impl DocState {
             view_history: Vec::new(),
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
+            block_edit: None,
         }
     }
+    /// The drawing has changes not saved to its file, or the Block Editor has changes not yet
+    /// saved into its block.
     pub fn is_dirty(&self) -> bool {
-        !Arc::ptr_eq(&self.doc, &self.saved)
+        !Arc::ptr_eq(self.drawing(), &self.saved) || self.block_unsaved()
     }
     /// After undo/redo replaced the drawing (`before` is the one shown until then): if the current
     /// layout no longer exists, follow it to its other name when it was renamed (same tab order,
@@ -365,7 +373,11 @@ pub struct Settings {
     /// prompt's options there (on by default).
     pub dynprompt: bool,
     pub lwdisplay: bool,
+    /// TRANSPARENCYDISPLAY: draw objects with their transparency on screen (on by default).
     pub transparency_display: bool,
+    /// PLOTTRANSPARENCYOVERRIDE: 0 never plots transparency, 1 (default) uses the page setup's or
+    /// the Plot dialog's "Plot transparency", 2 always plots it.
+    pub plot_transparency_override: u8,
     pub selection_cycling: bool,
     /// SELECTSIMILARMODE: what SELECTSIMILAR matches besides the object type (bits: 1 colour,
     /// 2 layer, 4 linetype, 8 linetype scale, 16 lineweight, 32 plot style, 64 object style,
@@ -395,6 +407,32 @@ pub struct Settings {
     pub annoautoscale: bool,
     /// QPMODE: show the Quick Properties palette when objects are selected.
     pub qpmode: bool,
+    /// HIGHLIGHT: selected objects are highlighted (their grips show either way). Not saved:
+    /// every session starts with it on, as in AutoCAD, so it can't stay off unnoticed.
+    pub highlight: bool,
+    /// SELECTIONEFFECT: how selected objects are highlighted: 0 dashed, 1 redrawn in the
+    /// selection colour.
+    pub selectioneffect: u8,
+    /// SELECTIONPREVIEW bits: the object under the cursor is highlighted (1) when no command is
+    /// active, (2) when a command asks for objects.
+    pub selectionpreview: u8,
+    /// PREVIEWEFFECT: how that object is highlighted: 0 dashed, 1 thicker, 2 dashed and thicker.
+    pub previeweffect: u8,
+    /// PREVIEWFILTER bits: objects the cursor never highlights: 1 on locked layers, 2 xrefs,
+    /// 4 tables, 8 multiline text, 16 hatches, 32 in groups.
+    pub previewfilter: u8,
+    /// GRIPS: selected objects show their grips (0 off; AutoCAD's 2, more grips on polylines,
+    /// shows them as 1 does).
+    pub grips: u8,
+    /// GRIPOBJLIMIT: no grips while more objects than this are selected (0: no limit).
+    pub gripobjlimit: u32,
+    /// SELECTIONAREA: the selection window and crossing areas are filled.
+    pub selectionarea: bool,
+    /// WINDOWAREACOLOR, CROSSINGAREACOLOR: their colours (ACI 1-255).
+    pub windowareacolor: u8,
+    pub crossingareacolor: u8,
+    /// SELECTIONAREAOPACITY: their opacity, 0-100.
+    pub selectionareaopacity: u8,
     /// POLARMODE bits ([`snap::tracking::polarmode`]); polar tracking itself is on while
     /// `polarmode` is (AUTOSNAP bit 8, F10).
     pub polar_flags: u32,
@@ -429,7 +467,8 @@ impl Default for Settings {
             dynpi_absolute: false,
             dynprompt: true,
             lwdisplay: false,
-            transparency_display: false,
+            transparency_display: true,
+            plot_transparency_override: 1,
             selection_cycling: false,
             selectsimilarmode: 130,
             otrack: true,
@@ -447,6 +486,17 @@ impl Default for Settings {
             annoallvisible: true,
             annoautoscale: false,
             qpmode: false,
+            highlight: true,
+            selectioneffect: 1,
+            selectionpreview: 3,
+            previeweffect: 2,
+            previewfilter: 3,
+            grips: 1,
+            gripobjlimit: 100,
+            selectionarea: true,
+            windowareacolor: 150,
+            crossingareacolor: 100,
+            selectionareaopacity: 25,
             polar_flags: 0,
             polaraddang: Vec::new(),
             polarsnap: false,
@@ -813,7 +863,11 @@ impl Session {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
+        if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {
+            return Err(EngineError::Disabled(spec.id.into(), why));
+        }
         let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
+        let editing = self.state().is_ok_and(|s| s.block_edit.is_some());
         let run = spec.run;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self, params)));
         let result = match result {
@@ -836,7 +890,10 @@ impl Session {
             (Some(m), Ok(_)) => Err(EngineError::Other(m)),
             (_, r) => r,
         };
-        self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), spec.undoable && result.is_ok());
+        // Opening or closing the Block Editor swaps the whole drawing: nothing in it changed.
+        if self.state().is_ok_and(|s| s.block_edit.is_some()) == editing {
+            self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), spec.undoable && result.is_ok());
+        }
         let result = match (result, &before) {
             (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
             (r, _) => r,
@@ -917,6 +974,9 @@ impl Session {
             self.cancel();
         }
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
+        if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {
+            return Err(EngineError::Disabled(spec.id.into(), why));
+        }
         if nested {
             // The outer command stays the one Enter repeats.
             self.echo(format!(">>{}", spec.id.to_ascii_uppercase()));
@@ -1280,6 +1340,12 @@ impl Session {
         }
     }
 
+    /// The multiline text the running command is collecting, for the in-place editor
+    /// ([`Interactive::editing_mtext`]).
+    pub fn editing_mtext(&self) -> Option<cadcraft_doc::MText> {
+        self.running.as_ref().and_then(|r| r.machine.editing_mtext())
+    }
+
     pub fn current_prompt(&self) -> Option<Prompt> {
         if let Some(p) = self.lisp_prompt() {
             return Some(p);
@@ -1301,6 +1367,21 @@ impl Session {
             Some(p) => p.picks_objects(),
             None => self.settings.pickfirst,
         }
+    }
+
+    /// Whether the object under the cursor is highlighted (SELECTIONPREVIEW): the cursor picks
+    /// objects ([`Self::picking_objects`]) and the bit for a command asking for them (2) or for
+    /// no command (1) is on.
+    pub fn previews_selection(&self) -> bool {
+        let bit = if self.current_prompt().is_some() { 2 } else { 1 };
+        self.picking_objects() && self.settings.selectionpreview & bit != 0
+    }
+
+    /// Whether selected objects show grips while `selected` objects are selected (GRIPS,
+    /// GRIPOBJLIMIT).
+    pub fn shows_grips(&self, selected: usize) -> bool {
+        let limit = self.settings.gripobjlimit;
+        self.settings.grips > 0 && (limit == 0 || selected <= limit as usize)
     }
 
     /// The text shown on the command line: the active prompt, or "Command:".
@@ -1648,6 +1729,7 @@ impl Session {
                 serde_json::json!({
                     "index": i, "title": d.title, "path": d.path, "dirty": d.is_dirty(),
                     "entities": d.doc.entity_count(), "active": i == self.active, "revision": d.revision,
+                    "blockEditor": d.block_editor(),
                 })
             })
             .collect();

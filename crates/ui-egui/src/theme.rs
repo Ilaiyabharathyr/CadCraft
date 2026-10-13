@@ -91,13 +91,13 @@ pub struct Tokens {
     pub hover: Color32,
     pub grip: Color32,
     pub grip_hot: Color32,
+    /// Grips of dynamic block references (AutoCAD's GRIPDYNCOLOR).
+    pub grip_dyn: Color32,
     pub snap: Color32,
     /// COMPARE: objects only in this drawing, only in the other one, and the areas of change.
     pub compare_this: Color32,
     pub compare_other: Color32,
     pub compare_area: Color32,
-    pub window_fill: Color32,
-    pub crossing_fill: Color32,
     pub window_stroke: Color32,
     pub crossing_stroke: Color32,
     pub cmd_bg: Color32,
@@ -151,12 +151,11 @@ impl Tokens {
         hover: Color32::from_rgb(0x9c, 0xc6, 0xff),
         grip: Color32::from_rgb(0x2f, 0x6b, 0xff),
         grip_hot: Color32::from_rgb(0xff, 0x3b, 0x3b),
+        grip_dyn: Color32::from_rgb(0x26, 0xc6, 0xe8),
         snap: Color32::from_rgb(0x2f, 0xd0, 0x62),
         compare_this: Color32::from_rgb(0x4c, 0xd9, 0x7b),
         compare_other: Color32::from_rgb(0xff, 0x5c, 0x5c),
         compare_area: Color32::from_rgb(0xff, 0xb4, 0x3c),
-        window_fill: Color32::from_rgba_premultiplied(0x18, 0x30, 0x60, 0x50),
-        crossing_fill: Color32::from_rgba_premultiplied(0x18, 0x48, 0x18, 0x50),
         window_stroke: Color32::from_rgb(0x6f, 0xa8, 0xff),
         crossing_stroke: Color32::from_rgb(0x7f, 0xe0, 0x7f),
         cmd_bg: Color32::from_rgba_premultiplied(0x34, 0x3c, 0x4a, 0xf0),
@@ -245,6 +244,8 @@ pub struct Canvas {
     pub paper: Option<Color32>,
     /// The side of an object snap marker, in points.
     pub snap_marker: f32,
+    /// The colour selected objects are highlighted in.
+    pub selection: Option<Color32>,
 }
 
 /// The default object snap marker size.
@@ -252,7 +253,7 @@ pub const SNAP_MARKER: f32 = 11.0;
 
 impl Default for Canvas {
     fn default() -> Self {
-        Canvas { model: None, paper: None, snap_marker: SNAP_MARKER }
+        Canvas { model: None, paper: None, snap_marker: SNAP_MARKER, selection: None }
     }
 }
 
@@ -262,7 +263,7 @@ impl Canvas {
             Some(bg) => t.with_model_background(bg),
             None => t,
         };
-        Tokens { paper: self.paper.unwrap_or(t.paper), ..t }
+        Tokens { paper: self.paper.unwrap_or(t.paper), selection: self.selection.unwrap_or(t.selection), ..t }
     }
 }
 
@@ -305,8 +306,8 @@ pub fn mono() -> FontId {
 /// then CJK fonts after the Latin ones, so Latin text keeps its look, in every interface
 /// language: file, layout and layer names can be Japanese or Chinese whatever the interface
 /// shows (#513). In a Chinese interface (`language` "zh…") the Chinese font comes first, else a
-/// Japanese one, so names take their own glyph forms; an installed Thai font follows, for Thai
-/// names, and in an Arabic interface an installed Arabic font. A font embedded from craft-fonts comes
+/// Japanese one, so names take their own glyph forms; in an Arabic interface an installed
+/// Arabic font follows. A font embedded from craft-fonts comes
 /// last, for systems without any (and the web build, which has no system fonts). A Korean
 /// interface adds a Hangul font only when the CJK font found doesn't cover Hangul
 /// ([`korean_font`]).
@@ -351,10 +352,6 @@ pub fn install_fonts(ctx: &egui::Context, language: &str) {
                 .enumerate()
                 .map(|(i, bytes)| (format!("system-cjk-{i}"), std::sync::Arc::new(egui::FontData::from_owned(bytes)))),
         );
-        // Thai: file names and drawing text show in any interface language, and the fonts are small.
-        if let Some(bytes) = thai_font().and_then(|p| read_capped(p, MAX_UI_FONT_BYTES)) {
-            added.push(("system-thai".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes))));
-        }
         // العربية: an installed Arabic face after the Latin ones (egui's bundled faces carry no
         // Arabic glyphs), for the Arabic interface.
         if language == "ar"
@@ -430,44 +427,6 @@ pub fn cjk_font() -> Option<&'static std::path::Path> {
                         "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
                         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
                         "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-                    ]
-                };
-                candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
-            })
-            .as_deref()
-    }
-    #[cfg(target_arch = "wasm32")]
-    None
-}
-
-/// An installed font with Thai characters, so Thai file names and text read in the interface;
-/// fonts are never bundled (only looked for where the OS or common packages put them). Checked once.
-pub fn thai_font() -> Option<&'static std::path::Path> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
-        FOUND
-            .get_or_init(|| {
-                let candidates: &[&str] = if cfg!(target_os = "macos") {
-                    &[
-                        "/System/Library/Fonts/ThonburiUI.ttc",
-                        "/System/Library/Fonts/Supplemental/Thonburi.ttc",
-                        "/System/Library/Fonts/Supplemental/SukhumvitSet.ttc",
-                        "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
-                    ]
-                } else if cfg!(windows) {
-                    &["C:\\Windows\\Fonts\\LeelawUI.ttf", "C:\\Windows\\Fonts\\leelawad.ttf", "C:\\Windows\\Fonts\\tahoma.ttf"]
-                } else {
-                    &[
-                        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
-                        "/usr/share/fonts/noto/NotoSansThai-Regular.ttf",
-                        "/usr/share/fonts/google-noto/NotoSansThai-Regular.ttf",
-                        "/usr/share/fonts/google-noto-vf/NotoSansThai[wght].ttf",
-                        "/usr/local/share/fonts/noto/NotoSansThai-Regular.ttf",
-                        "/usr/share/fonts/truetype/tlwg/Loma.ttf",
-                        "/usr/share/fonts/thai-scalable/Loma.ttf",
-                        "/usr/share/fonts/truetype/tlwg/Garuda.ttf",
-                        "/usr/share/fonts/truetype/thai/Garuda.ttf",
                     ]
                 };
                 candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
