@@ -430,7 +430,6 @@ pub fn thai_font() -> Option<&'static std::path::Path> {
 }
 
 /// Largest interface font file read or embedded face copied (CJK collections are 15–60 MB).
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_UI_FONT_BYTES: u64 = 96 * 1024 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -660,11 +659,13 @@ pub fn shows_hangul(language: &str) -> bool {
 }
 
 /// Whether the interface can show `language` without missing-glyph boxes: Chinese needs an
-/// installed CJK font, Korean a font with Hangul, العربية an installed Arabic font.
+/// installed CJK font, Korean a font with Hangul, العربية an installed Arabic font, Thai an
+/// installed Thai font.
 pub fn can_show(language: &str) -> bool {
     match language {
         "ko" => shows_hangul("ko"),
         "ar" => arabic_font().is_some(),
+        "th" => thai_font().is_some(),
         l if l.starts_with("zh") => cjk_font().is_some(),
         _ => true,
     }
