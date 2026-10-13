@@ -243,6 +243,11 @@ pub fn tr<'a>(language: &str, source: &'a str) -> &'a str {
     catalog(language).and_then(|c| c.get(&("", source))).copied().unwrap_or(source)
 }
 
+/// The language of the frame being drawn ([`with_language`]).
+pub fn current() -> &'static str {
+    CURRENT.get()
+}
+
 pub fn t(source: &str) -> &str {
     CURRENT.with(|l| tr(l.get(), source))
 }
