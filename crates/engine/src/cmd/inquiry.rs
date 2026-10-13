@@ -286,7 +286,7 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
         "title": st.title,
         "path": st.path,
         "dirty": st.is_dirty(),
-        "space": match &space { cadcraft_doc::Space::Model => "Model".to_string(), cadcraft_doc::Space::Paper(n) => n.clone() },
+        "space": space.tab_name(),
         "entityCount": d.entity_count(),
         "counts": counts,
         "extents": if ext.is_empty() { Value::Null } else { json!([[ext.min.x, ext.min.y], [ext.max.x, ext.max.y]]) },
@@ -300,6 +300,8 @@ fn run_inspect(s: &mut Session, p: &Value) -> Result<Value> {
         "selection": st.selection.iter().map(|h| h.hex()).collect::<Vec<_>>(),
         "undo": st.undo.iter().rev().take(20).map(|u| u.label.clone()).collect::<Vec<_>>(),
         "view": { "center": [st.view().center.x, st.view().center.y], "height": st.view().height },
+        // Records of the file the drawing came from that the reader could not place.
+        "skipped": { "count": d.skipped_records.values().fold(0usize, |a, n| a.saturating_add(*n)), "sections": d.skipped_records },
     });
     if bool_or(p, "entities", true)
         && let (Some(o), Some(store)) = (out.as_object_mut(), d.space(&space))
