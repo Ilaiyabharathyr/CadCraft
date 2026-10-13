@@ -817,10 +817,11 @@ fn a_change_is_recorded_in_the_references_history_and_data() {
     cadcraft_doc::dynblock::set_property(&mut d, h("80"), "Visibility1", "Open").unwrap();
     assert_eq!(cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"), pairs(&[(1070, "3"), (1071, "1"), (300, "Visibility1"), (1, "Open")]));
 
-    // A reference with data and no history gets one; both survive a save.
-    cadcraft_doc::dynblock::set_property(&mut d, h("81"), "Width", "60").unwrap();
+    // A reference with data and no history gets one (Width 30 → 32 in block units: the end
+    // grip is 4 short of Door's 36); both survive a save.
+    cadcraft_doc::dynblock::set_property(&mut d, h("81"), "Width", "64").unwrap();
     let again = read_dxf(write_dxf(&d).as_bytes()).unwrap();
-    let saved = pairs(&[(1070, "3"), (1071, "9"), (300, "GRIPLOC"), (11, "-6.0"), (21, "0.0"), (31, "0.0")]);
+    let saved = pairs(&[(1070, "3"), (1071, "9"), (300, "GRIPLOC"), (11, "-4.0"), (21, "0.0"), (31, "0.0")]);
     assert_eq!(cache_entry(&again, "81", "ACAD_ENHANCEDBLOCKHISTORY"), saved);
     assert_eq!(cache_entry(&again, "80", "ACAD_ENHANCEDBLOCKHISTORY"), cache_entry(&d, "80", "ACAD_ENHANCEDBLOCKHISTORY"));
 }

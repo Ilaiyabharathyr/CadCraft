@@ -5,10 +5,12 @@
 //! a reference to the dynamic block: the anonymous block's BLOCK_RECORD carries
 //! `AcDbBlockRepBTag` xdata naming the dynamic block's record, each copied object keeps the
 //! `AcDbBlockRepETag` xdata that pairs it with its object in the dynamic block, and the reference's
-//! `AcDbBlockRepresentation` data holds its values (created when it had none).
+//! `AcDbBlockRepresentation` data holds its values (created when it had none) and its history
+//! says what was done to it (AutoCAD replays the history when the dynamic block is redefined).
 //!
-//! What can change so far: a visibility state, and a lookup value whose rows set only visibility
-//! states. Distances, positions and the other parameters' actions come later.
+//! What can change so far: a visibility state, a lookup value, a distance and a position, with
+//! the stretch and move actions they drive and the lookups that follow. The other parameters'
+//! actions come later.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -531,7 +533,8 @@ fn apply(
         }
     })
     .map_err(|e| e.to_string())?;
-    record_values(d, insert, def_record, &m, &new, direct);
+    let was = current(&m, values, direct);
+    record_values(d, insert, def_record, &m, &new, (direct, was.as_ref()));
     drop_if_unused(d, &old);
     Ok(())
 }
@@ -612,11 +615,18 @@ fn own(mut tags: Vec<RawTag>, h: Handle, owner: Handle) -> Vec<RawTag> {
 }
 
 /// Record values `set` (by parameter graph id) in `insert`'s representation data, and the direct
-/// change (of parameter `direct`) in its history, creating them when the reference has none. A
+/// change (of parameter `direct`, from value `old`) in its history, creating them when the reference has none. A
 /// new reference's data gets a record for everything other references of the dynamic block have
 /// (AutoCAD keeps one for each parameter and stretch action), with its own values; with no other
 /// reference to copy, a changed value gets a minimal record.
-fn record_values(d: &mut Drawing, insert: Handle, def_record: Option<Handle>, m: &DynamicBlock, set: &BTreeMap<i32, Val>, direct: i32) {
+fn record_values(
+    d: &mut Drawing,
+    insert: Handle,
+    def_record: Option<Handle>,
+    m: &DynamicBlock,
+    set: &BTreeMap<i32, Val>,
+    (direct, old): (i32, Option<&Val>),
+) {
     let xdict = d.foreign.entities.get(&insert).and_then(|x| x.xdict);
     let rep = xdict.and_then(|x| entry(d, x, "AcDbBlockRepresentation"));
     let cache = rep.and_then(|r| entry(d, r, "AppDataCache"));
@@ -738,13 +748,13 @@ fn record_values(d: &mut Drawing, insert: Handle, def_record: Option<Handle>, m:
             Some(h) => {
                 let f = std::sync::Arc::make_mut(&mut d.foreign);
                 if let Some(x) = f.objects.iter_mut().find(|o| o.handle == h) {
-                    write_history(&mut x.tags, p, v);
+                    write_history(&mut x.tags, p, old, v);
                 }
             }
             None => {
                 let h = d.new_handle();
                 let mut tags = vec![tag(5, h.hex()), tag(330, cache.hex()), tag(100, "AcDbXrecord"), tag(280, "1"), tag(1070, "3")];
-                write_history(&mut tags, p, v);
+                write_history(&mut tags, p, old, v);
                 objects.push(ForeignObject { handle: h, kind: "XRECORD".into(), tags });
                 new_history = Some(h);
             }
@@ -768,8 +778,9 @@ fn record_values(d: &mut Drawing, insert: Handle, def_record: Option<Handle>, m:
 /// after its header (`280 1`, `1070 3`), an entry per change: `1071` the id, `300` what, then
 /// the value. A visibility state or lookup value goes by the property's name (`1` the text); a
 /// dragged grip as `GRIPLOC` with how far it is from where the dynamic block has it
-/// (`11/21/31`). An entry for the same id is replaced; a grip back in its place has none.
-fn write_history(tags: &mut Vec<RawTag>, p: &super::Parameter, v: &Val) {
+/// (`11/21/31`); only the grips the change moves (from `old`). An entry for the same id is
+/// replaced; a grip back in its place has none.
+fn write_history(tags: &mut Vec<RawTag>, p: &super::Parameter, old: Option<&Val>, v: &Val) {
     let grip = |id: i32, moved: Vec3| {
         let home = moved.x.abs() < 1e-9 && moved.y.abs() < 1e-9 && moved.z.abs() < 1e-9;
         let e = vec![
@@ -781,14 +792,26 @@ fn write_history(tags: &mut Vec<RawTag>, p: &super::Parameter, v: &Val) {
         ];
         (id, if home { Vec::new() } else { e })
     };
-    let grips =
-        |moves: &[Vec3]| -> Vec<(i32, Vec<RawTag>)> { p.grips.iter().zip(moves).filter(|(g, _)| **g != 0).map(|(g, m)| grip(*g, *m)).collect() };
+    // Each grip with where it was, where it is and where the dynamic block has it.
+    let grips = |places: &[(Vec3, Vec3, Vec3)]| -> Vec<(i32, Vec<RawTag>)> {
+        p.grips
+            .iter()
+            .zip(places)
+            .filter(|(g, (was, is, _))| **g != 0 && (*was - *is).len() > 1e-9)
+            .map(|(g, (_, is, home))| grip(*g, *is - *home))
+            .collect()
+    };
+    let (ob, oe) = match old {
+        Some(Val::Points(b, e)) => (Some(*b), Some(*e)),
+        Some(Val::Point(q)) => (Some(*q), None),
+        _ => (None, None),
+    };
     let changes: Vec<(i32, Vec<RawTag>)> = match (&p.kind, v) {
         (ParameterKind::Visibility { label, .. } | ParameterKind::Lookup { label, .. }, Val::Text(t)) => {
             vec![(p.node, vec![tag(1071, p.node.to_string()), tag(300, label.clone()), tag(1, t.clone())])]
         }
-        (ParameterKind::Linear { base, end, .. }, Val::Points(b, e)) => grips(&[*b - *base, *e - *end]),
-        (ParameterKind::Point { at, .. }, Val::Point(q)) => grips(&[*q - *at]),
+        (ParameterKind::Linear { base, end, .. }, Val::Points(b, e)) => grips(&[(ob.unwrap_or(*base), *b, *base), (oe.unwrap_or(*end), *e, *end)]),
+        (ParameterKind::Point { at, .. }, Val::Point(q)) => grips(&[(ob.unwrap_or(*at), *q, *at)]),
         _ => return,
     };
     // The header, then the entries (each from its 1071).
