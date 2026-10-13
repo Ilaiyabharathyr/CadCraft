@@ -77,6 +77,43 @@ fn programmatic_undo_during_a_command_ends_it_first() {
 }
 
 #[test]
+fn undo_during_line_removes_the_last_segment_and_keeps_line_running() {
+    let mut s = Session::new();
+    s.cmdline("line 0,0 10,0 10,10 20,10").unwrap();
+    assert_eq!(kinds(&s), vec!["Line", "Line", "Line"]);
+    // Ctrl+Z / the U command / the menu (Session::start) act as the Undo keyword.
+    s.start("u").unwrap();
+    assert!(s.running.is_some());
+    assert_eq!(kinds(&s), vec!["Line", "Line"]);
+    s.start("u").unwrap();
+    assert!(s.running.is_some());
+    assert_eq!(kinds(&s), vec!["Line"]);
+    // The command goes on from the last remaining point.
+    s.cmdline("10,5").unwrap();
+    assert_eq!(kinds(&s), vec!["Line", "Line"]);
+    s.cmdline("").unwrap();
+    assert!(s.running.is_none());
+}
+
+#[test]
+fn undo_during_a_command_without_undo_keyword_ends_it_and_undoes() {
+    let mut s = Session::new();
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    // LINE at its first point offers no Undo: Ctrl+Z ends it, then undoes the earlier line.
+    s.cmdline("line").unwrap();
+    assert!(s.running.is_some());
+    s.start("u").unwrap();
+    assert!(s.running.is_none());
+    assert!(kinds(&s).is_empty());
+    // TEXT offers no Undo keyword either.
+    s.execute("line", &json!({"points": [[0, 0], [10, 0]]})).unwrap();
+    s.script("TEXT 0,0 5 0 HELLO\n").unwrap();
+    s.start("u").unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(kinds(&s), vec!["Line"]);
+}
+
+#[test]
 fn polar_and_direct_distance() {
     let mut s = Session::new();
     s.cmdline("line 1,1").unwrap();
@@ -638,6 +675,8 @@ fn hostile_params_never_panic() {
             json!({"points": [[1e308, -1e308], ["a"]]}),
             json!({"handles": ["zz", 99999]}),
             json!({"radius": -1, "center": [0, 0]}),
+            json!({"gradient": {"name": 5, "color1": [1], "angle": "x", "centered": "y"}}),
+            json!({"points": [[0, 0]], "handles": ["1"], "gradient": "x", "name": "RAINBOW"}),
         ] {
             let _ = s.execute(c.id, &p);
         }
@@ -860,6 +899,21 @@ fn gradient_pick_point_keeps_island_of_separate_lines() {
 }
 
 #[test]
+fn boundary_point_batch_is_capped() {
+    let mut s = Session::new();
+    let sq = [[0, 0], [20, 0], [20, 20], [0, 20]];
+    for i in 0..4 {
+        s.execute("line", &json!({"points": [sq[i], sq[(i + 1) % 4]]})).unwrap();
+    }
+    let many: Vec<_> = (0..100_000).map(|_| json!([2, 2])).collect();
+    let t = std::time::Instant::now();
+    assert!(s.execute("boundary", &json!({"points": many})).is_err());
+    assert!(t.elapsed().as_secs() < 5);
+    let ok: Vec<_> = (0..8).map(|_| json!([2, 2])).collect();
+    assert!(s.execute("boundary", &json!({"points": ok})).is_ok());
+}
+
+#[test]
 fn boundary_pick_point_keeps_island_of_separate_lines() {
     for lines in [true, false] {
         let mut s = square_hole_fixture(lines);
@@ -979,6 +1033,27 @@ fn line_first_point_deferred_tangent() {
     s.cmdline("").unwrap();
     assert_eq!(line_ends(&s).len(), 2);
     assert!(line_ends(&s)[1].0.near(b, 1e-12));
+}
+
+#[test]
+fn line_deferred_tangent_with_typed_polar() {
+    let mut s = Session::new();
+    s.cmdline("circle 0,0 5").unwrap();
+    s.execute("osnap", &json!({"modes": ["tan"]})).unwrap();
+    s.cmdline("line").unwrap();
+    snap_click(&mut s, Vec2::new(0.1, 5.2)); // deferred TAN, near the top of the circle
+    s.cmdline("@150<218").unwrap();
+    s.cmdline("").unwrap();
+    let ends = line_ends(&s);
+    assert_eq!(ends.len(), 1);
+    let (a, b) = ends[0];
+    // The start is the tangent point on the circle.
+    assert!((a.len() - 5.0).abs() < 1e-9, "start not on circle: {a:?}");
+    // The typed direction and distance are exact.
+    let v = b - a;
+    assert!((v.len() - 150.0).abs() < 1e-9, "length was {}", v.len());
+    let angle = v.y.atan2(v.x).to_degrees().rem_euclid(360.0);
+    assert!((angle - 218.0).abs() < 1e-9, "angle was {angle}");
 }
 
 #[test]
