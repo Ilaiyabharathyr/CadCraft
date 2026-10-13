@@ -83,7 +83,12 @@ struct DynGripEdit {
     /// The property it changes, and the grip's shape (a typed number sets a distance or angle).
     property: String,
     shape: GripShape,
+    /// Where the grip can stop (a value list or increments): tick marks across its travel.
+    stops: Vec<(Vec2, Vec2)>,
 }
+
+/// Half a tick mark's length, in pixels.
+const TICK_PX: f64 = 6.0;
 
 impl Interactive for DynGripEdit {
     fn name(&self) -> &'static str {
@@ -128,6 +133,11 @@ impl Interactive for DynGripEdit {
             Ok(()) => drawn(&d, self.handle),
             Err(_) => Vec::new(),
         };
+        let half = TICK_PX * s.pixel_size();
+        out.extend(self.stops.iter().map(|(at, way)| {
+            let n = way.perp() * half;
+            crate::cmd::helpers::line(*at - n, *at + n)
+        }));
         out.push(crate::cmd::helpers::line(self.from, c));
         out
     }
@@ -149,7 +159,8 @@ impl Session {
             return Err(EngineError::Other("a list or flip grip is clicked, not dragged".into()));
         }
         let label = if g.shape == GripShape::Rotation { "** ROTATE **" } else { "** STRETCH **" };
-        let edit = DynGripEdit { handle, node, part, from: g.at, property: g.property, shape: g.shape };
+        let stops = dynblock::grip_stops(self.doc()?, handle, node, part);
+        let edit = DynGripEdit { handle, node, part, from: g.at, property: g.property, shape: g.shape, stops };
         let machine = crate::guard::Guarded::wrap(Box::new(edit));
         let st = self.state()?;
         let (before, selection_before) = (st.doc.clone(), st.selection.clone());

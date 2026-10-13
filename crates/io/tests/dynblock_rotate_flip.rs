@@ -7,7 +7,9 @@
 //! rotate action, Flip state1 (reflection line from the origin to (-10, 0)) and its flip action,
 //! and Position1 at (0, 3) with a move action.
 
-use cadcraft_doc::dynblock::{ActionKind, GripPart, GripShape, ParameterKind, custom_properties, drag_grip, dynamic_block, grips, set_property};
+use cadcraft_doc::dynblock::{
+    ActionKind, GripPart, GripShape, ParameterKind, custom_properties, drag_grip, dynamic_block, grip_stops, grips, set_property,
+};
 use cadcraft_doc::geom::{Vec2, Vec3};
 use cadcraft_doc::{Drawing, EntityKind, Handle};
 use cadcraft_io::{read_dxf, write_dxf};
@@ -25,8 +27,12 @@ fn dxf(src: &str) -> String {
 
 /// Symbol and a reference to it at (100, 100) with its attribute.
 fn symbol() -> (Drawing, Handle) {
-    let src = include_str!("data/dynblock_symbol.txt").replace("\r\n", "\n");
-    let mut d = read_dxf(dxf(&src).as_bytes()).unwrap();
+    symbol_from(&include_str!("data/dynblock_symbol.txt").replace("\r\n", "\n"))
+}
+
+/// As [`symbol`], from the fixture's text `src` (changed by a test).
+fn symbol_from(src: &str) -> (Drawing, Handle) {
+    let mut d = read_dxf(dxf(src).as_bytes()).unwrap();
     let def =
         d.block("Symbol").unwrap().entities.iter().find_map(|e| if let EntityKind::AttDef(a) = &e.kind { Some(a.clone()) } else { None }).unwrap();
     let mut a = def.clone();
@@ -140,6 +146,29 @@ fn rotation_and_flip_grips() {
     // A flip grip is clicked, not dragged; the base of the angle is not a point to aim at.
     assert!(drag_grip(&mut d, r, 20, GripPart::Base, Vec2::new(90.0, 90.0)).is_err());
     assert!(drag_grip(&mut d, r, 15, GripPart::End, Vec2::new(100.0, 100.0)).is_err());
+}
+
+#[test]
+fn an_angle_by_increments_marks_its_stops_round_the_circle() {
+    // Angle1 by 90° from 0 to a full turn: its grip stops at four points round the base, the
+    // full turn being no turn; the way it travels there is round the circle.
+    let src = include_str!("data/dynblock_symbol.txt")
+        .replace("\r\n", "\n")
+        .replace("96 3\n141 0\n142 6.283185307179586\n143 0\n", "96 7\n141 0\n142 6.283185307179586\n143 1.5707963267948966\n");
+    let (d, r) = symbol_from(&src);
+    let stops = grip_stops(&d, r, 15, GripPart::End);
+    let at: Vec<Vec2> = stops.iter().map(|(p, _)| *p).collect();
+    assert_eq!(at.len(), 4, "{at:?}");
+    for (p, want) in at.iter().zip([(102.0, 100.0), (100.0, 102.0), (98.0, 100.0), (100.0, 98.0)]) {
+        assert!(near(*p, want), "{p:?} vs {want:?}");
+    }
+    for (p, way) in &stops {
+        assert!((*p - Vec2::new(100.0, 100.0)).dot(*way).abs() < 1e-9, "across the radius");
+    }
+    // The block as it comes (any angle) marks nothing; nor does a flip grip.
+    let (d, r) = symbol();
+    assert!(grip_stops(&d, r, 15, GripPart::End).is_empty());
+    assert!(grip_stops(&d, r, 20, GripPart::Base).is_empty());
 }
 
 #[test]
