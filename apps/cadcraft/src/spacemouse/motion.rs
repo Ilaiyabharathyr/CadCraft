@@ -170,10 +170,11 @@ impl Filter {
             }
         }
         // The device's +Y points towards the user and the drawing's +Y away from them, so pushing
-        // the cap away must pan like pushing it right does. Twist is unused: zooming on twist
-        // as well as on push/pull felt odd on a real device.
+        // the cap away must pan like pushing it right does. HID +Z points down; lifting the cap
+        // zooms in and pressing it zooms out, which felt the more natural of the two on a real
+        // device. Twist is unused: zooming on twist as well as on push/pull felt odd there.
         let [tx, ty, tz, ..] = axes;
-        Motion { pan: [tx, -ty], zoom: tz }
+        Motion { pan: [tx, -ty], zoom: -tz }
     }
 }
 
@@ -241,8 +242,10 @@ mod tests {
         filter.update([0; 6], 1, start + ms(310));
         let twist = filter.update([0, 0, 0, 0, 0, 300], 2, start + ms(320));
         assert!(!twist.active());
-        let pull = filter.update([0, 0, 300, 0, 0, 300], 3, start + ms(330));
-        assert!(pull.zoom > 0.0 && pull.pan == [0.0, 0.0]);
+        let press = filter.update([0, 0, 300, 0, 0, 300], 3, start + ms(330));
+        assert!(press.zoom < 0.0 && press.pan == [0.0, 0.0]);
+        let lift = filter.update([0, 0, -300, 0, 0, 0], 3, start + ms(340));
+        assert!(lift.zoom > 0.0);
     }
 
     #[test]
