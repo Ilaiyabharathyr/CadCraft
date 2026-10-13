@@ -1720,7 +1720,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         ltype_handles.entry(lt.name.to_ascii_uppercase()).or_insert(h.clone());
         cx.ltypes.entry(lt.name.to_ascii_uppercase()).or_insert(h);
         w.s(2, &lt.name);
-        w.i(70, 0);
+        w.i(70, if crate::dxf_xref::dependent(&lt.name) { 48 } else { 0 });
         w.s(3, &lt.description);
         w.i(72, 65);
         w.i(73, lt.pattern.len() as i64);
@@ -1756,7 +1756,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     for l in &d.layers {
         record_head(&mut w, "LAYER", &th, "AcDbLayerTableRecord");
         w.s(2, &l.name);
-        w.i(70, i64::from(l.frozen) | if l.vp_freeze_new { 2 } else { 0 } | if l.locked { 4 } else { 0 });
+        // 16 | 32: an xref's layer (`xref|name`), externally dependent and resolved.
+        let xref = if crate::dxf_xref::dependent(&l.name) { 48 } else { 0 };
+        w.i(70, i64::from(l.frozen) | if l.vp_freeze_new { 2 } else { 0 } | if l.locked { 4 } else { 0 } | xref);
         let aci = match l.color {
             Color::True(rgb) => i64::from(cadcraft_color::nearest_aci(rgb)),
             c => i64::from(c.to_aci()).clamp(1, 255),
