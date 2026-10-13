@@ -625,6 +625,130 @@ fn viewport_frozen_layers_roundtrip() {
     assert!(frozen.contains(&(3, Vec::new())), "{frozen:?}");
 }
 
+/// A layout with viewport 2 frozen on `Walls` and `A B` (both real layers), and its written DXF as
+/// (code, value) pairs.
+fn frozen_vp_dxf() -> (Drawing, Vec<(String, String)>) {
+    let mut d = sample();
+    d.layers.push(Layer { name: "A B".into(), ..Layer::default() });
+    let paper = Space::Paper("Layout1".into());
+    let vp = EntityKind::Viewport(Viewport {
+        center: Vec3::new(5.0, 4.0, 0.0),
+        width: 8.0,
+        height: 6.0,
+        view_center: Vec2::new(5.0, 2.5),
+        view_height: 12.0,
+        id: 2,
+        locked: false,
+        frozen_layers: vec!["Walls".into(), "A B".into()],
+        layer_colors: Vec::new(),
+        clip: None,
+        on: true,
+    });
+    d.add(&paper, Common::default(), vp).unwrap();
+    let text = write_dxf(&d);
+    let lines: Vec<&str> = text.lines().collect();
+    let pairs = lines.chunks(2).map(|c| (c[0].trim().to_string(), c.get(1).copied().unwrap_or("").to_string())).collect();
+    (d, pairs)
+}
+
+/// The pair range of the VIEWPORT record whose group 69 is `id`.
+fn vp_record(p: &[(String, String)], id: &str) -> std::ops::Range<usize> {
+    let starts: Vec<usize> = (0..p.len()).filter(|&i| p[i].0 == "0").collect();
+    for w in starts.windows(2) {
+        let r = w[0]..w[1];
+        if p[w[0]].1 == "VIEWPORT" && p[r.clone()].iter().any(|(c, v)| c == "69" && v.trim() == id) {
+            return r;
+        }
+    }
+    panic!("no VIEWPORT {id}");
+}
+
+fn layer_handle(p: &[(String, String)], name: &str) -> String {
+    let starts: Vec<usize> = (0..p.len()).filter(|&i| p[i].0 == "0").collect();
+    for w in starts.windows(2) {
+        let rec = &p[w[0]..w[1]];
+        if rec[0].1 == "LAYER" && rec.iter().any(|(c, v)| c == "2" && v == name) {
+            return rec.iter().find(|(c, _)| c == "5").unwrap().1.clone();
+        }
+    }
+    panic!("no LAYER {name}");
+}
+
+fn viewport_frozen(d: &Drawing, id: u32) -> Vec<String> {
+    d.layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .find_map(|e| match &e.kind {
+            EntityKind::Viewport(v) if v.id == id => Some(v.frozen_layers.clone()),
+            _ => None,
+        })
+        .expect("viewport")
+}
+
+fn join(p: &[(String, String)]) -> String {
+    p.iter()
+        .map(|(c, v)| {
+            format!(
+                "{c}
+{v}
+"
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn viewport_frozen_layers_written_as_341_handles() {
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    let rec = &p[r];
+    let h341: Vec<&str> = rec.iter().filter(|(c, _)| c == "341").map(|(_, v)| v.as_str()).collect();
+    assert_eq!(h341, vec![layer_handle(&p, "Walls").as_str(), layer_handle(&p, "A B").as_str()]);
+    let last341 = rec.iter().rposition(|(c, _)| c == "341").unwrap();
+    let x = rec.iter().position(|(c, _)| c == "1001").expect("xdata");
+    assert!(last341 < x, "341 must precede the xdata");
+}
+
+#[test]
+fn viewport_frozen_layers_read_from_341_without_xdata() {
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    // Strip the CADCraft xdata, and add a 341 to a handle that names no layer.
+    let x = p[r.clone()].iter().position(|(c, _)| c == "1001").unwrap() + r.start;
+    let mut q: Vec<(String, String)> = p[..r.start].to_vec();
+    let mut head = p[r.start..x].to_vec();
+    head.push(("341".into(), "FFFFF".into()));
+    q.extend(head);
+    q.extend(p[r.end..].iter().cloned());
+    let back = read_dxf(join(&q).as_bytes()).unwrap();
+    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+}
+
+#[test]
+fn viewport_frozen_xdata_wins_over_341() {
+    let (_, p) = frozen_vp_dxf();
+    let r = vp_record(&p, "2");
+    // Point every 341 at layer 0: the xdata list must still be what is read.
+    let zero = layer_handle(&p, "0");
+    let mut q = p.clone();
+    for t in &mut q[r] {
+        if t.0 == "341" {
+            t.1 = zero.clone();
+        }
+    }
+    let back = read_dxf(join(&q).as_bytes()).unwrap();
+    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+}
+
+#[test]
+fn viewport_frozen_layers_survive_dwg() {
+    let (d, _) = frozen_vp_dxf();
+    let dwg = write(&d, "t.dwg").unwrap();
+    let back = read(&dwg, "t.dwg").unwrap();
+    assert_eq!(viewport_frozen(&back, 2), vec!["Walls".to_string(), "A B".to_string()]);
+    // Survives via the CADCraft xdata: the DWG converter does not yet carry group 341 itself.
+}
+
 #[test]
 fn viewport_layer_colors_roundtrip() {
     let mut d = sample();
@@ -854,6 +978,41 @@ fn oversized_dwg_and_dxf_are_rejected_early() {
     let text = "not a group code\nx\n".repeat(60);
     let e = cadcraft_dxf::parse_with_limit(text.as_bytes(), 50).unwrap_err();
     assert_eq!(e.to_string(), "drawing too large: 60 DXF group codes, more than the 50 CADCraft reads");
+}
+
+/// Issue #800: one unreadable object record doesn't fail the whole DWG. The reader skips it, the
+/// rest opens, and the drawing's read notes say how many records were left out and of which
+/// types, so a partial read never passes for a complete one. A complete read has no notes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn damaged_dwg_opens_partially_and_says_what_it_left_out() {
+    let mut dxf = String::from("0\nSECTION\n2\nENTITIES\n");
+    for i in 0..200 {
+        dxf += &format!("0\nLINE\n8\n0\n10\n{i}\n20\n0\n11\n{i}\n21\n10\n");
+    }
+    dxf += "0\nENDSEC\n0\nEOF\n";
+    let d = read(dxf.as_bytes(), "lines.dxf").unwrap();
+    let dwg = crate::write_with(&d, "lines.dwg", &crate::SaveOptions { version: Some(crate::Version::R2000), binary: false }).unwrap();
+    let whole = read(&dwg, "lines.dwg").unwrap();
+    assert_eq!((whole.entity_count(), whole.read_notes.len()), (200, 0));
+
+    // Damage a few bytes at a time across the objects area: every damaged copy that still reads
+    // as a DWG either reads whole or notes what it left out.
+    let mut partial = 0;
+    for at in (dwg.len() / 4..dwg.len() * 3 / 5).step_by(97) {
+        let mut b = dwg.clone();
+        b[at..at + 6].iter_mut().for_each(|x| *x ^= 0xA5);
+        let Ok(d) = read(&b, "damaged.dwg") else { continue };
+        if d.entity_count() < 200 {
+            assert_eq!(d.read_notes.len(), 1, "{} lines read, no note", d.entity_count());
+        }
+        if let [note] = d.read_notes.as_slice() {
+            assert!(note.starts_with("DWG: ") && note.contains(" couldn't be read and "), "{note}");
+            assert!(note.ends_with("saving over the original file would lose it") || note.ends_with("would lose them"), "{note}");
+            partial += 1;
+        }
+    }
+    assert!(partial > 0, "no damaged copy read partially");
 }
 
 #[test]
@@ -1251,6 +1410,8 @@ fn hostile_extension_data_never_panics() {
         // Tables: enormous or negative counts, cells without bodies, spans past the edge.
         ent("0\nACAD_TABLE\n2\n*T1\n100\nAcDbTable\n91\n999999999\n92\n999999999\n171\n1\n0\nACAD_TABLE\n100\nAcDbTable\n91\n-4\n92\n3\n171\n"),
         ent("0\nACAD_TABLE\n100\nAcDbTable\n91\n2\n92\n2\n141\nnan\n142\n-1\n171\n1\n173\n1\n175\n99999\n176\n-3\n1\nx\n171\n171\n171\n171\n171\n2\nzzz\n1001\nCADCRAFT\n1000\nTABLE\n1040\n-1\n"),
+        // Cell text heights (140): junk, huge, unbalanced value block.
+        ent("0\nACAD_TABLE\n100\nAcDbTable\n91\n1\n92\n3\n171\n1\n140\nnan\n171\n1\n140\n-5\n301\nCELL_VALUE\n140\n1e308\n171\n1\n304\nACVALUE_END\n140\n1e999\n1\nx\n"),
         // DIMASSOC pointing at nothing, or at a non-dimension.
         format!(
             "{}{}",
@@ -2011,4 +2172,24 @@ fn kept_xrecord_application_group_roundtrips_as_read() {
     assert_eq!(&lines[at + 9..at + 11], &["102", "ATTRRECORD}"]);
     // And no handle is written under a bool code anywhere.
     assert!(!out.contains("291\n2"), "no handle may be written under a bool code");
+}
+
+#[test]
+fn foreign_table_reads_cell_text_height_and_keeps_style_scale() {
+    // A table from another writer: no CADCraft xdata; cell 1 sets 140 before its value block
+    // (the cell's text height), cell 2 only has a 140 inside the value block (a number).
+    let dxf = "0\nSECTION\n2\nENTITIES\n0\nACAD_TABLE\n100\nAcDbTable\n91\n1\n92\n2\n141\n300\n142\n900\n142\n900\n\
+        171\n1\n140\n150\n301\nCELL_VALUE\n1\nA\n304\nACVALUE_END\n\
+        171\n1\n301\nCELL_VALUE\n140\n42\n1\nB\n304\nACVALUE_END\n0\nENDSEC\n0\nEOF\n";
+    let d = read_dxf(dxf.as_bytes()).unwrap();
+    let t = first(&d, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None });
+    assert_eq!(t.cells[0][0].text_height, Some(150.0));
+    assert_eq!(t.cells[0][1].text_height, None);
+    // No scale of its own: the table takes its style's height.
+    assert_eq!(t.text_height, TableStyle::default().text_height);
+    // Written back and read again.
+    let back = roundtrip(&d);
+    let t2 = first(&back, |k| if let EntityKind::Table(x) = k { Some(x.clone()) } else { None });
+    assert_eq!(t2.cells[0][0].text_height, Some(150.0));
+    assert_eq!(t2.cells[0][1].text_height, None);
 }

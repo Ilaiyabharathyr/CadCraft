@@ -240,15 +240,28 @@ fn section<'a>(secs: &[(&str, &'a [RawTag])], marker: &str) -> &'a [RawTag] {
 struct Cursor<'a> {
     tags: &'a [RawTag],
     at: usize,
+    /// Groups scanned so far. A missing group neither moves the cursor nor ends the loops that
+    /// ask for it, so a hostile record could make nested counts rescan it again and again; past
+    /// `budget` every lookup fails at once and every count is zero.
+    work: usize,
+    budget: usize,
 }
 
 impl<'a> Cursor<'a> {
     fn new(tags: &'a [RawTag]) -> Self {
-        Cursor { tags, at: 0 }
+        Cursor { tags, at: 0, work: 0, budget: tags.len().saturating_mul(16).saturating_add(1024) }
     }
     /// The next group with `code` from here on (the cursor moves past it).
     fn next(&mut self, code: i32) -> Option<&'a str> {
-        let rel = self.tags.get(self.at..)?.iter().position(|t| t.code == code)?;
+        if self.work >= self.budget {
+            return None;
+        }
+        let rest = self.tags.get(self.at..)?;
+        let Some(rel) = rest.iter().position(|t| t.code == code) else {
+            self.work = self.work.saturating_add(rest.len().max(1));
+            return None;
+        };
+        self.work = self.work.saturating_add(rel + 1);
         self.at += rel + 1;
         self.tags.get(self.at - 1).map(|t| t.value.as_str())
     }
@@ -263,7 +276,8 @@ impl<'a> Cursor<'a> {
     }
     /// A count read from the file, capped by the groups left (each item needs at least one).
     fn count(&mut self, code: i32) -> usize {
-        usize::try_from(self.int(code)).unwrap_or(0).min(self.tags.len().saturating_sub(self.at))
+        let n = usize::try_from(self.int(code)).unwrap_or(0).min(self.tags.len().saturating_sub(self.at));
+        if self.work >= self.budget { 0 } else { n }
     }
     fn handle(&mut self, code: i32) -> Option<Handle> {
         self.next(code).and_then(Handle::parse_hex)
@@ -470,4 +484,32 @@ fn lookup(tags: &[RawTag]) -> ActionKind {
         })
         .collect();
     ActionKind::Lookup { columns, rows }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(code: i32, value: &str) -> RawTag {
+        RawTag { code, value: value.to_string() }
+    }
+
+    /// Counts that promise groups the record doesn't have: each nested loop would rescan the
+    /// record for them. The work budget keeps this linear in the record's size.
+    #[test]
+    fn hostile_counts_with_missing_groups_stay_linear() {
+        let n = 20_000;
+        let mut tags = vec![tag(93, "0"), tag(92, &n.to_string())];
+        tags.extend((0..n).map(|_| tag(94, &n.to_string())));
+        let ParameterKind::Visibility { states, .. } = visibility(Vec3::default(), &tags) else {
+            panic!("a visibility parameter")
+        };
+        assert!(states.len() <= n && states.iter().all(|s| s.visible.is_empty()));
+
+        let mut tags = vec![tag(73, &n.to_string())];
+        tags.extend((0..n).flat_map(|_| [tag(331, "1F"), tag(74, &n.to_string())]));
+        let (_, ActionKind::Stretch { vertices, .. }) = stretch(&tags) else { panic!("a stretch action") };
+        let ints: usize = vertices.iter().map(|(_, v)| v.len()).sum();
+        assert!(ints <= 16 * tags.len() + 1024, "{ints}");
+    }
 }

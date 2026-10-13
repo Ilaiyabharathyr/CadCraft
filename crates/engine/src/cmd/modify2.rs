@@ -454,10 +454,17 @@ impl Interactive for PeditM {
         let sel = s.selection();
         if let [h] = sel.as_slice() {
             let k = curves::entity(s, *h)?.kind;
-            if matches!(k, EntityKind::LwPolyline(_)) {
-                self.h = Some(*h);
-                self.original = self.poly(s).map(|p| p.vertices);
-                self.phase = PPhase::Main;
+            match k {
+                EntityKind::LwPolyline(_) => {
+                    self.h = Some(*h);
+                    self.original = self.poly(s).map(|p| p.vertices);
+                    self.phase = PPhase::Main;
+                }
+                EntityKind::Line(_) | EntityKind::Arc(_) => {
+                    self.h = Some(*h);
+                    self.phase = PPhase::Convert;
+                }
+                _ => {}
             }
         }
         Ok(Step::Continue)
@@ -1445,7 +1452,7 @@ fn chspace(s: &mut Session, hs: &[Handle], to: Option<&str>, vp: Option<Handle>)
 fn run_chspace(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = targets(s, p)?;
     let (n, _, target) = chspace(s, &hs, str_param(p, "to"), curves::handle_param(p, "viewport"))?;
-    Ok(json!({ "moved": n, "to": match target { Space::Model => "model".to_string(), Space::Paper(n) => n } }))
+    Ok(json!({ "moved": n, "to": target.layout().unwrap_or("model") }))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
