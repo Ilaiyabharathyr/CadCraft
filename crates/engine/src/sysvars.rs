@@ -40,6 +40,7 @@ const SESSION_VARS: &[&str] = &[
     "PICKBOX",
     "APERTURE",
     "PICKFIRST",
+    "ACADLSPASDOC",
     "PICKADD",
     "PICKSTYLE",
     "GRIPSIZE",
@@ -95,6 +96,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "PICKBOX" => json!(st.pickbox),
         "APERTURE" => json!(st.aperture),
         "PICKFIRST" => json!(i32::from(st.pickfirst)),
+        "ACADLSPASDOC" => json!(i32::from(st.acadlspasdoc)),
         "PICKADD" => json!(i32::from(st.pickadd)),
         "PICKSTYLE" => json!(st.pickstyle),
         "GRIPSIZE" => json!(st.gripsize),
@@ -114,16 +116,10 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         "DWGNAME" => json!(s.state().map(|d| d.title.clone()).unwrap_or_default()),
         "DBMOD" => json!(s.state().map(|d| i32::from(d.is_dirty())).unwrap_or(0)),
+        "BLOCKEDITOR" => json!(i32::from(s.state().is_ok_and(|d| d.block_edit.is_some()))),
         // The template NEW/QNEW start from (a profile setting, like FONTALT; "" = none).
         "QNEWTEMPLATE" => json!(crate::cmd::file::qnew_template()),
-        "CTAB" => json!(
-            s.state()
-                .map(|d| match &d.space {
-                    cadcraft_doc::Space::Model => "Model".to_string(),
-                    cadcraft_doc::Space::Paper(n) => n.clone(),
-                })
-                .unwrap_or_default()
-        ),
+        "CTAB" => json!(s.state().map(|d| d.space.tab_name().to_string()).unwrap_or_default()),
         // UNDO state of the drawing: Control/Auto/group bits and the number of marks.
         "UNDOCTL" => json!(s.state().ok()?.undo_ctl.bits()),
         "UNDOMARKS" => json!(s.state().ok()?.undo_marks()),
@@ -172,7 +168,8 @@ fn as_pt(v: &Value) -> Option<cadcraft_geom::Vec2> {
 }
 
 /// Variables `get` reports from session or drawing state that `set` can't change.
-const READ_ONLY: &[&str] = &["CMDNAMES", "DWGNAME", "DBMOD", "CTAB", "LASTPOINT", "VIEWCTR", "VIEWSIZE", "EXTMIN", "EXTMAX", "UNDOCTL", "UNDOMARKS"];
+const READ_ONLY: &[&str] =
+    &["CMDNAMES", "DWGNAME", "DBMOD", "BLOCKEDITOR", "CTAB", "LASTPOINT", "VIEWCTR", "VIEWSIZE", "EXTMIN", "EXTMAX", "UNDOCTL", "UNDOMARKS"];
 
 pub fn is_read_only(name: &str) -> bool {
     READ_ONLY.iter().any(|r| r.eq_ignore_ascii_case(name.trim())) || table::is_read_only(&name.trim().to_ascii_uppercase())
@@ -248,6 +245,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "PICKBOX" => st.pickbox = as_f64(v).ok_or_else(bad)?.clamp(0.0, 50.0),
         "APERTURE" => st.aperture = as_f64(v).ok_or_else(bad)?.clamp(1.0, 50.0),
         "PICKFIRST" => st.pickfirst = as_bool(v).ok_or_else(bad)?,
+        "ACADLSPASDOC" => st.acadlspasdoc = as_bool(v).ok_or_else(bad)?,
         "PICKADD" => st.pickadd = as_bool(v).ok_or_else(bad)?,
         "PICKSTYLE" => st.pickstyle = as_i(v).filter(|b| (0..=3).contains(b)).and_then(|b| u8::try_from(b).ok()).ok_or_else(bad)?,
         "GRIPSIZE" => st.gripsize = as_f64(v).ok_or_else(bad)?.clamp(1.0, 255.0),

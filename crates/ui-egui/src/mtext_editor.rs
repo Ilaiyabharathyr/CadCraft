@@ -94,7 +94,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
             ui.set_width(width);
             let y0 = ui.cursor().top();
             toolbar(ui, &mut st, base_h);
-            ruler(ui, &mut st, px, width);
+            ruler(ui, &mut st, px, width, base_h);
             st.top = ui.cursor().top() - y0;
             text_box(ui, &mut st, base_h, px, width, &t);
             ui.horizontal(|ui| {
@@ -272,11 +272,11 @@ fn toolbar(ui: &mut egui::Ui, st: &mut State, base_h: f64) {
         ui.separator();
         // Lists and special characters
         if ui.button("•≡").on_hover_text(crate::tl!("Bulleted list")).clicked() {
-            st.fmt.make_list(range.clone(), ListStyle::Bullet, 3.0);
+            st.fmt.make_list(range.clone(), ListStyle::Bullet, 3.0 * base_h);
             refocus = true;
         }
         if ui.button("1≡").on_hover_text(crate::tl!("Numbered list")).clicked() {
-            st.fmt.make_list(range.clone(), ListStyle::Number, 3.0);
+            st.fmt.make_list(range.clone(), ListStyle::Number, 3.0 * base_h);
             refocus = true;
         }
         for (glyph, tip, code) in [
@@ -309,24 +309,27 @@ fn insert(st: &mut State, s: &str) {
     }
 }
 
-fn ruler(ui: &mut egui::Ui, st: &mut State, px: f32, width: f32) {
+/// The ruler: `px` points per text height (`base_h` drawing units); paragraph indents and tab
+/// stops are in drawing units, as `\p` codes are.
+fn ruler(ui: &mut egui::Ui, st: &mut State, px: f32, width: f32, base_h: f64) {
     let t = Tokens::get();
     let range = st.sel.0.min(st.sel.1)..st.sel.0.max(st.sel.1);
     let p = st.fmt.para(st.fmt.paragraph_of(range.start));
     let (rect, bg) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, t.control);
-    let x_of = |u: f64| rect.left() + (u as f32) * px;
+    let tick = |u: f64| rect.left() + (u as f32) * px;
+    let x_of = |v: f64| tick(v / base_h);
     let units = (f64::from(width) / f64::from(px)).floor() as i32;
     for u in 0..=units.clamp(0, 400) {
-        let x = x_of(f64::from(u));
+        let x = tick(f64::from(u));
         let major = u % 5 == 0;
         painter.line_segment([pos2(x, rect.bottom() - if major { 7.0 } else { 3.0 }), pos2(x, rect.bottom())], Stroke::new(1.0, t.text_faint));
         if major && u > 0 {
             painter.text(pos2(x + 2.0, rect.top() + 1.0), Align2::LEFT_TOP, u.to_string(), FontId::proportional(8.0), t.text_faint);
         }
     }
-    let to_units = |x: f32| ((f64::from(x - rect.left()) / f64::from(px) / SNAP).round() * SNAP).clamp(0.0, 400.0);
+    let to_units = |x: f32| ((f64::from(x - rect.left()) / f64::from(px) / SNAP).round() * SNAP).clamp(0.0, 400.0) * base_h;
     // Tab stops: an L at the stop; a right-click removes one.
     for (pos, _kind) in &p.tabs {
         let x = x_of(*pos);
@@ -366,7 +369,7 @@ fn ruler(ui: &mut egui::Ui, st: &mut State, px: f32, width: f32) {
     } else if bg.secondary_clicked()
         && let Some(m) = hover
     {
-        st.fmt.remove_tab(range, to_units(m.x), 0.6);
+        st.fmt.remove_tab(range, to_units(m.x), 0.6 * base_h);
     }
     bg.on_hover_text(crate::tl!("Click the ruler to add a tab stop, right-click to remove one"));
 }

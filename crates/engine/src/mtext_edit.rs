@@ -10,6 +10,9 @@
 use cadcraft_fonts::ParaProps;
 pub use cadcraft_fonts::{ListStyle, MTextColor, ParaAlign, TabKind};
 
+/// Largest paragraph indent or tab stop, in drawing units.
+const MAX_INDENT: f64 = 1e6;
+
 /// First placeholder character of the opaque codes (Unicode private use area).
 pub const ATOM_BASE: u32 = 0xE000;
 /// Most atoms one text keeps; further codes are dropped.
@@ -311,21 +314,21 @@ impl Formatted {
         }
     }
 
-    /// Set the indents (in text heights) of the paragraphs `range` touches: `first` is relative
+    /// Set the indents (in drawing units, as `\p` codes have them) of the paragraphs `range` touches: `first` is relative
     /// to `left`.
     pub fn set_indents(&mut self, range: std::ops::Range<usize>, first: f64, left: f64) {
         if first.is_finite() && left.is_finite() {
-            let left = left.clamp(0.0, 1000.0);
+            let left = left.clamp(0.0, MAX_INDENT);
             self.edit_paras(range, |p| {
-                p.first = first.clamp(-left, 1000.0);
+                p.first = first.clamp(-left, MAX_INDENT);
                 p.left = left;
             });
         }
     }
 
-    /// Add a tab stop at `pos` text heights to the paragraphs `range` touches.
+    /// Add a tab stop at `pos` drawing units to the paragraphs `range` touches.
     pub fn add_tab(&mut self, range: std::ops::Range<usize>, pos: f64, kind: TabKind) {
-        if !pos.is_finite() || !(0.0..=1000.0).contains(&pos) {
+        if !pos.is_finite() || !(0.0..=MAX_INDENT).contains(&pos) {
             return;
         }
         self.edit_paras(range, |p| {
@@ -345,10 +348,10 @@ impl Formatted {
         });
     }
 
-    /// Make the paragraphs `range` touches a list: a hanging indent of `indent` text heights
+    /// Make the paragraphs `range` touches a list: a hanging indent of `indent` drawing units
     /// with a tab stop there, and each paragraph a label and a tab.
     pub fn make_list(&mut self, range: std::ops::Range<usize>, style: ListStyle, indent: f64) {
-        let indent = if indent.is_finite() && indent > 0.0 { indent.min(100.0) } else { 3.0 };
+        let indent = if indent.is_finite() && indent > 0.0 { indent.min(MAX_INDENT) } else { 3.0 };
         let ps = self.paras_of(range);
         let lines: Vec<&str> = self.text.split('\n').collect();
         let mut out = String::new();
