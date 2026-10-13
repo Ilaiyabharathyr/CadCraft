@@ -146,7 +146,9 @@ fn file_menu_groups_with_separators() {
     let mut h = harness(1.0);
     open(&mut h, "File");
     snapshot(&mut h, "file");
-    let (new, template, open_row, close) = (row(&h, "New Drawing..."), row(&h, "New from Template..."), row(&h, "Open..."), row(&h, "Close"));
+    // The first group ends with Open Recent, which follows Open.
+    let (new, template, open_row, close) = (row(&h, "New Drawing..."), row(&h, "New from Template..."), row(&h, "Open Recent"), row(&h, "Close"));
+    assert!((open_row.top() - row(&h, "Open...").bottom()).abs() < 0.1);
     // Rows of one group touch; a separator takes 9 pt and paints its line in the `list_row` colour.
     assert!((template.top() - new.bottom()).abs() < 0.1, "{new:?} {template:?}");
     assert!((close.top() - open_row.bottom() - 9.0).abs() < 0.1, "{open_row:?} {close:?}");
@@ -157,7 +159,7 @@ fn file_menu_groups_with_separators() {
         }
         _ => false,
     });
-    assert!(line, "no separator line between Open and Close");
+    assert!(line, "no separator line between Open Recent and Close");
 }
 
 #[test]

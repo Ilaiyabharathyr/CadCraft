@@ -79,6 +79,7 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
             ico("import", Icon::Import),
             ico("export", Icon::Export),
             ico("exportpdf", Icon::Pdf),
+            ico("pdfbook", Icon::Pdf),
             SEP,
             ico("plot", Icon::Plot),
             ico("preview", Icon::Preview),
@@ -152,7 +153,14 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
             sub_ico("Show Annotative Objects", Icon::Annotation, &[cmd("annovisible.all"), cmd("annovisible.current")]),
             SEP,
             sub_ico("Interface Theme", Icon::Theme, &[cmd("ui.theme.dark"), cmd("ui.theme.light"), cmd("ui.theme.system")]),
-            sub_ico("Accessibility", Icon::Accessibility, &[cmd("ui.toggle.systemcursor")]),
+            sub_ico(
+                "Accessibility",
+                Icon::Accessibility,
+                &[
+                    cmd("ui.toggle.systemcursor"),
+                    sub("Animation Effects", &[cmd("ui.animations.system"), cmd("ui.animations.on"), cmd("ui.animations.off")]),
+                ],
+            ),
         ],
     ),
     (
@@ -213,6 +221,7 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
         "Tools",
         &[
             ico("script", Icon::Script),
+            cmd("appload"),
             ico("compare", Icon::Compare),
             ico("dataextraction", Icon::DataLink),
             SEP,
@@ -298,6 +307,8 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
                 ],
             ),
             ico("xopen", Icon::Xref),
+            ico("bedit", Icon::BlockEdit),
+            sub_ico("Xref and Block In-place Editing", Icon::Xref, &[cmd("refedit"), cmd("refset"), cmd("refclose")]),
             SEP,
             ico("dsettings", Icon::Gear),
             ico("ui.spacemouse", Icon::Mouse3d),
@@ -447,6 +458,10 @@ pub const MENU_LAYOUT: &[(&str, &[Row])] = &[
                     named("battman", "Attribute › Block Attribute Manager..."),
                     SEP,
                     named("xbind", "External Reference › Bind..."),
+                    named("mleaderedit.add", "Multileader › Add Leader"),
+                    named("mleaderedit.remove", "Multileader › Remove Leader"),
+                    named("mleaderalign", "Multileader › Align"),
+                    named("mleadercollect", "Multileader › Collect"),
                 ],
             ),
             sub_ico(
