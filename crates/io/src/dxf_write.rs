@@ -17,6 +17,15 @@ struct W {
     next: u64,
     /// Upper-case plot style name → its `ACDBPLACEHOLDER` handle (group 390 of layers and objects).
     pstyles: HashMap<String, String>,
+<<<<<<< HEAD
+    /// Upper-case layer name → its LAYER table record handle (group 341 of viewports).
+    layers: HashMap<String, String>,
+||||||| 00c7613f
+=======
+    /// Persistent reactors of boundary objects: each source object of an associative hatch →
+    /// the hatches (groups `{ACAD_REACTORS 330 …}`), from [`hatch_reactors`].
+    reactors: HashMap<Handle, Vec<String>>,
+>>>>>>> pr/871
 }
 
 impl W {
@@ -158,6 +167,32 @@ impl Ctx {
     }
 }
 
+/// The persistent reactors of boundary objects: each source object of an associative hatch in
+/// the same space or block → the hatches it bounds (AutoCAD links the two both ways; without the
+/// reactor the hatch no longer follows its boundary there).
+fn hatch_reactors(d: &Drawing) -> HashMap<Handle, Vec<String>> {
+    let mut out: HashMap<Handle, Vec<String>> = HashMap::new();
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    for st in stores {
+        for e in st.iter() {
+            let EntityKind::Hatch(h) = &e.kind else { continue };
+            if !h.associative {
+                continue;
+            }
+            for s in h.loops.iter().flat_map(|l| &l.sources) {
+                if *s != e.handle && st.contains(*s) {
+                    let r = out.entry(*s).or_default();
+                    let own = e.handle.hex();
+                    if !r.contains(&own) {
+                        r.push(own);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// `AcadAnnotative` xdata marking an annotative style.
 fn annotative_xdata(w: &mut W) {
     w.s(1001, "AcadAnnotative");
@@ -170,7 +205,13 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADCRAFT` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
+<<<<<<< HEAD
+    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new() };
+||||||| 00c7613f
     let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new() };
+=======
+    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), reactors: HashMap::new() };
+>>>>>>> pr/871
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -317,8 +358,13 @@ fn common(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str) {
 /// Common entity groups; `assoc` adds the reactor and extension dictionary of a DIMASSOC.
 fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, assoc: Option<&AssocObj>) {
     w.s(5, e.handle.hex());
+    let mut reactors: Vec<String> = assoc.map(|a| a.handle.clone()).into_iter().collect();
+    reactors.extend(w.reactors.get(&e.handle).into_iter().flatten().cloned());
+    if !reactors.is_empty() {
+        let rs: Vec<&str> = reactors.iter().map(String::as_str).collect();
+        w.group("ACAD_REACTORS", 330, &rs);
+    }
     if let Some(a) = assoc {
-        w.group("ACAD_REACTORS", 330, &[&a.handle]);
         w.group("ACAD_XDICTIONARY", 360, &[&a.xdict]);
     }
     w.s(330, owner);
@@ -911,8 +957,11 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                         w.f(42, v.bulge);
                     }
                 }
-                // Source boundary objects of an associative hatch (the ones still in the drawing).
-                let sources: Vec<String> = l.sources.iter().filter(|s| h.associative && d.entity(**s).is_some()).map(|s| s.hex()).collect();
+                // Source boundary objects of an associative hatch (the ones still beside it, in
+                // its space or block, which carry the hatch as a reactor).
+                let own = e.handle.hex();
+                let sources: Vec<String> =
+                    l.sources.iter().filter(|s| h.associative && w.reactors.get(*s).is_some_and(|r| r.contains(&own))).map(|s| s.hex()).collect();
                 w.i(97, sources.len() as i64);
                 for s in &sources {
                     w.s(330, s);
@@ -971,6 +1020,13 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(90, flags);
             if let Some(h) = clip {
                 w.s(340, h.hex());
+            }
+            // AutoCAD's frozen-layer list: one soft pointer per layer, to its LAYER record. Other
+            // programs read only this; CADCraft prefers its own xdata below when present.
+            for name in &v.frozen_layers {
+                if let Some(h) = w.layers.get(&name.to_ascii_uppercase()).cloned() {
+                    w.s(341, h);
+                }
             }
             // One CADCraft xdata group holds both lists: readers stop at the first group of an app.
             if !v.frozen_layers.is_empty() || !v.layer_colors.is_empty() {
@@ -1461,8 +1517,17 @@ pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
 /// The drawing's DXF tags, declaring `version` in `$ACADVER`, with what `target` (the version the
 /// file ends up in: `version`, or the DWG version the bridge writes) has.
 fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
+    // An in-place block edit in progress is not written: the drawing as before it.
+    let committed = d.committed();
+    let d: &Drawing = &committed;
     // Structural handles start above every entity handle.
+<<<<<<< HEAD
+    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new(), layers: HashMap::new() };
+||||||| 00c7613f
     let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new() };
+=======
+    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new(), reactors: hatch_reactors(d) };
+>>>>>>> pr/871
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
@@ -1496,13 +1561,24 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         for e in st.iter() {
             if let EntityKind::Dimension(dm) = &e.kind {
                 let reused = dim_plan.reuse.get(&e.handle);
-                let mut ents = dim_block_entities(d, dm, &e.common.layer);
+                let ents: Vec<Entity>;
                 let name = match reused {
+                    // A dimension still linked to the block it was read with hasn't changed since
+                    // (edits drop the link, and the screen draws that block): the block is written
+                    // as read, so other programs show it as they drew it.
+                    Some(b) if !b.entities.is_empty() => {
+                        ents = b.entities.iter().map(|x| x.as_ref().clone()).collect();
+                        reused_handles.extend(ents.iter().map(|x| x.handle).filter(|h| h.0 != 0));
+                        b.name.clone()
+                    }
                     Some(b) => {
-                        reuse_handles(&mut ents, b, &mut reused_handles);
+                        let mut fresh = dim_block_entities(d, dm, &e.common.layer);
+                        reuse_handles(&mut fresh, b, &mut reused_handles);
+                        ents = fresh;
                         b.name.clone()
                     }
                     None => {
+                        ents = dim_block_entities(d, dm, &e.common.layer);
                         let mut name = format!("*D{n}");
                         while d.block(&name).is_some() {
                             n += 1;
@@ -1754,7 +1830,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // LAYER
     let th = table_head(&mut w, "LAYER", d.layers.len());
     for l in &d.layers {
-        record_head(&mut w, "LAYER", &th, "AcDbLayerTableRecord");
+        let lh = record_head(&mut w, "LAYER", &th, "AcDbLayerTableRecord");
+        w.layers.insert(l.name.to_ascii_uppercase(), lh);
         w.s(2, &l.name);
         // 16 | 32: an xref's layer (`xref|name`), externally dependent and resolved.
         let xref = if crate::dxf_xref::dependent(&l.name) { 48 } else { 0 };
@@ -1917,7 +1994,13 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
+<<<<<<< HEAD
+        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new() };
+||||||| 00c7613f
         let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new() };
+=======
+        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), reactors: HashMap::new() };
+>>>>>>> pr/871
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             if !dxf_ext::NEWER_CODES.contains(code) {
@@ -2301,7 +2384,12 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             w.s(1002, "}");
         }
     };
-    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &PageSetup::default(), None);
+    // Model space has no page setup of its own: write what PLOT does for it, the drawing extents
+    // fitted to the paper (plot type 1, scaled to fit). The default page's "layout" area is
+    // plot type 5, "Layout information" (DXF Reference, PLOTSETTINGS group 74), which means
+    // nothing for model space: another program's Plot dialog then shows no plot area or scale.
+    let model_page = PageSetup { plot_area: "extents".into(), scale_to_fit: true, ..PageSetup::default() };
+    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &model_page, None);
     for (i, (_, brh, l)) in ps_brs.iter().enumerate() {
         let h = layout_handles.get(i).cloned().unwrap_or_default();
         layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &l.page, l.view);
@@ -2315,6 +2403,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         *t = Tag::s(5, seed);
     }
     crate::dxf_raw::finish(&mut w.t, d);
+    crate::dxf_raw::data_store(&mut w.t, d, target >= Version::R2013);
     add_class_instance_counts(&mut w.t);
     mark_xrefs(&mut w.t, d);
     w.t
