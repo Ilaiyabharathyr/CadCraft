@@ -1088,7 +1088,7 @@
 	Hold Shift to add to the selection	按住 Shift 键添加到选择
 	Show Quick Properties for selected objects	显示所选对象的快速特性
 	Largest array	最大阵列数
-	An array that would create more objects than this is refused.	将拒绝创建超出此外形对象数量的阵列。
+	An array that would create more objects than this is refused.	将拒绝创建超出此对象数量的阵列。
 	Time-sensitive right-click: a quick click is Enter, holding opens the menu	时间敏感右键：快速点击相当于回车，按住不放打开菜单
 	Turned off, a right-click while a command runs always opens the shortcut menu.	关闭后，在命令运行期间右键单击总是打开快捷菜单。
 	CADCraft keeps these preferences, object snap modes and drafting toggles for your user account and restores them when it starts.	CADCraft 会为你的用户账号保留这些偏好设置、对象捕捉模式和绘图切换开关，并在启动时恢复它们。
