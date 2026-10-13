@@ -9,6 +9,7 @@ use cadcraft_doc::{DevicePaper, Orientation, PlotOutput, PlotterConfig};
 /// Most destinations listed.
 const MAX_PRINTERS: usize = 64;
 /// Largest PPD file read (bytes).
+#[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
 const MAX_PPD: u64 = 4 << 20;
 /// Most copies of one job.
 pub const MAX_COPIES: u32 = 999;
@@ -173,15 +174,43 @@ mod system {
         Some(parse_ppd(&std::fs::read_to_string(path).ok()?))
     }
 
+    /// Longest `lpstat` may take: a CUPS that doesn't answer gives no printers instead of a
+    /// listing that never ends.
+    const LPSTAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// `lpstat -e`'s output, or `None` when it fails or takes longer than [`LPSTAT_TIMEOUT`]
+    /// (then it is stopped).
+    fn lpstat_destinations() -> Option<String> {
+        use std::io::Read;
+        let mut child = Command::new("lpstat").arg("-e").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+        let mut stdout = child.stdout.take()?;
+        // Read on a thread, so a full pipe can't keep lpstat from ending.
+        let reader = std::thread::spawn(move || {
+            let mut s = String::new();
+            let _ = stdout.read_to_string(&mut s);
+            s
+        });
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return reader.join().ok(),
+                Ok(Some(_)) | Err(_) => return None,
+                Ok(None) if start.elapsed() > LPSTAT_TIMEOUT => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+    }
+
     /// The CUPS destinations as devices (none when CUPS is missing). A destination without a
     /// readable PPD (an IPP queue the system made on the fly) offers no papers of its own and is
     /// left out.
     pub fn printers() -> Vec<PlotterConfig> {
-        let Ok(out) = Command::new("lpstat").arg("-e").stderr(Stdio::null()).output() else { return Vec::new() };
-        parse_destinations(&String::from_utf8_lossy(&out.stdout))
-            .into_iter()
-            .filter_map(|n| ppd(&n).filter(|p| !p.papers.is_empty()).map(|p| printer_config(&n, &p)))
-            .collect()
+        let Some(out) = lpstat_destinations() else { return Vec::new() };
+        parse_destinations(&out).into_iter().filter_map(|n| ppd(&n).filter(|p| !p.papers.is_empty()).map(|p| printer_config(&n, &p))).collect()
     }
 
     /// Send `pdf` to `printer` on the paper called `paper` (a name [`printers`] gave).

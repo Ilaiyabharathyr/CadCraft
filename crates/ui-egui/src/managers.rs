@@ -534,8 +534,10 @@ impl PageChoices {
     }
 }
 
-/// The plotter devices (built-in, then the user's files), read again at most every 2 s: the
-/// dialogs ask every frame and user devices are files.
+/// The plotter devices (built-in, system printers, then the user's files), read again at most
+/// every 2 s: the dialogs ask every frame and user devices are files. System printers are listed
+/// in the background; while that runs the list is read again shortly, so they appear as soon as
+/// it ends.
 fn device_choices(ctx: &egui::Context) -> std::sync::Arc<Vec<cadcraft_doc::PlotterConfig>> {
     type Cached = (f64, std::sync::Arc<Vec<cadcraft_doc::PlotterConfig>>);
     let now = crate::now_ms();
@@ -545,7 +547,11 @@ fn device_choices(ctx: &egui::Context) -> std::sync::Arc<Vec<cadcraft_doc::Plott
         return list;
     }
     let list = std::sync::Arc::new(cadcraft_engine::cmd::plotters::devices());
-    set_temp::<Cached>(ctx, "plot_devices", (now, list.clone()));
+    if cadcraft_engine::cmd::plotters::system_printers_pending() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    } else {
+        set_temp::<Cached>(ctx, "plot_devices", (now, list.clone()));
+    }
     list
 }
 
