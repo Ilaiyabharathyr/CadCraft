@@ -135,6 +135,7 @@ our output in AutoCAD black-box.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Dynamic block grips: grip objects read by graph id; a drag is saved as AutoCAD saves a Properties change |
 | 2026-10-12 | minor | Dynamic block references: visibility states can be changed and are saved as AutoCAD saves them |
 | 2026-10-12 | minor | Dynamic block references: definition, values and custom properties read (`blocks.reference`, Properties ▸ Custom) |
 | 2026-10-12 | minor | Dynamic block data row: parameters and actions read into a model (`blocks.dynamic`); kept by DXF and DWG save |
