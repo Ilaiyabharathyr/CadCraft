@@ -17,6 +17,9 @@ struct W {
     next: u64,
     /// Upper-case plot style name → its `ACDBPLACEHOLDER` handle (group 390 of layers and objects).
     pstyles: HashMap<String, String>,
+    /// Persistent reactors of boundary objects: each source object of an associative hatch →
+    /// the hatches (groups `{ACAD_REACTORS 330 …}`), from [`hatch_reactors`].
+    reactors: HashMap<Handle, Vec<String>>,
 }
 
 impl W {
@@ -158,6 +161,32 @@ impl Ctx {
     }
 }
 
+/// The persistent reactors of boundary objects: each source object of an associative hatch in
+/// the same space or block → the hatches it bounds (AutoCAD links the two both ways; without the
+/// reactor the hatch no longer follows its boundary there).
+fn hatch_reactors(d: &Drawing) -> HashMap<Handle, Vec<String>> {
+    let mut out: HashMap<Handle, Vec<String>> = HashMap::new();
+    let stores = std::iter::once(&d.model).chain(d.layouts.iter().map(|l| &l.entities)).chain(d.blocks.values().map(|b| &b.entities));
+    for st in stores {
+        for e in st.iter() {
+            let EntityKind::Hatch(h) = &e.kind else { continue };
+            if !h.associative {
+                continue;
+            }
+            for s in h.loops.iter().flat_map(|l| &l.sources) {
+                if *s != e.handle && st.contains(*s) {
+                    let r = out.entry(*s).or_default();
+                    let own = e.handle.hex();
+                    if !r.contains(&own) {
+                        r.push(own);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// `AcadAnnotative` xdata marking an annotative style.
 fn annotative_xdata(w: &mut W) {
     w.s(1001, "AcadAnnotative");
@@ -170,7 +199,7 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADCRAFT` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new() };
+    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), reactors: HashMap::new() };
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -317,8 +346,13 @@ fn common(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str) {
 /// Common entity groups; `assoc` adds the reactor and extension dictionary of a DIMASSOC.
 fn common_x(w: &mut W, e: &Entity, owner: &str, paper: bool, subclass: &str, assoc: Option<&AssocObj>) {
     w.s(5, e.handle.hex());
+    let mut reactors: Vec<String> = assoc.map(|a| a.handle.clone()).into_iter().collect();
+    reactors.extend(w.reactors.get(&e.handle).into_iter().flatten().cloned());
+    if !reactors.is_empty() {
+        let rs: Vec<&str> = reactors.iter().map(String::as_str).collect();
+        w.group("ACAD_REACTORS", 330, &rs);
+    }
     if let Some(a) = assoc {
-        w.group("ACAD_REACTORS", 330, &[&a.handle]);
         w.group("ACAD_XDICTIONARY", 360, &[&a.xdict]);
     }
     w.s(330, owner);
@@ -911,8 +945,11 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
                         w.f(42, v.bulge);
                     }
                 }
-                // Source boundary objects of an associative hatch (the ones still in the drawing).
-                let sources: Vec<String> = l.sources.iter().filter(|s| h.associative && d.entity(**s).is_some()).map(|s| s.hex()).collect();
+                // Source boundary objects of an associative hatch (the ones still beside it, in
+                // its space or block, which carry the hatch as a reactor).
+                let own = e.handle.hex();
+                let sources: Vec<String> =
+                    l.sources.iter().filter(|s| h.associative && w.reactors.get(*s).is_some_and(|r| r.contains(&own))).map(|s| s.hex()).collect();
                 w.i(97, sources.len() as i64);
                 for s in &sources {
                     w.s(330, s);
@@ -1462,7 +1499,7 @@ pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
 /// file ends up in: `version`, or the DWG version the bridge writes) has.
 fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // Structural handles start above every entity handle.
-    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new() };
+    let mut w = W { t: Vec::new(), next: d.handseed.max(0x100).saturating_add(0x1000), pstyles: HashMap::new(), reactors: hatch_reactors(d) };
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
@@ -1915,7 +1952,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
-        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new() };
+        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), reactors: HashMap::new() };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             if !dxf_ext::NEWER_CODES.contains(code) {
