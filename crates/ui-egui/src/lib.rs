@@ -221,8 +221,8 @@ pub struct CadApp {
     /// Caps the frame rate when presenting without vsync (see [`gpu::FrameCap`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub frame_cap: Option<gpu::FrameCap>,
-    /// Interface fonts installed, and whether with a CJK font (`None` until the first frame).
-    fonts_cjk: Option<bool>,
+    /// Language whose interface fonts are installed (`None` until the first frame).
+    fonts_language: Option<&'static str>,
     /// The theme last installed into egui (`None` until the first frame).
     shown_theme: Option<egui::Theme>,
     /// Whether the last applied theme was handed to egui as the System preference.
@@ -276,7 +276,7 @@ impl CadApp {
             synthetic: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             frame_cap: None,
-            fonts_cjk: None,
+            fonts_language: None,
             shown_theme: None,
             shown_follows_system: false,
             shown_animations: None,
@@ -296,7 +296,7 @@ impl CadApp {
     }
 
     /// The interface language shown: the chosen one, or English when this computer has no font
-    /// for it (Chinese or Thai without an installed font for the script would be boxes).
+    /// for it (Chinese, Thai or Korean without a suitable font would be boxes).
     pub fn language(&self) -> &'static str {
         let l = self.ui.interface_language.resolve(&self.system_languages);
         if theme::can_show(l) { l } else { "en" }
@@ -308,6 +308,7 @@ impl CadApp {
     /// `NativeOptions::stencil_buffer`); clipped viewports are clipped with it.
     pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState, stencil: Option<egui_wgpu::wgpu::TextureFormat>) {
         self.canvas.gpu = Some(gpu::install(rs, &self.gpu_faults, stencil));
+        self.canvas.gpu_device = Some(rs.device.clone());
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -550,10 +551,10 @@ impl CadApp {
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        let cjk = self.language().starts_with("zh");
-        if self.fonts_cjk != Some(cjk) {
-            theme::install_fonts(ctx, cjk);
-            self.fonts_cjk = Some(cjk);
+        let language = self.language();
+        if self.fonts_language != Some(language) {
+            theme::install_fonts(ctx, language);
+            self.fonts_language = Some(language);
         }
         // Resolved every frame, so a System choice follows the OS appearance live (winit and the
         // browser report changes as input); the saved choice itself never changes here.
@@ -689,9 +690,12 @@ impl CadApp {
 
     fn issue_screenshots(&mut self, ctx: &egui::Context) {
         let now = now_ms();
+        // Wait for a background rebuild for the current view, so the shot shows the drawing at
+        // that view, but not past the reply's deadline.
+        let building = self.canvas.building();
         self.queued_shots.retain_mut(|(token, at, frames)| {
             *frames += 1;
-            if now >= *at && *frames >= 3 {
+            if now >= *at && *frames >= 3 && (!building || now >= *at + SHOT_REBUILD_WAIT_MS) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(*token)));
                 false
             } else {
@@ -736,6 +740,10 @@ impl CadApp {
         });
     }
 }
+
+/// How long a control-channel screenshot waits for a background rebuild before it is taken
+/// anyway (the reply itself times out after 8 s).
+const SHOT_REBUILD_WAIT_MS: f64 = 6000.0;
 
 pub fn now_ms() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]

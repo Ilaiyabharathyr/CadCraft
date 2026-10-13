@@ -35,10 +35,16 @@ pub enum Preference {
     Thai,
     #[serde(rename = "it")]
     Italian,
+    #[serde(rename = "ko")]
+    Korean,
+    #[serde(rename = "sv")]
+    Swedish,
+    #[serde(rename = "ar")]
+    Arabic,
 }
 
 impl Preference {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 15] = [
         Self::Auto,
         Self::English,
         Self::Ukrainian,
@@ -51,6 +57,9 @@ impl Preference {
         Self::Chinese,
         Self::Thai,
         Self::Italian,
+        Self::Korean,
+        Self::Swedish,
+        Self::Arabic,
     ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
@@ -76,6 +85,9 @@ impl Preference {
             Self::Chinese => "zh",
             Self::Thai => "th",
             Self::Italian => "it",
+            Self::Korean => "ko",
+            Self::Swedish => "sv",
+            Self::Arabic => "ar",
         }
     }
 
@@ -93,6 +105,15 @@ impl Preference {
             Self::Chinese => "简体中文",
             Self::Thai => "ไทย",
             Self::Italian => "Italiano",
+            Self::Korean => {
+                if crate::theme::shows_hangul(CURRENT.with(Cell::get)) {
+                    "한국어"
+                } else {
+                    "Korean"
+                }
+            }
+            Self::Swedish => "Svenska",
+            Self::Arabic => "العربية",
         }
     }
 
@@ -118,6 +139,9 @@ impl Preference {
             Self::Chinese => "zh",
             Self::Thai => "th",
             Self::Italian => "it",
+            Self::Korean => "ko",
+            Self::Swedish => "sv",
+            Self::Arabic => "ar",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -134,7 +158,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 11] = [
+pub static LANGUAGES: [Language; 14] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -164,6 +188,14 @@ pub static LANGUAGES: [Language; 11] = [
     Language { code: "th", name: "ไทย", source: include_str!("th.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     // Italian integer plurals (CLDR `it`) follow the English rule: one (1), other.
     Language { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Korean has one integer plural form and needs a Hangul-capable interface font.
+    Language { code: "ko", name: "한국어", source: include_str!("ko.tsv"), plural: plural_ko, plural_forms: 1, catalog: OnceLock::new() },
+    // Swedish plurals follow the English rule: one (1), other.
+    Language { code: "sv", name: "Svenska", source: include_str!("sv.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // العربية (Arabic) is right-to-left; an installed Arabic font (`theme::arabic_font`)
+    // covers its glyphs, and the shell keeps egui's left-to-right run order. Six plural
+    // forms: zero, one, two, few, many, other.
+    Language { code: "ar", name: "العربية", source: include_str!("ar.tsv"), plural: plural_arabic, plural_forms: 6, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
@@ -278,6 +310,24 @@ pub fn plural_uk(n: u64) -> usize {
 /// Portuguese integer plurals (CLDR `pt`): one (0, 1), other (2 and up).
 pub fn plural_pt(n: u64) -> usize {
     usize::from(n > 1)
+}
+
+/// Korean uses the same count form for every integer.
+fn plural_ko(_n: u64) -> usize {
+    0
+}
+
+/// Arabic integer plurals (CLDR `ar`): zero (0), one (1), two (2), few (3–10, 103–110),
+/// many (11–99) — the same rule pdfcraft uses, so the sibling apps agree.
+pub fn plural_arabic(n: u64) -> usize {
+    match (n, n % 100) {
+        (0, _) => 0,
+        (1, _) => 1,
+        (2, _) => 2,
+        (_, 3..=10) => 3,
+        (_, 11..=99) => 4,
+        _ => 5,
+    }
 }
 
 fn plural_en(n: u64) -> usize {
