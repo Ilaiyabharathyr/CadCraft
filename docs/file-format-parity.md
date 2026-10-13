@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (code pages, #505; native MULTILEADER, #459; foreign data kept, #528; PDF text, layers and sheets, #567, #571; templates and user files, #552; plotter devices, #564) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (unvisited native layouts initialize on first activation; prior format support unchanged) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -36,6 +36,10 @@ converting it to a DWG of the chosen version (#421): SAVEAS `version`, else the 
 version (the file's `$ACADVER`, 2018 for a new drawing), at least 2004 unless 2000 is asked for.
 The bridge repairs two acadrust 0.6.3 gaps in 2010+ DWG: merged table cells and table-style
 title/header suppression.
+
+On macOS the app accepts both its fallback DWG type and `com.autodesk.autocad.dwg`, the
+type AutoCAD registers for the extension, so Finder's Open With can offer CADCraft even
+when AutoCAD is installed. The handler remains an alternate; it does not change the default app.
 
 | DWG version | Code | AutoCAD 2027 | CADCraft read | CADCraft write | Tested how |
 |---|---|---|---|---|---|
@@ -89,7 +93,7 @@ early (#175), but the throughput problem remains. **DWG ≈ 30% read, ≈ 15% wr
 | Header variables | all read | 36 written | AutoCAD writes about 280 |
 | Tables: LAYER (+ transparency, description), LTYPE, STYLE, DIMSTYLE, BLOCK_RECORD | yes | yes | |
 | Tables: VPORT, VIEW, UCS, APPID | yes | yes: saved viewport configurations (#504), named views, UCSs | UCS elevation lost |
-| Objects: LAYOUT, DICTIONARY, XRECORD, TABLESTYLE, DIMASSOC | yes | yes | |
+| Objects: LAYOUT, DICTIONARY, XRECORD, TABLESTYLE, DIMASSOC | yes; unsized, unvisited native layouts get a default landscape page and model viewport on first activation | yes; unvisited layouts remain uninitialized until activated | configured or populated layouts are left alone; default paper views fit the whole sheet, including custom media and narrow drawing areas |
 | Objects: GROUP, MLINESTYLE, MLEADERSTYLE, IMAGEDEF, SCALE | yes | yes (groups #417, scale list #468) | |
 | Objects: VISUALSTYLE, PLOTSETTINGS, materials, field objects and other unmodelled objects | kept raw (#528) | written back as read | not editable |
 | Foreign xdata, extension dictionaries, reactors, unmodelled objects, colour books | kept raw (#528) | written back, handles remapped, references to deleted objects dropped | through DWG: xdata on table records and blocks, entity colour books and reactors, custom-class objects lost (acadrust) |
@@ -130,10 +134,16 @@ external validator runs in CI (ezdxf's audit was run by hand once, 2026-10-06). 
 a licensed real-file corpus with an open → save → re-open → compare test per file, and checking
 our output in AutoCAD black-box.
 
+Manual check on 2026-10-13: a user-provided R2013 DWG with 24,675 model entities and two
+unvisited, unsized layouts reproduced the empty-sheet discrepancy. The corrected desktop
+app shows the model in the initialized landscape presentation. The user file and reference
+screenshots remain outside the repository; regression tests use synthetic drawings.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | First activation initializes imported, unsized empty layouts with landscape media and a model viewport; configured or populated sheets and erased viewports stay unchanged. Unvisited state survives DXF/DWG save; paper framing fits custom media and narrow drawing areas. Synthetic regression tests and a local user-DWG check added; weighted percentages not re-measured |
 | 2026-10-11 | minor | Rows refreshed for merged work: code pages and `\M+` (#505), MULTILEADER (#459), IMAGE, MLINE/HELIX/REGION/TOLERANCE, VPORT/VIEW/UCS tables, modelled and raw objects, foreign data (#528), DWT templates and user `.lin`/`.pat`/`.pgp` files (#552), PDF output (#567, #571), plotter devices (#564), data extraction (#433, #534); weighted percentages not re-measured |
 | 2026-10-11 | minor | DXF (ASCII and binary) and DWG saved at 2000–2018, 2018 by default (#421) |
 | 2026-10-10 | minor | WIPEOUT and gradients written since #147/#162; other save losses remain (#201, #204, #208, #209, #213, #223) |

@@ -1552,7 +1552,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     d.layouts.clear();
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
     let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, i64)> = Vec::new();
-    let mut layout_objs: Vec<(String, u32, String, PageSetup)> = Vec::new();
+    let mut layout_objs: Vec<(String, u32, String, PageSetup, bool)> = Vec::new();
     let mut entities = Vec::new();
     let mut objs = Objects::default();
     for s in &secs {
@@ -1601,7 +1601,19 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
                         // LAYOUT has two 330s: owner dict and the block record; take the last.
                         let br = tg.iter().rfind(|x| x.code == 330).map(Tag::str).unwrap_or_default();
                         let plot = T(tg.get(..start).unwrap_or(&[]));
-                        layout_objs.push((t.s(1).unwrap_or_default(), t.i(71).unwrap_or(0) as u32, br.to_ascii_uppercase(), page_setup(&plot)));
+                        // Never-activated native layouts have neither media dimensions nor an
+                        // overall paper viewport. Do not confuse a configured, empty sheet with one.
+                        let pending = plot.fd(44, 0.0) == 0.0
+                            && plot.fd(45, 0.0) == 0.0
+                            && plot.s(4).is_none_or(|n| n.is_empty())
+                            && t.s(331).is_none_or(|h| Handle::parse_hex(&h).is_none_or(|h| h.0 == 0));
+                        layout_objs.push((
+                            t.s(1).unwrap_or_default(),
+                            t.i(71).unwrap_or(0) as u32,
+                            br.to_ascii_uppercase(),
+                            page_setup(&plot),
+                            pending,
+                        ));
                     }
                 }
             }
@@ -1614,11 +1626,11 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     // Layouts.
     let mut paper_block_for: HashMap<String, String> = HashMap::new();
     layout_objs.sort_by_key(|l| l.1);
-    for (name, order, br, page) in &layout_objs {
+    for (name, order, br, page, pending) in &layout_objs {
         if name.eq_ignore_ascii_case("Model") {
             continue;
         }
-        d.layouts.push(Layout { page: page.clone(), ..Layout::new(name, *order) });
+        d.layouts.push(Layout { page: page.clone(), needs_initialization: *pending, ..Layout::new(name, *order) });
         if let Some(bname) = rx.brs.get(br) {
             paper_block_for.insert(bname.to_ascii_uppercase(), name.clone());
         }
@@ -1690,6 +1702,9 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
     }
     apply_sortents(&mut d, &objs.sortents, &rx.brs, &paper_block_for, &first_layout);
     objs.apply(&mut d, &rx);
+    for l in &mut d.layouts {
+        l.needs_initialization &= l.entities.is_empty();
+    }
     crate::dxf_image::resolve(&secs, &mut d);
     crate::dxf_mline::resolve(&secs, &mut d);
     // Keep handles unique against the header's seed.

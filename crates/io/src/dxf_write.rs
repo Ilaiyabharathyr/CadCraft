@@ -2302,7 +2302,15 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &PageSetup::default(), None);
     for (i, (_, brh, l)) in ps_brs.iter().enumerate() {
         let h = layout_handles.get(i).cloned().unwrap_or_default();
-        layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &l.page, l.view);
+        // Keep an unvisited, unsized layout uninitialized through DXF and DWG saves.
+        // Writing the fallback paper dimensions would turn it into an intentionally blank sheet.
+        let mut page = l.page.clone();
+        if l.needs_initialization && l.entities.is_empty() {
+            page.paper.clear();
+            page.width_mm = 0.0;
+            page.height_mm = 0.0;
+        }
+        layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &page, l.view);
     }
     // Raster image definitions.
     w.t.extend(crate::dxf_image::objects(&cx.images, &root_dict));
