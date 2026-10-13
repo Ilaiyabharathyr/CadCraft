@@ -302,7 +302,10 @@ pub fn mono() -> FontId {
 }
 
 /// Load a system UI font at run time when one is installed (not bundled), else keep egui's.
-pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
+pub fn install_fonts(ctx: &egui::Context, language: &str) {
+    let mut fonts = egui::FontDefinitions::default();
+    #[cfg(target_arch = "wasm32")]
+    let _ = language;
     #[cfg(not(target_arch = "wasm32"))]
     {
         let candidates: &[&str] = if cfg!(target_os = "macos") {
@@ -317,7 +320,6 @@ pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
                 "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
             ]
         };
-        let mut fonts = egui::FontDefinitions::default();
         for path in candidates {
             if let Ok(bytes) = std::fs::read(path) {
                 fonts.font_data.insert("system-ui".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
@@ -327,8 +329,8 @@ pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
                 break;
             }
         }
-        // Chinese: an installed CJK font after the Latin ones, so Latin text keeps its look.
-        if let Some(bytes) = cjk.then(cjk_font).flatten().and_then(|p| read_capped(p, MAX_UI_FONT_BYTES)) {
+        // Script fonts follow the Latin ones, so Latin text keeps its look.
+        if let Some(bytes) = language.starts_with("zh").then(cjk_font).flatten().and_then(|p| read_capped(p, MAX_UI_FONT_BYTES)) {
             fonts.font_data.insert("system-cjk".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
             for family in [FontFamily::Proportional, FontFamily::Monospace] {
                 if let Some(f) = fonts.families.get_mut(&family) {
@@ -336,23 +338,36 @@ pub fn install_fonts(ctx: &egui::Context, cjk: bool) {
                 }
             }
         }
-        ctx.set_fonts(fonts);
     }
-    #[cfg(target_arch = "wasm32")]
-    let _ = (ctx, cjk);
+    // Also needed while choosing 한국어 from an English-language interface.
+    if let Some(face) = korean_font() {
+        let mut data = egui::FontData::from_owned(face.bytes.as_ref().clone());
+        data.index = face.index;
+        fonts.font_data.insert("korean-ui".into(), std::sync::Arc::new(data));
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            if let Some(f) = fonts.families.get_mut(&family) {
+                f.push("korean-ui".into());
+            }
+        }
+    }
+    ctx.set_fonts(fonts);
 }
 
-/// Largest interface font file read (CJK collections are 15–60 MB).
-#[cfg(not(target_arch = "wasm32"))]
+/// Largest interface font file read or embedded face copied (CJK collections are 15–60 MB).
 const MAX_UI_FONT_BYTES: u64 = 96 * 1024 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_capped(path: &std::path::Path, max: u64) -> Option<Vec<u8>> {
-    let len = std::fs::metadata(path).ok()?.len();
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
     if len == 0 || len > max {
         return None;
     }
-    std::fs::read(path).ok()
+    // Enforce the cap during the read too, even if the file grows after metadata was read.
+    let mut bytes = Vec::new();
+    file.take(max.saturating_add(1)).read_to_end(&mut bytes).ok()?;
+    (!bytes.is_empty() && bytes.len() as u64 <= max).then_some(bytes)
 }
 
 /// An installed font with Chinese characters, for the Chinese interface; fonts are never bundled
@@ -388,9 +403,76 @@ pub fn cjk_font() -> Option<&'static std::path::Path> {
     None
 }
 
-/// Whether the interface can show `language`: Chinese needs an installed CJK font.
+/// A face must cover every Hangul character in the catalog, not just a sample syllable.
+/// This also rejects malformed fonts and a Chinese/Japanese-only face in a collection.
+fn korean_face(bytes: std::sync::Arc<Vec<u8>>) -> Option<cadcraft_fonts::ttf::Face> {
+    let letters: std::collections::BTreeSet<_> = include_str!("i18n/ko.tsv")
+        .lines()
+        .filter_map(|line| line.split('\t').nth(2))
+        .flat_map(str::chars)
+        .chain("한국어".chars())
+        .filter(|c| matches!(c, '\u{1100}'..='\u{11ff}' | '\u{3130}'..='\u{318f}' | '\u{a960}'..='\u{a97f}' | '\u{ac00}'..='\u{d7ff}'))
+        .collect();
+    cadcraft_fonts::ttf::faces(&bytes).into_iter().find(|face| letters.iter().all(|c| face.has_glyph(*c)))
+}
+
+/// A Korean UI font from the optional craft-fonts input or the operating system.
+/// No fonts are downloaded or bundled by this change. Missing coverage keeps the UI English.
+/// Collections are scanned with the fonts crate's face-count cap; disk reads are capped too.
+pub fn korean_font() -> Option<&'static cadcraft_fonts::ttf::Face> {
+    static FOUND: std::sync::OnceLock<Option<cadcraft_fonts::ttf::Face>> = std::sync::OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            for font in cadcraft_fonts::CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| matches!(*s, "Hang" | "Kore"))) {
+                if font.bytes.len() as u64 > MAX_UI_FONT_BYTES {
+                    continue;
+                }
+                if let Some(face) = korean_face(std::sync::Arc::new(font.bytes.to_vec())) {
+                    return Some(face);
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let candidates: &[&str] = if cfg!(target_os = "macos") {
+                    &[
+                        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+                        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+                        "/Library/Fonts/NanumGothic.ttf",
+                    ]
+                } else if cfg!(windows) {
+                    &["C:\\Windows\\Fonts\\malgun.ttf", "C:\\Windows\\Fonts\\gulim.ttc"]
+                } else {
+                    &[
+                        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+                        "/usr/share/fonts/nanum/NanumGothic.ttf",
+                        "/usr/share/fonts/opentype/noto/NotoSansCJKkr-Regular.otf",
+                        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+                        "/usr/local/share/fonts/nanum/NanumGothic.ttf",
+                        "/usr/local/share/fonts/noto/NotoSansCJK-Regular.ttc",
+                    ]
+                };
+                for path in candidates {
+                    if let Some(face) =
+                        read_capped(std::path::Path::new(path), MAX_UI_FONT_BYTES).and_then(|bytes| korean_face(std::sync::Arc::new(bytes)))
+                    {
+                        return Some(face);
+                    }
+                }
+            }
+            None
+        })
+        .as_ref()
+}
+
+/// Whether the interface can show the chosen script without missing-glyph boxes.
 pub fn can_show(language: &str) -> bool {
-    !language.starts_with("zh") || cjk_font().is_some()
+    match language {
+        "ko" => korean_font().is_some(),
+        l if l.starts_with("zh") => cjk_font().is_some(),
+        _ => true,
+    }
 }
 
 /// egui's visuals for `theme`, from its tokens.
@@ -443,4 +525,14 @@ pub fn apply(ctx: &egui::Context, theme: Theme, follow_system: bool) {
         s.text_styles.insert(egui::TextStyle::Small, small());
         s.text_styles.insert(egui::TextStyle::Monospace, mono());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn korean_font_rejects_invalid_or_glyphless_files() {
+        for bytes in [vec![], vec![0xff; 32], vec![0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]] {
+            assert!(super::korean_face(std::sync::Arc::new(bytes)).is_none());
+        }
+    }
 }
