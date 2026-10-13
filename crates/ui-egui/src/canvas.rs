@@ -272,13 +272,13 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
     if app.canvas.list.is_some() && app.canvas.key == key && inside {
         return;
     }
-    // Only the view moved: keep drawing the current list and build the new one in the background,
-    // one build at a time (when it lands, the view it no longer fits starts the next).
+    // Only the view moved: keep drawing the current list and build the new one in the background.
     let view_only = app.canvas.list.is_some() && same_content(&app.canvas.key, &key);
-    if view_only && app.canvas.job.is_some() {
+    if view_only && app.canvas.job.as_ref().is_some_and(|j| j.serves(&key, &visible)) {
         return;
     }
-    // A changed drawing outdates whatever is being built.
+    // A build for another view, or for a drawing that has since changed, is no longer wanted:
+    // dropping it cancels it.
     app.canvas.job = None;
     let t0 = crate::now_ms();
     let opts = cadcraft_render::Options {
@@ -293,6 +293,7 @@ fn ensure_list(app: &mut CadApp, xf: &Xf, views: &[(Bounds2, f64)], ctx: &egui::
         plot_style_table: None,
         view: build_window(views),
         skip_viewport: split,
+        cancel: None,
     };
     if view_only {
         let t = Tokens::get();
@@ -452,6 +453,7 @@ fn ensure_vp_content(app: &mut CadApp, xf_paper: &Xf, ctx: &egui::Context) -> Op
             plot_style_table: None,
             view: Some(area),
             skip_viewport: None,
+            cancel: None,
         };
         c.list = cadcraft_render::viewport_content(&st.doc, &st.space, h, area, &opts);
         c.key = Some(key);

@@ -6,11 +6,14 @@
 //! drawing each step froze the window for 2-3 s. The current list stays valid at any view (only
 //! hatch patterns are limited to its area, and curves and dashes are a band coarser or finer than
 //! ideal), so the canvas keeps drawing it, scaled and moved by the view uniform, while the worker
-//! builds the new one. One build runs at a time; a newer view starts the next build when it lands.
+//! builds the new one. A view that needs a different list cancels the build in flight (dropping
+//! its [`Job`] sets the build's cancel flag, see `cadcraft_render::Options::cancel`) and starts
+//! one for itself, so a long scroll through many zoom bands builds only for where it stops.
 //! Edits still rebuild at once, so a change is never drawn late. The web build has no threads and
 //! rebuilds synchronously.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use cadcraft_color::Rgb;
@@ -57,11 +60,19 @@ pub(super) struct BuiltMesh {
     pub ms: f64,
 }
 
-/// A build in flight: the list key and area it is for, and where its result arrives.
+/// A build in flight: the list key and area it is for, and where its result arrives. Dropping
+/// it cancels the build.
 pub(super) struct Job {
     pub key: super::ListKey,
     pub window: Option<Bounds2>,
     rx: Receiver<Built>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 /// What [`Job::poll`] found.
@@ -80,43 +91,68 @@ impl Job {
             Err(TryRecvError::Disconnected) => Poll::Lost,
         }
     }
+
+    /// Whether this build serves list `key` for the visible area `visible`.
+    pub fn serves(&self, key: &super::ListKey, visible: &Bounds2) -> bool {
+        self.key == *key && self.window.is_none_or(|w| visible.is_empty() || w.contains_box(visible))
+    }
 }
 
-/// Build `req` on the calling thread.
-fn run(req: Request) -> Built {
+/// Build `req` on the calling thread; `None` once it has been cancelled (the partial list is
+/// thrown away, and no vertex data is made for it).
+fn run(req: Request) -> Option<Built> {
     let t0 = crate::now_ms();
     let list = cadcraft_render::build(&req.doc, &req.space, &req.opts);
+    if req.opts.cancelled() {
+        return None;
+    }
     let build_ms = crate::now_ms() - t0;
-    let mesh = req.mesh.map(|m| {
-        let t1 = crate::now_ms();
-        let origin = crate::gpu::choose_origin(&list.bounds, m.view_center, m.view_height);
-        let bg = if list.sheet.is_some() { m.paper_bg } else { m.model_bg };
-        let mut data = crate::gpu::build_mesh(&list, origin, bg, m.lwdisplay);
-        if let Some(device) = &m.device {
-            data.upload_now(device);
+    let mesh = match req.mesh {
+        None => None,
+        Some(m) => {
+            let t1 = crate::now_ms();
+            let origin = crate::gpu::choose_origin(&list.bounds, m.view_center, m.view_height);
+            let bg = if list.sheet.is_some() { m.paper_bg } else { m.model_bg };
+            let mut data = crate::gpu::build_mesh(&list, origin, bg, m.lwdisplay);
+            if req.opts.cancelled() {
+                return None;
+            }
+            if let Some(device) = &m.device {
+                data.upload_now(device);
+            }
+            let infinite = list.prims.iter().enumerate().filter(|(_, p)| matches!(p.kind, Kind::Infinite { .. })).map(|(i, _)| i).collect();
+            Some(BuiltMesh { data, origin, bg, lwdisplay: m.lwdisplay, infinite, ms: crate::now_ms() - t1 })
         }
-        let infinite = list.prims.iter().enumerate().filter(|(_, p)| matches!(p.kind, Kind::Infinite { .. })).map(|(i, _)| i).collect();
-        BuiltMesh { data, origin, bg, lwdisplay: m.lwdisplay, infinite, ms: crate::now_ms() - t1 }
-    });
-    Built { list, build_ms, mesh }
+    };
+    Some(Built { list, build_ms, mesh })
 }
 
 /// Start building `req` on a worker thread for `key` / `window`; the worker asks `ctx` for a
 /// frame when it is done. `None` when there are no threads (the web build) or none could be
 /// started: the caller builds synchronously.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn spawn(req: Request, key: super::ListKey, window: Option<Bounds2>, ctx: &egui::Context) -> Option<Job> {
+pub(super) fn spawn(mut req: Request, key: super::ListKey, window: Option<Bounds2>, ctx: &egui::Context) -> Option<Job> {
     let (tx, rx) = std::sync::mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    req.opts.cancel = Some(cancel.clone());
     let ctx = ctx.clone();
     let spawned = std::thread::Builder::new().name("cadcraft-regen".into()).spawn(move || {
-        // A panic drops `tx` unsent: the canvas sees the job as lost and builds on its own.
-        if let Ok(built) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(req))) {
-            let _ = tx.send(built);
+        // A panic drops `tx` unsent: the canvas sees the job as lost and builds on its own. A
+        // cancelled build sends nothing either, but its job is gone and nobody is listening.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(req))) {
+            Ok(None) => {}
+            Ok(Some(built)) => {
+                let _ = tx.send(built);
+                ctx.request_repaint();
+            }
+            Err(_) => {
+                drop(tx);
+                ctx.request_repaint();
+            }
         }
-        ctx.request_repaint();
     });
     match spawned {
-        Ok(_) => Some(Job { key, window, rx }),
+        Ok(_) => Some(Job { key, window, rx, cancel }),
         Err(e) => {
             log::warn!("canvas: could not start a regen thread ({e}); rebuilding on the UI thread");
             None
@@ -169,5 +205,20 @@ mod tests {
         let Some(mesh) = built.mesh else { panic!("no mesh") };
         assert_eq!(mesh.bg, Rgb(0, 0, 0));
         assert!(mesh.data.line_vertices() >= 2);
+    }
+
+    #[test]
+    fn cancelled_run_makes_nothing() {
+        let opts = Options { cancel: Some(Arc::new(AtomicBool::new(true))), ..Default::default() };
+        let req = Request { doc: Arc::new(Drawing::new_imperial()), space: Space::Model, opts, mesh: None };
+        assert!(run(req).is_none());
+    }
+
+    #[test]
+    fn dropping_a_job_cancels_its_build() {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        drop(Job { key: Default::default(), window: None, rx, cancel: cancel.clone() });
+        assert!(cancel.load(Ordering::Relaxed));
     }
 }
