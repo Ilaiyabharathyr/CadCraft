@@ -127,7 +127,10 @@ fn bounds_in(d: &Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<String,
             }
             for a in &ins.attribs {
                 if !a.invisible {
-                    b = b.union(&text_box(&a.text, a.text.value.chars().count()));
+                    b = b.union(&match a.multiline_text() {
+                        Some(m) => mtext_box(&m),
+                        None => text_box(&a.text, a.text.value.chars().count()),
+                    });
                 }
             }
             b
@@ -309,7 +312,15 @@ mod tests {
     #[test]
     fn right_justified_attdef_is_left_of_alignment_point() {
         let text = text(HAlign::Right, VAlign::Baseline);
-        let a = crate::Attrib { tag: "HELLO".into(), text, invisible: false, constant: false, prompt: String::new(), props: Default::default() };
+        let a = crate::Attrib {
+            tag: "HELLO".into(),
+            text,
+            invisible: false,
+            constant: false,
+            prompt: String::new(),
+            props: Default::default(),
+            multiline: None,
+        };
         let b = bounds(EntityKind::AttDef(a));
         assert!(b.min.x <= -4.4 && b.max.x < 1.0);
     }

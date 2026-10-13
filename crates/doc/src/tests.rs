@@ -354,6 +354,7 @@ fn attdef_in_block_is_ignored_in_insert_extents() {
             constant: false,
             prompt: String::new(),
             props: Default::default(),
+            multiline: None,
         }),
     );
     let d = drawing_with_block(attdef);
