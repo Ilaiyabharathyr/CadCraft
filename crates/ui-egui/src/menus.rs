@@ -862,10 +862,6 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get();
     let tree = tree(app);
     let mut clicked = None;
-    let drawing = match app.session.state() {
-        Ok(st) if !app.ui.start_tab => Some(format!("{}{}", st.title, if st.title.contains('.') { "" } else { ".dwg" })),
-        _ => None,
-    };
     egui::Panel::top("cc_menubar").exact_size(BAR_HEIGHT).frame(egui::Frame::NONE.fill(t.list_bg)).show(ui, |ui| {
         let bar = ui.max_rect();
         let inner = bar.shrink2(egui::vec2(8.0, 0.0));
@@ -898,7 +894,6 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         let was_open = ui.data(|d| d.get_temp::<bool>(any_open_id)).unwrap_or(false);
         let mut any_open = false;
         let font = egui::FontId::proportional(13.0);
-        let mut right = inner.left();
         for (name, entries) in &tree {
             let label = crate::i18n::menu(name);
             let galley = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text);
@@ -920,7 +915,6 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
             any_open |= open;
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, label));
             crate::control::record_widget(ui, &resp, label, "button", Some(open));
-            right = resp.rect.right();
             let config = menu_config();
             egui::Popup::menu(&resp)
                 .gap(1.0)
@@ -930,14 +924,6 @@ pub fn menu_bar(app: &mut CadApp, ui: &mut egui::Ui) {
                 .show(|ui| menu_rows(ui, entries, MENU_ROW_WIDTH, true, &mut clicked));
         }
         ui.data_mut(|d| d.insert_temp(any_open_id, any_open));
-
-        if let Some(name) = drawing {
-            let galley = ui.painter().layout_no_wrap(name, egui::FontId::proportional(12.0), t.text_faint);
-            let at = egui::pos2(inner.right() - galley.size().x, bar.center().y - galley.size().y / 2.0);
-            if at.x > right + 16.0 {
-                ui.painter().galley(at, galley, t.text_faint);
-            }
-        }
     });
     if let Some(id) = clicked {
         activate(app, &id);

@@ -242,7 +242,8 @@ fn menubar_has_no_overlaps() {
         let h = harness(scale);
         let bar = bar_rect(&h);
         let in_bar: Vec<_> = texts(&clipped(&h)).into_iter().filter(|(_, r)| bar.contains(r.center())).collect();
-        assert!(in_bar.len() > menus::MENUS.len(), "the bar shows the menu names and the drawing name: {in_bar:?}");
+        let names: Vec<&str> = in_bar.iter().map(|(text, _)| text.as_str()).collect();
+        assert_eq!(names, menus::MENUS, "the bar shows the menu names and nothing else");
         problems.extend(overlaps(&in_bar).into_iter().map(|p| format!("bar @{scale}: {p}")));
         for (i, menu) in menus::MENUS.iter().enumerate() {
             let button = bar_button(&h, menu);
