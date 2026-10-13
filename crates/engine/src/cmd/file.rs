@@ -138,7 +138,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("open", "Open...", run_open)
             .menu(&["File", "Open..."])
             .key("Cmd+O")
-            .params("{path} | {data: base64, name}")
+            .params("{path} | {data: base64, name} → {index, entities?, warnings: what reading left out}")
             .enabled(always)
             .noundo(),
         CommandSpec::new("close", "Close", run_close).menu(&["File", "Close"]).key("Cmd+W").params("{index?}").noundo(),
@@ -234,12 +234,27 @@ pub(crate) fn open_bytes(s: &mut Session, bytes: &[u8], name: &str, path: Option
     // A file that isn't a drawing (an imported SVG) gives the drawing no file name: QSAVE then
     // asks where to save instead of exporting over the original.
     let path = path.filter(|p| is_drawing_file(p));
+    let notes = d.read_notes.clone();
     let i = s.open_drawing(d, &file_name(name), path);
     if let Some(st) = s.docs.get_mut(i) {
         // QSAVE keeps a binary DXF binary.
         st.binary_dxf = cadcraft_dxf::is_binary(bytes);
     }
+    for note in notes {
+        s.echo(note);
+    }
     Ok(i)
+}
+
+/// OPEN's reply: the drawing's index and what reading it left out.
+fn opened(s: &Session, i: usize, entities: bool) -> Value {
+    let d = s.docs.get(i).map(|st| &st.doc);
+    let warnings = d.map(|d| d.read_notes.clone()).unwrap_or_default();
+    if entities {
+        json!({ "index": i, "entities": d.map(|d| d.entity_count()), "warnings": warnings })
+    } else {
+        json!({ "index": i, "warnings": warnings })
+    }
 }
 
 fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
@@ -251,7 +266,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
             let bytes = std::fs::read(path).map_err(|e| bad("open", format!("{path}: {e}")))?;
             let i = open_bytes(s, &bytes, path, Some(path.to_string()))?;
             super::blocks::xref::after_open(s, i);
-            return Ok(json!({ "index": i, "entities": s.docs.get(i).map(|d| d.doc.entity_count()) }));
+            return Ok(opened(s, i, true));
         }
         #[cfg(target_arch = "wasm32")]
         return Err(bad("open", "paths are not available on the web; pass `data`"));
@@ -261,7 +276,7 @@ fn run_open(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").unwrap_or("Drawing.dxf");
     let i = open_bytes(s, &bytes, name, None)?;
     super::blocks::xref::after_open(s, i);
-    Ok(json!({ "index": i }))
+    Ok(opened(s, i, false))
 }
 
 fn run_close(s: &mut Session, p: &Value) -> Result<Value> {

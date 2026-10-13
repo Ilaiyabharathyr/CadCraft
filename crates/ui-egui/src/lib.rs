@@ -400,11 +400,17 @@ impl CadApp {
     }
 
     fn opened(&mut self, r: Result<Value, String>) {
-        if let Err(e) = r {
-            self.set_status(e);
-        } else {
-            self.ui.start_tab = false;
-            self.canvas.zoom_pending = true;
+        match r {
+            Err(e) => self.set_status(e),
+            Ok(v) => {
+                self.ui.start_tab = false;
+                self.canvas.zoom_pending = true;
+                // A partial read (DWG records left out) shows in the status bar too, not only on
+                // the command line.
+                if let Some(w) = v.get("warnings").and_then(Value::as_array).and_then(|w| w.first()).and_then(Value::as_str) {
+                    self.set_status(w.to_string());
+                }
+            }
         }
     }
 
