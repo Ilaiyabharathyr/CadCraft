@@ -735,19 +735,23 @@ fn content_stream(
                 }
             }
             Kind::Point => {
-                let Some(q) = raw.first() else { continue };
+                if raw.is_empty() {
+                    continue;
+                }
                 flush(&mut c, &mut pending);
                 if fill != Some(rgb) {
                     color(&mut c, rgb, "rg");
                     fill = Some(rgb);
                 }
                 let half = (w.max(0.5)) / 2.0;
-                pt(&mut c, map.pt(*q) - Vec2::new(half, half));
-                c.push(' ');
-                num(&mut c, half * 2.0);
-                c.push(' ');
-                num(&mut c, half * 2.0);
-                c.push_str(" re f\n");
+                for q in raw {
+                    pt(&mut c, map.pt(*q) - Vec2::new(half, half));
+                    c.push(' ');
+                    num(&mut c, half * 2.0);
+                    c.push(' ');
+                    num(&mut c, half * 2.0);
+                    c.push_str(" re f\n");
+                }
             }
         }
     }
