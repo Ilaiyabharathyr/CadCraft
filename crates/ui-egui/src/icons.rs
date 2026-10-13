@@ -144,11 +144,23 @@ pub enum Icon {
     PickAdd,
     SelectObjects,
     QuickSelect,
+    Template,
+    Pdf,
+    Wrench,
+    Quit,
+    Cut,
+    ClipCopy,
+    Paste,
+    SelectAll,
+    Globe,
 }
 
+#[derive(Clone, Copy)]
 struct Pen<'a> {
     p: &'a Painter,
     r: Rect,
+    /// The side of the grid the coordinates are on: 24 for the tool icons, 20 for the menu icons.
+    g: f32,
     w: f32,
     base: Color32,
     acc: Color32,
@@ -157,11 +169,11 @@ struct Pen<'a> {
 
 impl Pen<'_> {
     fn at(&self, x: f32, y: f32) -> Pos2 {
-        let s = self.r.width() / 24.0;
+        let s = self.sc();
         pos2(self.r.min.x + x * s, self.r.min.y + y * s)
     }
     fn sc(&self) -> f32 {
-        self.r.width() / 24.0
+        self.r.width() / self.g
     }
     fn st(&self, c: Color32) -> Stroke {
         Stroke::new(self.w, c)
@@ -231,7 +243,15 @@ pub fn paint_tinted(p: &Painter, rect: Rect, icon: Icon, dim: bool, tint: Option
         let c = tint.unwrap_or(c);
         if dim { c.gamma_multiply(0.4) } else { c }
     };
-    let pen = Pen { p, r: rect, w: (rect.width() / 16.0).clamp(1.0, 1.6), base: alpha(t.icon), acc: alpha(t.icon_accent), pt: alpha(t.icon_point) };
+    let pen = Pen {
+        p,
+        r: rect,
+        g: 24.0,
+        w: (rect.width() / 16.0).clamp(1.0, 1.6),
+        base: alpha(t.icon),
+        acc: alpha(t.icon_accent),
+        pt: alpha(t.icon_point),
+    };
     let (b, a) = (pen.base, pen.acc);
     use Icon::*;
     match icon {
@@ -913,6 +933,83 @@ pub fn paint_tinted(p: &Painter, rect: Rect, icon: Icon, dim: bool, tint: Option
             pen.poly(&[(3.0, 4.0), (19.0, 4.0), (13.0, 11.0), (13.0, 19.0), (9.0, 17.0), (9.0, 11.0)], true, b);
             pen.poly(&[(20.0, 10.0), (16.5, 15.5), (20.0, 15.5), (17.0, 21.0)], false, a);
         }
+        Template | Pdf | Wrench | Quit | Cut | ClipCopy | Paste | SelectAll | Globe => menu_icon(&Pen { g: 20.0, ..pen }, icon),
+        // MENU-ARMS
+    }
+}
+
+/// The icons that only menu rows use, drawn on a 20-unit grid.
+fn menu_icon(m: &Pen, icon: Icon) {
+    let (b, a) = (m.base, m.acc);
+    use Icon::*;
+    match icon {
+        Template => {
+            // A sheet with ruled lines.
+            m.rect(5.0, 3.0, 10.0, 14.0, b);
+            m.la(8.0, 7.0, 12.0, 7.0);
+            m.l(8.0, 10.0, 12.0, 10.0);
+            m.l(8.0, 13.0, 10.0, 13.0);
+        }
+        Pdf => {
+            // A page with a folded corner and two lines of text.
+            m.poly(&[(5.0, 3.0), (12.0, 3.0), (15.0, 6.0), (15.0, 17.0), (5.0, 17.0)], true, b);
+            m.la(8.0, 11.0, 12.0, 11.0);
+            m.la(8.0, 14.0, 12.0, 14.0);
+        }
+        Wrench => {
+            // A wrench: an open jaw on a slanted handle.
+            m.arc(13.0, 7.0, 4.0, 80.0, 200.0, b);
+            m.arc(13.0, 7.0, 4.0, 250.0, 370.0, b);
+            m.poly(&[(13.7, 3.05), (12.5, 7.5), (16.95, 6.3)], false, b);
+            m.poly(&[(9.25, 8.35), (3.9, 13.7), (6.3, 16.1), (11.65, 10.75)], false, b);
+        }
+        Quit => {
+            // A power symbol.
+            m.arc(10.0, 10.0, 6.0, 132.0, 408.0, b);
+            m.la(10.0, 3.0, 10.0, 10.0);
+        }
+        Cut => {
+            // Scissors.
+            m.c(6.0, 15.0, 2.0, b);
+            m.c(14.0, 15.0, 2.0, b);
+            m.la(7.3, 13.4, 14.0, 3.0);
+            m.la(12.7, 13.4, 6.0, 3.0);
+        }
+        ClipCopy => {
+            // Two overlapping sheets.
+            m.rect(3.0, 3.0, 10.0, 10.0, b);
+            m.rect(7.0, 7.0, 10.0, 10.0, a);
+        }
+        Paste => {
+            // A clipboard.
+            m.rect(6.0, 4.0, 8.0, 13.0, b);
+            m.rect(8.0, 3.0, 4.0, 2.0, a);
+        }
+        SelectAll => {
+            // A dashed selection box.
+            m.poly(&[(3.0, 6.0), (3.0, 3.0), (6.0, 3.0)], false, b);
+            m.poly(&[(14.0, 3.0), (17.0, 3.0), (17.0, 6.0)], false, b);
+            m.poly(&[(17.0, 14.0), (17.0, 17.0), (14.0, 17.0)], false, b);
+            m.poly(&[(6.0, 17.0), (3.0, 17.0), (3.0, 14.0)], false, b);
+            m.la(9.0, 3.0, 11.0, 3.0);
+            m.la(17.0, 9.0, 17.0, 11.0);
+            m.la(11.0, 17.0, 9.0, 17.0);
+            m.la(3.0, 11.0, 3.0, 9.0);
+        }
+        Globe => {
+            // A globe with its equator and two meridians.
+            m.c(10.0, 10.0, 7.0, b);
+            m.l(3.0, 10.0, 17.0, 10.0);
+            for s in [-1.0, 1.0] {
+                let side: Vec<(f32, f32)> = [(0.0, 3.0), (1.6, 4.9), (2.5, 7.2), (2.8, 10.0), (2.5, 12.8), (1.6, 15.1), (0.0, 17.0)]
+                    .iter()
+                    .map(|(x, y)| (10.0 + s * x, *y))
+                    .collect();
+                m.poly(&side, false, a);
+            }
+        }
+        // MENU-ICONS
+        _ => {}
     }
 }
 
