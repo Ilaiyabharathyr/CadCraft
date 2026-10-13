@@ -33,10 +33,12 @@ pub enum Preference {
     Chinese,
     #[serde(rename = "th")]
     Thai,
+    #[serde(rename = "it")]
+    Italian,
 }
 
 impl Preference {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Auto,
         Self::English,
         Self::Ukrainian,
@@ -48,6 +50,7 @@ impl Preference {
         Self::French,
         Self::Chinese,
         Self::Thai,
+        Self::Italian,
     ];
 
     /// The codes a preference can be given as, for messages ("auto, en or uk").
@@ -72,6 +75,7 @@ impl Preference {
             Self::French => "fr",
             Self::Chinese => "zh",
             Self::Thai => "th",
+            Self::Italian => "it",
         }
     }
 
@@ -88,6 +92,7 @@ impl Preference {
             Self::French => "Français",
             Self::Chinese => "简体中文",
             Self::Thai => "ไทย",
+            Self::Italian => "Italiano",
         }
     }
 
@@ -112,6 +117,7 @@ impl Preference {
             Self::French => "fr",
             Self::Chinese => "zh",
             Self::Thai => "th",
+            Self::Italian => "it",
             Self::Auto => locales.iter().find_map(|s| locale_language(s)).unwrap_or("en"),
         }
     }
@@ -128,7 +134,7 @@ pub struct Language {
     catalog: OnceLock<Catalog<'static>>,
 }
 
-pub static LANGUAGES: [Language; 10] = [
+pub static LANGUAGES: [Language; 11] = [
     Language { code: "en", name: "English", source: "", plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
     Language {
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_uk, plural_forms: 3, catalog: OnceLock::new()
@@ -156,6 +162,8 @@ pub static LANGUAGES: [Language; 10] = [
     // Thai has no grammatical plural either. Its glyphs come from an installed Thai font
     // (`theme::thai_font`); without one the interface stays English.
     Language { code: "th", name: "ไทย", source: include_str!("th.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
+    // Italian integer plurals (CLDR `it`) follow the English rule: one (1), other.
+    Language { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_en, plural_forms: 2, catalog: OnceLock::new() },
 ];
 
 /// BCP 47 and POSIX locale tags, including `uk-UA`, `uk_UA.UTF-8` and `pt_BR.UTF-8`.
