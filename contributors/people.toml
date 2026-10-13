@@ -53,3 +53,8 @@ sync_github_name = true
 real_name = "Erik Holmbom"
 display_name = "Erik Holmbom"
 sync_github_name = false
+
+[people.cyfung1031]
+real_name = "Chester Fung"
+display_name = "Chester Fung"
+sync_github_name = true
