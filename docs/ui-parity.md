@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (compact About window) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (in-window menu bar redesign) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How CADCraft's interaction compares with AutoCAD's: point entry, object snaps, tracking, dynamic
 input, grips, selection, the command line, chrome and navigation. A drafter's speed in AutoCAD
@@ -154,7 +154,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 
 | Feature | AutoCAD for Mac | CADCraft |
 |---|---|---|
-| Menu bar | 11 menus, 491 leaf items | same 11 menus; 245/491 items covered (233 by `cargo xtask parity`, which counts engine commands only, plus 12 UI-only items: see [parity-checklist.md](parity-checklist.md)) |
+| Menu bar | 11 menus, 491 leaf items | same 11 menus; 245/491 items covered (233 by `cargo xtask parity`, which counts engine commands only, plus 12 UI-only items: see [parity-checklist.md](parity-checklist.md)). Order, groups and separators come from one layout table (`menu_layout.rs`), shared by the native macOS menu bar; a command the table does not name is appended to its menu. The in-window bar (off by default on macOS) has popups with an icon column, right-aligned shortcuts, radio dots and checkmarks for state, and scrolling when a menu is taller than the window. Not yet: icons for about 45 rows, access keys (Alt navigation), checkmarks in the native macOS menu |
 | Tool Bar, File tabs, Start tab, layout tabs | yes | yes |
 | Tool Sets palette (Drafting, Modeling, … with flyouts) | yes | yes for 2D groups |
 | Properties Inspector, Quick Properties | yes | yes (every control acts or is visibly unavailable, #182); block references show read-only Position X/Y/Z from their stored insertion point; coordinate editing is still missing |
@@ -202,6 +202,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | In-window menu bar redesigned (30 pt bar, dark rounded popups with icons, shortcuts, separators, radio dots and checkmarks); menus grouped by a layout table that the native macOS menu shares; the right-click menus use the same rows; clicking a disabled row no longer closes a menu |
 | 2026-10-13 | minor | About window redesigned: compact and fixed at 400 pt, app icon, version with build id, architecture, licence and project links; the Contributors and Models tabs are no longer shown there |
 | 2026-10-12 | minor | Block references now show their stored insertion X/Y/Z in the Properties Inspector, including nonzero Z; fields are read-only |
 | 2026-10-11 | minor | Isometric drafting (#556): isometric snap and grid, ISODRAFT, ISOPLANE (F5), ortho along isoplane axes, ELLIPSE Isocircle |

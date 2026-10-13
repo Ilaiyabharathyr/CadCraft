@@ -30,6 +30,7 @@ pub mod i18n;
 pub mod icons;
 pub mod layers;
 pub mod managers;
+pub mod menu_layout;
 pub mod menus;
 pub mod options;
 pub mod palettes;
@@ -203,6 +204,8 @@ pub struct CadApp {
     shown_follows_system: bool,
     pub frame_ms: f64,
     pub quit_requested: bool,
+    /// A web page to open in the browser on the next frame (Help ▸ Join the ArtCraft Discord).
+    pub open_url: Option<String>,
     /// The app may close although drawings have unsaved changes (they were dealt with, or the
     /// quit came from the control channel, which never asks).
     pub quit_confirmed: bool,
@@ -243,6 +246,7 @@ impl CadApp {
             shown_follows_system: false,
             frame_ms: 0.0,
             quit_requested: false,
+            open_url: None,
             quit_confirmed: false,
             closing: None,
             autosave: None,
@@ -410,6 +414,9 @@ impl CadApp {
 
     /// Per-frame logic before layout.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if let Some(url) = self.open_url.take() {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
         // Closing the window (title bar, File ▸ Exit, Cmd+Q) with unsaved changes asks first.
         if ctx.input(|i| i.viewport().close_requested()) && self.request_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

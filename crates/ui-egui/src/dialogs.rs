@@ -382,7 +382,7 @@ fn about_details(ui: &mut egui::Ui, t: &Tokens) {
         ui.spacing_mut().item_spacing.x = 16.0;
         for (label, url) in [
             (crate::tl!("Website"), "https://getartcraft.com/apps/cadcraft"),
-            (crate::tl!("Discord"), "https://discord.gg/artcraft"),
+            (crate::tl!("Discord"), crate::menus::DISCORD_URL),
             (crate::tl!("GitHub"), "https://github.com/storytold/cadcraft"),
         ] {
             ui.hyperlink_to(RichText::new(label).size(12.0).color(ui.visuals().hyperlink_color), url);
@@ -420,7 +420,7 @@ fn centered_row(ui: &mut egui::Ui, salt: &str, add: impl FnOnce(&mut egui::Ui)) 
 
 /// The app icon as a texture, decoded once and kept in egui's temporary data. `None` (no icon
 /// drawn) when the embedded PNG cannot be decoded.
-fn about_icon(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+pub(crate) fn about_icon(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     let id = egui::Id::new("about_icon_tex");
     if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return Some(t);

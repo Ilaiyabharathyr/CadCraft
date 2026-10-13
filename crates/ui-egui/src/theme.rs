@@ -118,6 +118,10 @@ pub struct Tokens {
     /// The command-line AutoComplete list: background and the highlighted first row.
     pub list_bg: Color32,
     pub list_row: Color32,
+    /// Menu popups.
+    pub menu_bg: Color32,
+    /// Text and icons on an `accent` or `tab_active` fill (the highlighted menu row).
+    pub on_accent: Color32,
     /// Transient warnings (status bar messages).
     pub warn: Color32,
     /// The drawing-area crosshair cursor and its pick box.
@@ -170,6 +174,8 @@ impl Tokens {
         cmd_keyword_hover: Color32::from_rgb(0x2f, 0x5e, 0xa8),
         list_bg: Color32::from_rgb(0x2b, 0x31, 0x3b),
         list_row: Color32::from_rgb(0x3a, 0x42, 0x50),
+        menu_bg: Color32::from_rgb(0x1f, 0x24, 0x2b),
+        on_accent: Color32::WHITE,
         warn: Color32::from_rgb(0xff, 0xd0, 0x80),
         crosshair: Color32::from_rgb(0xe8, 0xe8, 0xe8),
         paper: Color32::WHITE,
@@ -202,6 +208,7 @@ impl Tokens {
         cmd_keyword_hover: Color32::from_rgb(0xcf, 0xe0, 0xfa),
         list_bg: Color32::from_rgb(0xfb, 0xfc, 0xfd),
         list_row: Color32::from_rgb(0xe3, 0xe8, 0xef),
+        menu_bg: Color32::from_rgb(0xff, 0xff, 0xff),
         warn: Color32::from_rgb(0x8a, 0x53, 0x00),
         ..Tokens::DARK
     };
@@ -289,6 +296,12 @@ pub fn luminance(c: Color32) -> f32 {
 fn mix(a: Color32, b: Color32, f: f32) -> Color32 {
     let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * f).round().clamp(0.0, 255.0) as u8;
     Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+}
+
+/// The shadow under a menu popup.
+pub fn menu_shadow() -> egui::Shadow {
+    let alpha = if active() == Theme::Dark { 140 } else { 46 };
+    egui::Shadow { offset: [0, 14], blur: 32, spread: 0, color: Color32::from_black_alpha(alpha) }
 }
 
 pub fn small() -> FontId {
