@@ -321,6 +321,7 @@
 	Equal	Рівність
 	Erase	Стерти
 	Evaluate	Обчислити
+	Evaluate LISP	Обчислити LISP
 	Exclude from new selection set	Виключити з нового набору вибраних об'єктів
 	Explode	Розчленувати
 	Export	Експортувати
@@ -405,6 +406,10 @@
 	How to apply:	Спосіб застосування:
 	ID Point	Координати точки
 	Import	Імпортувати
+	Align Multileaders	Вирівняти мультивиноски
+	Collect	Зібрати
+	Collect Multileaders	Зібрати мультивиноски
+	Edit Multileader	Редагувати мультивиноску
 	In	Наблизити
 	In-window Menu Bar	Рядок меню у вікні
 	Include in new selection set	Включити до нового набору вибраних об'єктів
@@ -496,6 +501,7 @@
 	List Text Styles	Список текстових стилів
 	Load all	Завантажити всі
 	Load...	Завантажити...
+	Load Application...	Завантажити застосунок...
 	Loaded linetypes	Завантажені типи ліній
 	Lock	Заблокувати
 	Lock Layer	Заблокувати шар
@@ -587,6 +593,8 @@
 	Open sample drawing	Відкрити зразок креслення
 	Open Xref	Відкрити зовнішнє посилання
 	Open...	Відкрити...
+	Open Recent	Відкрити нещодавні
+	Clear Recent Files	Очистити список нещодавніх файлів
 	Operator:	Оператор:
 	Orbit	Орбіта
 	Ordinate	Ординатний
@@ -813,6 +821,11 @@
 	Select objects to array.	Виберіть об'єкти для масиву.
 	Select objects to stretch by crossing-window or crossing-polygon...	Виберіть об'єкти для розтягування січною рамкою або січним багатокутником...
 	Select objects:	Виберіть об'єкти:
+	Add to Working Set	Додати до робочого набору
+	Edit Reference In-Place	Редагувати посилання на місці
+	Save Reference Edits	Зберегти зміни посилання
+	Working Set	Робочий набір
+	Xref and Block In-place Editing	Редагування xref і блоків на місці
 	Select one polyline (Multiple is available through the JSON form).	Виберіть одну полілінію (Multiple доступно через JSON).
 	Select path curve	Виберіть криву траєкторії
 	Select point or object	Виберіть точку або об'єкт
@@ -1179,6 +1192,8 @@
 	Hide Others	Приховати інші
 	Accessibility	Спеціальні можливості
 	Show System Cursor	Показувати системний курсор
+	Animation Effects	Ефекти анімації
+	Animation effects	Ефекти анімації
 	Import...	Імпорт...
 	Export...	Експорт...
 	Batch Publish...	Пакетна публікація...
@@ -1233,3 +1248,43 @@
 	Hatch Pattern	Зразок штрихування
 	Search for pattern	Пошук зразка
 	Run Script...	Виконати сценарій...
+	Query Texts	Запит текстів
+	Hatch Pick	Вибір для штрихування
+# Hatch and Gradient dialog
+	Hatch and Gradient	Штрихування та градієнт
+	Color 1	Колір 1
+	Color 2	Колір 2
+	Shape	Форма
+	Curved	Вигнутий
+	Spherical	Сферичний
+	Hemispherical	Напівсферичний
+	Inverted	Інвертований
+	Centered	По центру
+	Hatch origin	Початок штрихування
+	Use current origin	Використати поточний початок
+	Specified origin	Заданий початок
+	Click to set new origin	Клацніть, щоб задати новий початок
+	Default to boundary extents	Типово за габаритами контуру
+	Bottom left	Унизу ліворуч
+	Bottom right	Унизу праворуч
+	Top left	Угорі ліворуч
+	Top right	Угорі праворуч
+	Boundaries	Контури
+	Add: Pick points	Додати: вказати точки
+	Add: Select objects	Додати: вибрати об'єкти
+	Boundaries picked: {n}	Вибрано контурів: {n}
+	Associative	Асоціативне
+	Create separate hatches	Створити окремі штрихування
+	Island detection	Виявлення островів
+	Normal	Звичайне
+	Outer	Зовнішнє
+	Ignore	Ігнорувати
+	Origin: {x}, {y}	Початок: {x}, {y}
+	Sheet Books to PDF...	Книги аркушів у PDF...
+	Not a number or distance: {text}	Не число й не відстань: {text}
+	Dynamic Block Data	Дані динамічного блока
+	Custom	Користувацькі
+	Dynamic Block Reference	Посилання на динамічний блок
+	Set Dynamic Property	Задати динамічну властивість
+	Dynamic Block Grips	Ручки динамічного блока
+	Drag Dynamic Grip	Перетягнути ручку динамічного блока
