@@ -19,7 +19,8 @@ const STENCIL: wgpu::TextureFormat = wgpu::TextureFormat::Stencil8;
 fn tris(pts: Vec<Vec2>) -> DisplayList {
     let len = pts.len() as u32;
     let bounds = Bounds2::from_points(pts.iter().copied());
-    let prim = DPrim { handle: Handle(1), color: cadcraft_color::Rgb(0, 0, 0), aci7: false, lw: 0.0, kind: Kind::Tris, start: 0, len };
+    let prim =
+        DPrim { handle: Handle(1), color: cadcraft_color::Rgb(0, 0, 0), aci7: false, lw: 0.0, transparency: 0, kind: Kind::Tris, start: 0, len };
     DisplayList { prims: vec![prim], tris: pts, bounds, ..Default::default() }
 }
 
@@ -146,13 +147,22 @@ fn clipped_viewport_contents_draw_only_inside_their_outline() {
     // The selection highlight inside a clipped viewport stays inside its outline too: a wide
     // line across the whole target at world y 32, masked by the circle.
     let line = DisplayList {
-        prims: vec![DPrim { handle: Handle(1), color: cadcraft_color::Rgb(0, 0, 0), aci7: false, lw: 0.0, kind: Kind::Polyline, start: 0, len: 2 }],
+        prims: vec![DPrim {
+            handle: Handle(1),
+            color: cadcraft_color::Rgb(0, 0, 0),
+            aci7: false,
+            lw: 0.0,
+            transparency: 0,
+            kind: Kind::Polyline,
+            start: 0,
+            len: 2,
+        }],
         verts: vec![Vec2::new(0.0, 32.0), Vec2::new(64.0, 32.0)],
         bounds: Bounds2::new(Vec2::new(0.0, 32.0), Vec2::new(64.0, 32.0)),
         ..Default::default()
     };
     let slot: MeshSlot = Arc::default();
-    *slot.lock().unwrap() = Some(gpu::build_highlight_mesh(&line, &[0], Vec2::ZERO, [0, 0, 0, 255], 3.0));
+    *slot.lock().unwrap() = Some(gpu::build_highlight_mesh(&line, &[0], Vec2::ZERO, [0, 0, 0, 255], 3.0, false));
     let highlight = CanvasCallback { slot, layer: LAYER_HIGHLIGHT, ..callback(&line, LAYER_HIGHLIGHT, 6, Stencil::Inside) };
     let px = render(&rs, &[callback(&fan(&circle), LAYER_MASK, 1, Stencil::Mask), highlight]);
     assert!(dark(&px, 32, 32) && dark(&px, 20, 32) && dark(&px, 44, 32), "inside the circle");

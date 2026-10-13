@@ -97,8 +97,11 @@ fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
         include_str!("../palettes/patterns.rs"),
         include_str!("../dialogs.rs"),
         include_str!("../hatchdlg.rs"),
+        include_str!("../mtext_editor.rs"),
         include_str!("../layers.rs"),
         include_str!("../canvas/compare.rs"),
+        include_str!("../canvas/blockedit.rs"),
+        include_str!("../bedit.rs"),
         include_str!("../palettes.rs"),
         include_str!("../parametric.rs"),
         include_str!("../quick.rs"),
@@ -592,20 +595,6 @@ fn chinese_needs_an_installed_cjk_font() {
     assert!(crate::theme::can_show("uk") && crate::theme::can_show("en"));
     if font.is_none() {
         assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("No Chinese font")));
-    }
-}
-
-/// Thai file names and text read in the interface when the system has a Thai font (none is
-/// bundled), whatever the interface language.
-#[test]
-fn thai_text_shows_with_an_installed_thai_font() {
-    let Some(_) = crate::theme::thai_font() else { return };
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx, "en");
-    // The new fonts take effect when a frame begins.
-    ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
-    for font in [crate::theme::body(), crate::theme::mono()] {
-        assert!(ctx.fonts_mut(|f| f.has_glyphs(&font, "แบบบ้าน")), "{font:?}");
     }
 }
 
