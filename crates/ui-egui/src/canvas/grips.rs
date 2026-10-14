@@ -132,6 +132,9 @@ mod tests {
         let ctx = egui::Context::default();
         for dpi in [0.75, 1.0, 2.0, 3.0] {
             ctx.set_pixels_per_point(dpi);
+            // egui applies a DPI change at the next pass, not when it is requested.
+            ctx.begin_pass(Default::default());
+            assert_eq!(ctx.pixels_per_point(), dpi);
             for hot in [vec![], vec![(h, 0)], vec![(h, 2), (h, 4)]] {
                 let hover = xf().to_screen(Vec2::new(1.0, 0.0));
                 let actual = cache.mesh(&d, 1, 1, &[h], xf(), 5.0, &ctx, &hot, Some(hover)).unwrap();
@@ -156,6 +159,7 @@ mod tests {
                 assert_eq!(*actual, expected, "dpi {dpi}, hot {hot:?}");
                 assert_eq!(cache.marks.iter().map(|m| m.grip).collect::<Vec<_>>(), (0..5).map(|i| (h, i)).collect::<Vec<_>>());
             }
+            ctx.end_pass().textures_delta.clear();
         }
     }
 

@@ -74,8 +74,8 @@ optimized development build, before/after the borrowing change):
 
 | DWG import | Before | After |
 |---|---:|---:|
-| Peak resident memory (decimal GB) | 2.40 | 1.42 |
-| Wall time (seconds) | 2.69 | 2.49 |
+| Peak resident memory (decimal GB) | 2.40 | 1.43 |
+| Wall time (seconds) | 2.69 | 2.43 |
 
 Every imported summary matched exactly (entity types/counts, extents, blocks and layouts).
 These are local measurements on one drawing, not a bound for every file; the DWG dependency
@@ -102,7 +102,7 @@ claim unlimited selection sizes or universal crash freedom.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | minor | Bounded grip meshes and one rectangle per marker; twelve-contour local UI CPU median 17.84 → 7.70 ms, unchanged grip indices and four-DPI colour regressions |
-| 2026-10-14 | minor | Borrowed DXF sections/records; local 40.9 MB DWG peak RSS median 2.40 → 1.42 GB, preserving imported summaries |
+| 2026-10-14 | minor | Borrowed DXF sections/records; local 40.9 MB DWG peak RSS median 2.40 → 1.43 GB, preserving imported summaries |
 | 2026-10-14 | minor | Dense contour grips generated once per call, preserving editing indices; selected-contour UI CPU median 705.24 → 1.80 ms in a local 40.9 MB DWG; synthetic regressions and CLI grip timing |
 | 2026-10-13 | minor | Zoom and pan regenerate in the background: 2–4.5 s stalls down to 26–64 ms on a hatched DWG |
 | 2026-10-10 | major | First hardware parity doc: GPU backends per platform, input devices, displays, plotters |
