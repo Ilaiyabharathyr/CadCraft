@@ -191,6 +191,13 @@ fn hatch_reactors(d: &Drawing) -> HashMap<Handle, Vec<String>> {
     out
 }
 
+/// The jog angle (degrees) a style gets as AutoCAD's own xdata ([`dxf_ext::JOG_APP`]) in a file
+/// of `version`: R2000 DIMSTYLE records have no group for it. Like the style's `DIMVARS`, only a
+/// jog angle other than the default is written.
+fn jog_xdata(s: &DimStyle, version: Version) -> Option<f64> {
+    (version < dxf_ext::NEWER_SINCE && s.jog_angle.is_finite() && s.jog_angle != DimStyle::default().jog_angle).then_some(s.jog_angle)
+}
+
 /// `AcadAnnotative` xdata marking an annotative style.
 fn annotative_xdata(w: &mut W) {
     w.s(1001, "AcadAnnotative");
@@ -2029,7 +2036,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.f(146, 0.0);
     }
     w.s(0, "ENDTAB");
-    let apps = ["ACAD", dxf_ext::APP, "AcadAnnotative", dxf_ext::LAYER_TRANSPARENCY_APP, dxf_ext::LAYER_DESCRIPTION_APP];
+    let mut apps = vec!["ACAD", dxf_ext::APP, "AcadAnnotative", dxf_ext::LAYER_TRANSPARENCY_APP, dxf_ext::LAYER_DESCRIPTION_APP];
+    if d.dim_styles.iter().any(|s| jog_xdata(s, version).is_some()) {
+        apps.push(dxf_ext::JOG_APP);
+    }
     let th = table_head(&mut w, "APPID", apps.len());
     for app in apps {
         record_head(&mut w, "APPID", &th, "AcDbRegAppTableRecord");
@@ -2076,6 +2086,11 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         }
         if s.annotative {
             annotative_xdata(&mut w);
+        }
+        if let Some(jog) = jog_xdata(s, version) {
+            w.s(1001, dxf_ext::JOG_APP);
+            w.i(1070, dxf_ext::JOG_MARKER);
+            w.f(1040, jog.to_radians());
         }
         if !newer.t.is_empty() {
             w.s(1001, dxf_ext::APP);

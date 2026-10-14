@@ -118,10 +118,12 @@ fn header_jog_angle_is_read_in_degrees_and_hostile_values_are_dropped() {
     let back = read_dxf(text.as_bytes()).unwrap();
     assert!((back.header.f64("DIMJOGANG", 0.0) - 45.0).abs() < 1e-9);
     assert!(back.dim_overrides().is_empty(), "{:?}", back.dim_overrides());
-    // Unknown handles and out-of-range values in the style's groups and xdata keep the defaults.
+    // Unknown handles and out-of-range values in the style's groups and xdata keep the defaults
+    // (the jog angle is in both AutoCAD's xdata and CADCraft's).
     let text = write_dxf(&d);
     let jog = format!("{}", 30f64.to_radians());
-    let bad = text.replacen("1070\r\n345\r\n1005\r\n", "1070\r\n345\r\n1005\r\nFFFFF\r\n1000\r\n", 1).replacen(&jog, "1e300", 1).replacen(
+    assert_eq!(text.matches(&jog).count(), 2);
+    let bad = text.replacen("1070\r\n345\r\n1005\r\n", "1070\r\n345\r\n1005\r\nFFFFF\r\n1000\r\n", 1).replace(&jog, "1e300").replacen(
         "\r\n289\r\n1\r\n",
         "\r\n289\r\n99\r\n",
         1,
@@ -137,12 +139,33 @@ fn dxf(d: &Drawing, v: Version) -> String {
     String::from_utf8(cadcraft_io::write_with(d, "x.dxf", &SaveOptions { version: Some(v), binary: false }).unwrap()).unwrap()
 }
 
-/// The line holding the value of group `code` in the DIMSTYLE record `name`.
-fn style_group(lines: &[&str], name: &str, code: &str) -> Option<usize> {
+/// The lines of the DIMSTYLE record `name`, from its name to the next record.
+fn style_record(lines: &[&str], name: &str) -> Option<std::ops::Range<usize>> {
     let pair = |i: usize, c: &str, v: &str| lines.get(i).is_some_and(|l| l.trim() == c) && lines.get(i + 1).is_some_and(|l| l.trim() == v);
     let table = (0..lines.len()).step_by(2).find(|&i| pair(i, "2", "DIMSTYLE"))?;
     let rec = (table..lines.len()).step_by(2).find(|&i| pair(i, "2", name))?;
-    (rec..lines.len()).step_by(2).take_while(|&i| lines[i].trim() != "0").find(|&i| lines[i].trim() == code).map(|i| i + 1)
+    let end = (rec..lines.len()).step_by(2).find(|&i| lines[i].trim() == "0")?;
+    Some(rec..end)
+}
+
+/// The line holding the value of group `code` in the DIMSTYLE record `name`.
+fn style_group(lines: &[&str], name: &str, code: &str) -> Option<usize> {
+    style_record(lines, name)?.step_by(2).find(|&i| lines[i].trim() == code).map(|i| i + 1)
+}
+
+/// The DIMSTYLE record `name` of `text`, trimmed lines.
+fn record_of<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
+    let lines: Vec<&str> = text.lines().collect();
+    let r = style_record(&lines, name).unwrap();
+    lines[r].iter().map(|l| l.trim()).collect()
+}
+
+/// `text` with `groups` (code, value, …) added at the end of the DIMSTYLE record `name`.
+fn with_style_xdata(text: &str, name: &str, groups: &[&str]) -> String {
+    let mut lines: Vec<&str> = text.lines().collect();
+    let end = style_record(&lines, name).unwrap().end;
+    lines.splice(end..end, groups.iter().copied());
+    lines.join("\r\n")
 }
 
 /// `text` with the value of group `code` in the DIMSTYLE record `name` replaced by `value`.
@@ -242,4 +265,106 @@ fn dwg_jog_angle_reads_in_degrees() {
     assert!((jog - 30.0).abs() < 1e-9, "the bridge's DXF has degrees: {jog}");
     let back = cadcraft_io::read(&dwg, "x.dwg").unwrap();
     assert_eq!(back.dim_style("Detail").unwrap().jog_angle, 30.0);
+}
+
+/// AutoCAD's own xdata for an R2000 style's jog angle, as AutoCAD LT 2026 saves R2000.
+const JOG_APP: &str = "ACAD_DSTYLE_DIMJOGGED_JOGANGLE_SYMBOL";
+
+/// That xdata holding `rad`, with the `1070` marker `marker`.
+fn autocad_jog<'a>(marker: &'a str, rad: &'a str) -> [&'a str; 6] {
+    ["1001", JOG_APP, "1070", marker, "1040", rad]
+}
+
+/// Number of `code`/`value` pairs in DXF text.
+fn pairs(text: &str, code: &str, value: &str) -> usize {
+    text.lines().map(str::trim).collect::<Vec<_>>().chunks(2).filter(|p| *p == [code, value]).count()
+}
+
+fn jog_of(text: &str, style: &str) -> f64 {
+    read_dxf(text.as_bytes()).unwrap().dim_style(style).unwrap().jog_angle
+}
+
+#[test]
+fn r2000_jog_angle_also_goes_in_autocad_xdata() {
+    // R2000 DIMSTYLE records have no group 50, so a jog angle other than the default also goes
+    // in AutoCAD's own xdata (CADCraft's DIMVARS xdata is for CADCraft only), with its APPID.
+    let text = write_dxf(&drawing());
+    let rad30 = 30f64.to_radians().to_string();
+    let rec = record_of(&text, "Detail");
+    assert!(rec.windows(6).any(|w| w == autocad_jog("384", &rad30)), "{rec:?}");
+    assert!(!record_of(&text, "Standard").contains(&JOG_APP), "the default isn't written");
+    assert_eq!((pairs(&text, "2", JOG_APP), pairs(&text, "1001", JOG_APP)), (1, 1), "one APPID, one record");
+    assert_eq!(read_dxf(text.as_bytes()).unwrap().dim_style("Detail").unwrap(), &styled());
+    // 2004 and later have group 50 instead; drawings with default jog angles are unchanged.
+    assert!(!dxf(&drawing(), Version::R2018).contains(JOG_APP));
+    assert!(!write_dxf(&Drawing::new_imperial()).contains(JOG_APP));
+}
+
+#[test]
+fn autocad_r2000_jog_xdata_reads() {
+    // A style AutoCAD saved as R2000 with a 60° jog angle; CADCraft's own xdata has no jog angle.
+    let plain = write_dxf(&{
+        let mut d = drawing();
+        d.dim_styles.iter_mut().for_each(|s| s.jog_angle = 45.0);
+        d
+    });
+    assert!(!plain.contains(JOG_APP));
+    let rad60 = 60f64.to_radians().to_string();
+    assert_eq!(jog_of(&with_style_xdata(&plain, "Detail", &autocad_jog("   384", &rad60)), "Detail"), 60.0);
+    // Another marker, no angle a style takes (AutoCAD kept CADCraft 0.6.2's 0.785° as 0.0137 rad),
+    // NaN or a real of another kind: ignored.
+    for bad in [autocad_jog("383", &rad60), autocad_jog("384", "0.0137077838904019"), autocad_jog("384", "NaN")] {
+        assert_eq!(jog_of(&with_style_xdata(&plain, "Detail", &bad), "Detail"), 45.0, "{bad:?}");
+    }
+    let other_real = ["1001", JOG_APP, "1070", "384", "1041", rad60.as_str()];
+    assert_eq!(jog_of(&with_style_xdata(&plain, "Detail", &other_real), "Detail"), 45.0);
+    // AutoCAD updates its own xdata and leaves CADCraft's as it was: a 60° jog set in AutoCAD wins
+    // over the 30° CADCraft wrote in DIMVARS.
+    let ours = write_dxf(&drawing());
+    let mut lines: Vec<&str> = ours.lines().collect();
+    let r = style_record(&lines, "Detail").unwrap();
+    let at = r.step_by(2).find(|&i| lines[i].trim() == "1001" && lines[i + 1].trim() == JOG_APP).unwrap() + 5;
+    assert_eq!(lines[at].trim(), 30f64.to_radians().to_string());
+    lines[at] = &rad60;
+    assert_eq!(jog_of(&lines.join("\r\n"), "Detail"), 60.0);
+}
+
+#[test]
+fn dimstyle_groups_win_over_stale_dimvars() {
+    // A CADCraft R2000 file saved again by another program as 2018: its groups are current, the
+    // DIMVARS xdata it kept may not be.
+    let text = dxf(&drawing(), Version::R2018);
+    let stale = ["1001", "CADCRAFT", "1000", "DIMVARS", "1002", "{", "1070", "50", "1040", "1.0471975511965976", "1002", "}"];
+    assert_eq!(jog_of(&with_style_xdata(&text, "Detail", &stale), "Detail"), 30.0);
+}
+
+#[test]
+fn autocad_jog_xdata_is_written_once_and_current() {
+    // Read from a file with AutoCAD's xdata (and its APPID), the angle is the style's: saving
+    // writes the style's current angle once, not the copy read from the file as well.
+    let plain = write_dxf(&{
+        let mut d = drawing();
+        d.dim_styles.iter_mut().for_each(|s| s.jog_angle = 45.0);
+        d
+    });
+    let rad60 = 60f64.to_radians().to_string();
+    let with = with_style_xdata(&plain, "Detail", &autocad_jog("384", &rad60));
+    let appid =
+        ["  0", "APPID", "  5", "FFF0", "330", "0", "100", "AcDbSymbolTableRecord", "100", "AcDbRegAppTableRecord", "  2", JOG_APP, " 70", "     0"];
+    let mut lines: Vec<&str> = with.lines().collect();
+    let table = lines.windows(4).position(|w| w[0].trim() == "0" && w[1] == "TABLE" && w[2].trim() == "2" && w[3] == "APPID").unwrap();
+    let endtab = table + lines[table..].iter().position(|l| *l == "ENDTAB").unwrap() - 1;
+    lines.splice(endtab..endtab, appid);
+    let mut d = read_dxf(lines.join("\r\n").as_bytes()).unwrap();
+    assert_eq!(d.dim_style("Detail").unwrap().jog_angle, 60.0);
+    let again = write_dxf(&d);
+    assert_eq!((pairs(&again, "2", JOG_APP), pairs(&again, "1001", JOG_APP)), (1, 1));
+    assert!(record_of(&again, "Detail").windows(6).any(|w| w == autocad_jog("384", &rad60)));
+    d.dim_styles.iter_mut().filter(|s| s.name == "Detail").for_each(|s| s.jog_angle = 30.0);
+    let edited = write_dxf(&d);
+    assert!(record_of(&edited, "Detail").windows(6).any(|w| w == autocad_jog("384", &30f64.to_radians().to_string())));
+    assert_eq!(pairs(&edited, "1001", JOG_APP), 1);
+    let newer = dxf(&d, Version::R2018);
+    assert!(!newer.contains(JOG_APP), "2018 has group 50 instead");
+    assert_eq!(jog_of(&newer, "Detail"), 30.0);
 }

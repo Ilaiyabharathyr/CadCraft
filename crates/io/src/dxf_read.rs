@@ -1565,7 +1565,15 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                         fields.insert(field.to_string(), v);
                     }
                 }
-                fields.extend(crate::dxf_ext::read_newer_dimvars(&tg, &rx.styles, &rx.brs, &rx.ltypes));
+                // Then what the groups leave out (R2000 has no groups for the newer variables):
+                // AutoCAD's jog angle xdata first, since AutoCAD keeps its own xdata current but
+                // leaves CADCraft's as it was, then CADCraft's.
+                if let Some(jog) = crate::dxf_ext::read_jog_xdata(&tg) {
+                    fields.entry("jogAngle").or_insert(serde_json::json!(jog));
+                }
+                for (k, v) in crate::dxf_ext::read_newer_dimvars(&tg, &rx.styles, &rx.brs, &rx.ltypes) {
+                    fields.entry(k).or_insert(v);
+                }
                 let mut st = DimStyle { name: name.clone(), annotative: annotative(&tg), ..DimStyle::default() };
                 st.apply_fields(&fields);
                 match d.dim_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&name)) {

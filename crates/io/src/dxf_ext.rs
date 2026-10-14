@@ -152,6 +152,20 @@ pub(crate) const NEWER_CODES: &[i32] = &[49, 50, 90, 290, 345, 346, 347];
 pub(crate) const NEWER_SINCE: Version = Version::R2004;
 /// Xdata list name of [`NEWER_CODES`] values.
 pub(crate) const DIMVARS_LIST: &str = "DIMVARS";
+/// The application of AutoCAD's own xdata for a style's jog angle in files whose DIMSTYLE records
+/// have no group 50: `1070` [`JOG_MARKER`], then `1040` with the angle in radians, as AutoCAD LT
+/// 2026 writes it when it saves R2000.
+pub(crate) const JOG_APP: &str = "ACAD_DSTYLE_DIMJOGGED_JOGANGLE_SYMBOL";
+/// The `1070` value before the angle in [`JOG_APP`] xdata.
+pub(crate) const JOG_MARKER: i64 = 384;
+
+/// The jog angle (degrees) in a style's [`JOG_APP`] xdata; `None` without one a style takes.
+pub(crate) fn read_jog_xdata(tags: &[Tag]) -> Option<f64> {
+    xdata(tags, JOG_APP).windows(2).find_map(|w| match w {
+        [m, v] if m.code == 1070 && m.i64() == JOG_MARKER && v.code == 1040 => jog_degrees(v.f64()),
+        _ => None,
+    })
+}
 
 pub(crate) fn dim_code(field: &str) -> Option<(i32, K)> {
     DIM_CODES.iter().find(|(f, _, _)| *f == field).map(|(_, c, k)| (*c, *k))
