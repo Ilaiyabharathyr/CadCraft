@@ -1,6 +1,6 @@
 //! FILLET and CHAMFER with polyline segments (#466): two straight segments of one polyline
 //! (adjacent, or with one segment between them, which the corner replaces), or a straight end
-//! segment of an open polyline with a line or another open polyline's end segment, which joins
+//! segment of an open polyline with a line or with another open polyline's segment, which joins
 //! the polyline.
 
 use cadcraft_doc::{EntityKind, Handle, LwPolyline};
@@ -160,14 +160,13 @@ fn line_run(ln: Line, pick: Vec2, x: Vec2) -> Run {
     Run { vs: vec![PolyVertex::new(keep)], reversed: false }
 }
 
-/// The picked straight end segment of an open polyline, as a line.
-fn end_segment(pl: &LwPolyline, pick: Vec2) -> Result<(usize, Line)> {
-    let segs = Polyline { vertices: pl.vertices.clone(), closed: pl.closed }.segments();
-    let k = picked_segment(&segs, pick).ok_or_else(|| other("Select a polyline segment."))?;
-    let last = segs.len().checked_sub(1).ok_or_else(|| other("Select a polyline segment."))?;
-    if pl.closed || (k != 0 && k != last) {
-        return Err(other("A line or another polyline fillets or chamfers with an end segment of an open polyline."));
+/// The picked straight segment of an open polyline, as a line.
+fn picked_line(pl: &LwPolyline, pick: Vec2) -> Result<(usize, Line)> {
+    if pl.closed {
+        return Err(other("A line or another polyline fillets or chamfers with a segment of an open polyline."));
     }
+    let segs = Polyline { vertices: pl.vertices.clone(), closed: false }.segments();
+    let k = picked_segment(&segs, pick).ok_or_else(|| other("Select a polyline segment."))?;
     match segs.get(k) {
         Some(Segment::Line(l)) => Ok((k, *l)),
         _ => Err(other("Fillet and chamfer work on straight polyline segments.")),
@@ -175,8 +174,8 @@ fn end_segment(pl: &LwPolyline, pick: Vec2) -> Result<(usize, Line)> {
 }
 
 /// The run of a polyline kept on the picked side of the corner `x` on its segment `k`: what lies
-/// beyond the corner on the other side goes, as in AutoCAD (a line crossing the end segment
-/// keeps the picked part of it and drops the rest of the polyline past the crossing).
+/// beyond the corner on the other side goes, as in AutoCAD (an object crossing a segment keeps
+/// the picked part of it and drops the rest of the polyline past the crossing).
 fn pline_run(pl: &LwPolyline, k: usize, seg: Line, pick: Vec2, x: Vec2) -> Run {
     let toward_start = (seg.a - x).dot(pick - x) >= (seg.b - x).dot(pick - x);
     if toward_start {
@@ -187,7 +186,7 @@ fn pline_run(pl: &LwPolyline, k: usize, seg: Line, pick: Vec2, x: Vec2) -> Run {
     }
 }
 
-/// An open polyline's straight end segment with a line or another open polyline's: the corner
+/// A straight segment of an open polyline with a line or another open polyline's: the corner
 /// is cut and the other object joins the polyline (`hp`), which keeps its handle and direction.
 #[allow(clippy::too_many_arguments)]
 fn polyline_and_other(
@@ -199,11 +198,11 @@ fn polyline_and_other(
     chamfer: Option<ChamferDistances>,
     trim: bool,
 ) -> Result<Option<Handle>> {
-    let (k, seg) = end_segment(pl, pp)?;
+    let (k, seg) = picked_line(pl, pp)?;
     let other_seg = match ko {
         EntityKind::Line(l) => (None, Line::new(l.a.xy(), l.b.xy())),
         EntityKind::LwPolyline(op) => {
-            let (ok, os) = end_segment(op, po)?;
+            let (ok, os) = picked_line(op, po)?;
             (Some((op, ok)), os)
         }
         _ => return Err(other("A polyline fillets or chamfers with a line, or with another segment of itself.")),

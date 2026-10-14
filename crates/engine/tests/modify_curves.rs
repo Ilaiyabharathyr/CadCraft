@@ -604,6 +604,26 @@ fn fillet_joins_two_polylines_at_their_end_segments() {
 }
 
 #[test]
+fn fillet_joins_a_polyline_end_segment_crossing_another_polylines_middle_segment() {
+    // As AutoCAD: each keeps its picked side of the crossing, the rest past it goes (here the
+    // stub below the crossing, and the middle segment's left part with the leg after it).
+    let mut s = Session::new();
+    let a = pline(&mut s, &[[0.0, -0.4], [0.0, 0.15], [1.4, 0.15], [1.4, 1.9], [1.2, 1.9]], false);
+    let b = pline(&mut s, &[[3.4, -0.5], [3.4, 0.0], [-0.7, 0.0], [-0.7, -3.0]], false);
+    s.execute("fillet", &json!({ "h1": a, "p1": [0, 0.1], "h2": b, "p2": [2, 0], "radius": 0 })).unwrap();
+    assert_eq!(
+        verts(&s, &a),
+        vec![(3.4, -0.5, 0.0), (3.4, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.15, 0.0), (1.4, 0.15, 0.0), (1.4, 1.9, 0.0), (1.2, 1.9, 0.0)]
+    );
+    assert_eq!(count(&s), 1);
+    // A closed polyline is still refused with a line.
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true);
+    let l = h(&s.execute("line", &json!({ "points": [[15, 5], [25, 5]] })).unwrap());
+    assert!(s.execute("fillet", &json!({ "h1": p, "p1": [10, 5], "h2": l, "p2": [20, 5], "radius": 0 })).is_err());
+}
+
+#[test]
 fn polyline_fillets_at_the_command_line_and_with_no_trim() {
     let mut s = Session::new();
     let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false);
@@ -628,7 +648,7 @@ fn polyline_fillet_refusals_leave_it_alone() {
     let c = h(&s.execute("circle", &json!({ "center": [30, 0], "radius": 1 })).unwrap());
     let l = h(&s.execute("line", &json!({ "points": [[20, -5], [20, 5]] })).unwrap());
     for q in [
-        // Segments too far apart, the same segment, a circle, a middle segment with a line, too big.
+        // Segments too far apart, the same segment, a circle, a segment parallel to a line, too big.
         json!({ "h1": p, "p1": [5, 0], "h2": p, "p2": [0, 15], "radius": 1 }),
         json!({ "h1": p, "p1": [5, 0], "h2": p, "p2": [6, 0], "radius": 1 }),
         json!({ "h1": p, "p1": [5, 0], "h2": c, "p2": [31, 0], "radius": 1 }),
