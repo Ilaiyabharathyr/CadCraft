@@ -10,6 +10,8 @@ Everything is a command, so the command line, the menus (**Tools ▸ Drawing His
 the CLI, the control channel and MCP all reach the same code. See
 [control-protocol.md](control-protocol.md) for the JSON forms.
 
+![CADCraft with the previous revision of the drawing laid under it in red: the wall outline and the two door openings of the older revision show in red while the current drawing is white, and the command line reads "[OMNI] OMNI_plan_20261014_073841: 4 object(s) on 1 layer(s) laid under the drawing in ACI 1" and "Compared with …walls-and-doors_plan.dxf: 3 only in this drawing, 1 only in the snapshot, 0 changed, 3 the same."](images/ui-drawing-history.png)
+
 ## Commands
 
 | Command | Aliases | What it does |
