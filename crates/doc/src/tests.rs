@@ -118,6 +118,7 @@ fn visible_attributes_of_a_missing_block_still_count() {
                 rows: 1,
                 col_spacing: 0.0,
                 row_spacing: 0.0,
+                clip: None,
             }),
         )
     };

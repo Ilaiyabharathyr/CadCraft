@@ -1574,41 +1574,41 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadcraft_doc::Insert, rg
     }
     let draw_attribs = |b: &mut Builder<'_>| {
         if b.opts.text {
-        // ATTMODE (ATTDISP): 0 shows no attributes, 1 the visible ones, 2 all of them.
-        let attmode = ctx.d.header.i64("ATTMODE", 1);
-        // The reference's transparency; each attribute draws with its own.
-        let reference = b.transparency;
-        for a in &ins.attribs {
-            if attmode == 0 || (a.invisible && attmode != 2) {
-                continue;
-            }
-            // A multiline attribute is drawn as its multiline text.
-            let multiline = a.multiline_text();
-            let sh = if multiline.is_none() { Some(place_text_entity(ctx.d, &a.text, &a.text.value).0) } else { None };
-            // Properties of the attribute's definition (as AutoCAD copies them to the attribute
-            // on insertion), except those set on the attribute itself: ByBlock = the reference's,
-            // layer 0 = the reference's layer.
-            let def = ctx.d.block(&ins.block).and_then(|blk| blk.entities.iter().find(|be| attdef_tag(be, &a.tag)));
-            let (ink, lw, shown, t) = match (def, a.props.is_empty()) {
-                (None, true) => (rgb, resolve(ctx, e, b.plotting).1, true, reference),
-                (def, _) => {
-                    let c = a.props.over(&def.map(|d| d.common.clone()).unwrap_or_else(by_block));
-                    let (ink, lw, _, _, shown, layer_t) = resolve_common(&sub_ctx(ctx, e, Mat3::IDENTITY), &c, b.plotting);
-                    let t = if b.opts.transparency { transparency(c.transparency, layer_t, reference) } else { 0 };
-                    (ink, lw, shown, t)
+            // ATTMODE (ATTDISP): 0 shows no attributes, 1 the visible ones, 2 all of them.
+            let attmode = ctx.d.header.i64("ATTMODE", 1);
+            // The reference's transparency; each attribute draws with its own.
+            let reference = b.transparency;
+            for a in &ins.attribs {
+                if attmode == 0 || (a.invisible && attmode != 2) {
+                    continue;
                 }
-            };
-            if shown {
-                b.transparency = t;
-                let lw = if b.opts.lineweights { lw } else { 0.0 };
-                match (&multiline, &sh) {
-                    (Some(m), _) => mtext(b, ctx, m, ink, lw),
-                    (None, Some(sh)) => b.shaped(ctx, ink, lw, sh),
-                    (None, None) => {}
+                // A multiline attribute is drawn as its multiline text.
+                let multiline = a.multiline_text();
+                let sh = if multiline.is_none() { Some(place_text_entity(ctx.d, &a.text, &a.text.value).0) } else { None };
+                // Properties of the attribute's definition (as AutoCAD copies them to the attribute
+                // on insertion), except those set on the attribute itself: ByBlock = the reference's,
+                // layer 0 = the reference's layer.
+                let def = ctx.d.block(&ins.block).and_then(|blk| blk.entities.iter().find(|be| attdef_tag(be, &a.tag)));
+                let (ink, lw, shown, t) = match (def, a.props.is_empty()) {
+                    (None, true) => (rgb, resolve(ctx, e, b.plotting).1, true, reference),
+                    (def, _) => {
+                        let c = a.props.over(&def.map(|d| d.common.clone()).unwrap_or_else(by_block));
+                        let (ink, lw, _, _, shown, layer_t) = resolve_common(&sub_ctx(ctx, e, Mat3::IDENTITY), &c, b.plotting);
+                        let t = if b.opts.transparency { transparency(c.transparency, layer_t, reference) } else { 0 };
+                        (ink, lw, shown, t)
+                    }
+                };
+                if shown {
+                    b.transparency = t;
+                    let lw = if b.opts.lineweights { lw } else { 0.0 };
+                    match (&multiline, &sh) {
+                        (Some(m), _) => mtext(b, ctx, m, ink, lw),
+                        (None, Some(sh)) => b.shaped(ctx, ink, lw, sh),
+                        (None, None) => {}
+                    }
                 }
             }
-        }
-        b.transparency = reference;
+            b.transparency = reference;
         }
     };
     let attr_clip = ctx

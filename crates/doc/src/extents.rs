@@ -138,7 +138,10 @@ fn bounds_in<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<
                     });
                 }
             }
-            if let Some(clip) = ins.clip.as_ref().filter(|c| c.enabled && !c.deleted && (2..=4096).contains(&c.points.len())) {
+            if let (Some(clip), Some(blk)) =
+                (ins.clip.as_ref().filter(|c| c.enabled && !c.deleted && (2..=4096).contains(&c.points.len())), d.block(&ins.block))
+            {
+                let m = ins.transform(blk.base.xy());
                 let polygon = clip.polygon();
                 if polygon.len() >= 3 && polygon.iter().all(|p| p.is_finite()) {
                     let mut cb = Bounds2::from_points(polygon.into_iter().map(|p| m.apply(p)));
