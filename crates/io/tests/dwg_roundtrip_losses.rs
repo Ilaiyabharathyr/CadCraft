@@ -139,3 +139,54 @@ fn viewport_ids_survive_dwg_and_the_paper_viewport_stays_implicit() {
     assert!(!text.contains("PAPERVIEW"));
     assert_eq!(viewport_ids(&cadcraft_io::read_dxf(text.as_bytes()).unwrap().layouts[0]), [1, 2]);
 }
+/// Foreign class versions are interpreted against the source DXF version before the
+/// bridge converts them to the requested DWG. A 2013 record labelled 2000 was shifted twice.
+#[test]
+fn dwg_bridge_decodes_foreign_render_settings_at_the_source_version() {
+    let source = concat!(
+        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n0\nENDSEC\n",
+        "0\nSECTION\n2\nCLASSES\n",
+        "0\nCLASS\n1\nMENTALRAYRENDERSETTINGS\n2\nAcDbMentalRayRenderSettings\n3\nSCENEOE\n90\n1024\n91\n1\n280\n0\n281\n0\n",
+        "0\nCLASS\n1\nRAPIDRTRENDERSETTINGS\n2\nAcDbRapidRTRenderSettings\n3\nObjectDBX Classes\n90\n1024\n91\n1\n280\n0\n281\n0\n0\nENDSEC\n",
+        "0\nSECTION\n2\nOBJECTS\n",
+        "0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n281\n1\n3\nSyntheticMental\n350\n300\n3\nSyntheticRapid\n350\n301\n",
+        "0\nMENTALRAYRENDERSETTINGS\n5\n300\n330\nC\n100\nAcDbRenderSettings\n90\n2\n1\nSynthetic\n",
+        "100\nAcDbMentalRayRenderSettings\n90\n2\n",
+        "0\nRAPIDRTRENDERSETTINGS\n5\n301\n330\nC\n100\nAcDbRenderSettings\n90\n2\n1\nSynthetic\n",
+        "100\nAcDbRapidRTRenderSettings\n90\n3\n",
+        "0\nENDSEC\n0\nEOF\n",
+    );
+    let doc = cadcraft_io::read_dxf(source.as_bytes()).unwrap();
+    for version in [cadcraft_io::Version::R2013, cadcraft_io::Version::R2018] {
+        let dwg = cadcraft_io::write_with(&doc, "settings.dwg", &cadcraft_io::SaveOptions { version: Some(version), binary: false }).unwrap();
+        let native = String::from_utf8(cadcraft_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap();
+        for (kind, expected) in
+            [("MENTALRAYRENDERSETTINGS", "2"), ("RAPIDRTRENDERSETTINGS", if version == cadcraft_io::Version::R2013 { "2" } else { "3" })]
+        {
+            let settings = records(&native, kind);
+            assert_eq!(settings.len(), 1, "{kind} at {version:?}");
+            assert_eq!(group(&settings[0], "90"), Some(expected), "{kind} at {version:?}");
+        }
+    }
+}
+
+#[test]
+fn saved_layout_points_to_its_overall_viewport_in_both_formats() {
+    for explicit in [false, true] {
+        let mut d = Drawing::new_metric();
+        let paper = Space::Paper(d.layouts[0].name.clone());
+        if explicit {
+            d.add(&paper, Common::default(), viewport(1)).unwrap();
+        }
+        d.add(&paper, Common::default(), viewport(2)).unwrap();
+        let dwg = cadcraft_io::write(&d, "sheet.dwg").unwrap();
+        let native = String::from_utf8(cadcraft_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap();
+        for text in [cadcraft_io::write_dxf(&d), native] {
+            let overall = records(&text, "VIEWPORT").into_iter().find(|r| group(r, "69") == Some("1")).unwrap();
+            let block = group(&overall, "330").unwrap();
+            let layout =
+                records(&text, "LAYOUT").into_iter().find(|r| r.iter().rev().find(|(c, _)| c == "330").is_some_and(|(_, h)| h == block)).unwrap();
+            assert_eq!(group(&layout, "331"), group(&overall, "5"));
+        }
+    }
+}

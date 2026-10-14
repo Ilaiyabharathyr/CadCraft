@@ -94,7 +94,7 @@ pub fn write_with(d: &Drawing, name: &str, opts: &SaveOptions) -> Result<Vec<u8>
                 cadcraft_dxf::write_ascii_as(&tags, version.utf8()).into_bytes()
             })
         }
-        // The DWG bridge reads our R2000 DXF and writes the DWG at the version asked for. Without
+        // The DWG bridge decodes the source version and writes the DWG at the version asked for. Without
         // one, at least 2004: R2000 DWG has no true colours, transparency, table styles or
         // gradients, so a drawing from an R2000 DXF doesn't lose them by default.
         "dwg" if !opts.binary => {

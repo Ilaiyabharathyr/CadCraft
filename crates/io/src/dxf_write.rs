@@ -12,6 +12,7 @@ use cadcraft_geom::{Bounds2, Vec2, Vec3};
 
 use crate::dxf_ext::{self, DimVal, K};
 
+#[derive(Default)]
 struct W {
     t: Vec<Tag>,
     next: u64,
@@ -22,6 +23,8 @@ struct W {
     /// Persistent reactors of boundary objects: each source object of an associative hatch →
     /// the hatches (groups `{ACAD_REACTORS 330 …}`), from [`hatch_reactors`].
     reactors: HashMap<Handle, Vec<String>>,
+    /// Paper-space block record → overall sheet viewport (LAYOUT group 331).
+    paper_viewports: HashMap<String, String>,
 }
 
 impl W {
@@ -201,7 +204,7 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADCRAFT` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+    let mut ov = W::default();
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -1048,6 +1051,9 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             hatch_xdata(w, h);
         }
         EntityKind::Viewport(v) => {
+            if v.id == 1 {
+                w.paper_viewports.insert(owner.into(), e.handle.hex());
+            }
             paper_view(w, d, e, owner, cx);
             w.s(0, "VIEWPORT");
             common(w, e, owner, paper, "AcDbViewport");
@@ -1469,6 +1475,7 @@ fn paper_view(w: &mut W, d: &Drawing, e: &Entity, owner: &str, cx: &Ctx) {
     let size = cadcraft_render::paper::sheet(d, &l.name).map(|s| s.size).unwrap_or(Vec2::new(12.0, 9.0));
     let center = size * 0.5;
     let h = w.h();
+    w.paper_viewports.insert(owner.into(), h.clone());
     w.s(0, "VIEWPORT");
     w.s(5, h);
     w.s(330, owner);
@@ -1559,10 +1566,11 @@ pub fn tags(d: &Drawing, version: Version) -> Vec<Tag> {
     tags_for(d, version, version)
 }
 
-/// The R2000 DXF the DWG bridge converts to a `dwg` version DWG: its entity types are the DWG
-/// version's (MULTILEADER from 2007).
+/// The DXF the DWG bridge converts to a `dwg` version DWG. Keep the source version so
+/// preserved foreign records are decoded with their original version-specific semantics;
+/// generated entity types still follow the requested DWG version (MULTILEADER from 2007).
 pub(crate) fn dwg_bridge(d: &Drawing, dwg: Version) -> String {
-    let mut tags = tags_for(d, Version::R2000, dwg);
+    let mut tags = tags_for(d, crate::save_version(d), dwg);
     bridge_markers(&mut tags);
     cadcraft_dxf::write_ascii(&tags)
 }
@@ -1586,13 +1594,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     let committed = d.committed();
     let d: &Drawing = &committed;
     // Structural handles start above every entity handle.
-    let mut w = W {
-        t: Vec::new(),
-        next: d.handseed.max(0x100).saturating_add(0x1000),
-        pstyles: HashMap::new(),
-        layers: HashMap::new(),
-        reactors: hatch_reactors(d),
-    };
+    let mut w = W { next: d.handseed.max(0x100).saturating_add(0x1000), reactors: hatch_reactors(d), ..W::default() };
     // Pre-allocate handles for block records.
     let mut paper_layouts: Vec<&Layout> = d.layouts.iter().collect();
     paper_layouts.sort_by_key(|l| l.tab_order);
@@ -2059,7 +2061,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
-        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+        let mut newer = W::default();
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             if !dxf_ext::NEWER_CODES.contains(code) {
@@ -2410,7 +2412,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
             w.f(c, v);
         }
         w.i(70, plot_flags);
-        w.i(72, 0);
+        // PageSetup dimensions and paper coordinates are millimetres.
+        w.i(72, 1);
         w.i(73, i64::from(page.landscape));
         w.i(74, plot_type);
         w.s(7, &page.plot_style_table);
@@ -2433,6 +2436,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.p(17, Vec3::new(0.0, 1.0, 0.0));
         w.i(76, 0);
         w.s(330, brh);
+        if let Some(viewport) = w.paper_viewports.get(brh).cloned() {
+            w.s(331, viewport);
+        }
         // The saved paper-space view (centre, height) as CADCraft xdata.
         if let Some((c, height)) = view.filter(|(c, v)| c.x.is_finite() && c.y.is_finite() && v.is_finite()) {
             w.s(1001, dxf_ext::APP);
@@ -2677,13 +2683,7 @@ fn cadcraft_fonts_name() -> &'static str {
 /// VERTEXes, gives its first). Handles of objects outside the entity (owner, styles) are left
 /// out. AutoLISP's `entget` is built on it.
 pub fn entity_groups(d: &Drawing, e: &Entity) -> (String, Vec<Tag>) {
-    let mut w = W {
-        t: Vec::new(),
-        next: d.handseed.max(0x100).saturating_add(0x1000),
-        pstyles: HashMap::new(),
-        layers: HashMap::new(),
-        reactors: HashMap::new(),
-    };
+    let mut w = W { next: d.handseed.max(0x100).saturating_add(0x1000), ..W::default() };
     let cx = Ctx { target: Version::R2018, ..Ctx::default() };
     let paper = d.space_of(e.handle).is_some_and(|s| !matches!(s, cadcraft_doc::Space::Model));
     entity(&mut w, d, e, "0", paper, &cx);
