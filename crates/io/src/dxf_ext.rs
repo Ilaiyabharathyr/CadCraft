@@ -213,7 +213,7 @@ const JOG_DEGREES: std::ops::RangeInclusive<f64> = 5.0..=90.0;
 
 /// A DIMJOGANG value from a file in degrees, or `None` when it is no jog angle a style takes.
 /// The DIMSTYLE group (50) holds degrees (AutoCAD and the DWG bridge, acadrust, read and write it
-/// so), but CADCraft 0.6.2 and earlier wrote radians there, and xdata and `$DIMJOGANG` hold
+/// so), but CADCraft 0.7.0 and earlier wrote radians there, and xdata and `$DIMJOGANG` hold
 /// radians. Usable angles don't overlap in the two units (5 to 90 degrees, 0.087 to 1.571
 /// radians), so the value says which it is. NaN and infinities are in neither range.
 pub(crate) fn jog_degrees(x: f64) -> Option<f64> {

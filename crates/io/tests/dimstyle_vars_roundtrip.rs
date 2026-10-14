@@ -173,7 +173,7 @@ fn jog_angle_is_degrees_in_dimstyle_groups() {
 
 #[test]
 fn jog_angle_in_radians_in_a_group_still_reads() {
-    // CADCraft 0.6.2 and earlier wrote group 50 in radians. 5° to 90° in radians are below the 5°
+    // CADCraft 0.7.0 and earlier wrote group 50 in radians. 5° to 90° in radians are below the 5°
     // a style takes, so they can't be degrees and read as radians.
     let text = dxf(&drawing(), Version::R2018);
     for (file, want) in [("0.7853981633974483", 45.0), ("1.0471975511965976", 60.0), ("0.08726646259971647", 5.0), ("1.5707963267948966", 90.0)] {
