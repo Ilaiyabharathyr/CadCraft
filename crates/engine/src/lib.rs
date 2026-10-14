@@ -1397,14 +1397,18 @@ impl Session {
     }
 
     /// Preview entities for the cursor: objects drawn with their own properties
-    /// ([`Interactive::preview_objects`]), then the rubber band with the current properties.
+    /// ([`Interactive::preview_objects`]), then the rubber band with the current properties, in
+    /// the grip blue over such objects (so it shows over their fills, whatever their colour).
     pub fn preview(&self, cursor: Vec2) -> Vec<Entity> {
-        let common = self.current_common();
+        let mut common = self.current_common();
         let (kinds, mut out) = match (self.lisp_preview(cursor), &self.running) {
             (Some(k), _) => (k, Vec::new()),
             (None, Some(r)) => (r.machine.preview(self, cursor), r.machine.preview_objects(self, cursor)),
             (None, None) => (Vec::new(), Vec::new()),
         };
+        if !out.is_empty() {
+            common.color = cadcraft_doc::color::Color::True(cadcraft_doc::color::Rgb(0x2f, 0x6b, 0xff));
+        }
         out.extend(kinds.into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }));
         out
     }
