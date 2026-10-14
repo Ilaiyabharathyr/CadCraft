@@ -1,6 +1,7 @@
 //! DXF → Drawing.
 
 use std::collections::HashMap;
+use std::sync::Arc as Shared;
 
 use cadcraft_color::{Color, Rgb};
 use cadcraft_doc::*;
@@ -1116,7 +1117,7 @@ fn entity_extras(kind: &str, tags: &[Tag], h: Handle, k: &mut EntityKind, rx: &m
 
 /// Parse a run of entity records (ENTITIES section or a block's body) into entities. Records that
 /// can't be placed are counted in `skipped`.
-fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipped: &mut usize) -> Vec<(Option<String>, bool, Entity)> {
+fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipped: &mut usize) -> Vec<(Option<String>, bool, Shared<Entity>)> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some((kind, tags)) = recs.get(i) {
@@ -1243,9 +1244,11 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
                 None => d.new_handle(),
             };
             entity_extras(kind, tags, h, &mut k, rx);
-            let more: Vec<_> =
-                extra.into_iter().map(|f| (owner.clone(), paper, Entity { handle: d.new_handle(), common: c.clone(), kind: f })).collect();
-            out.push((owner, paper, Entity { handle: h, common: c, kind: k }));
+            let more: Vec<_> = extra
+                .into_iter()
+                .map(|f| (owner.clone(), paper, Shared::new(Entity { handle: d.new_handle(), common: c.clone(), kind: f })))
+                .collect();
+            out.push((owner, paper, Shared::new(Entity { handle: h, common: c, kind: k })));
             out.extend(more);
         } else if kind == "HATCH" {
             // Without boundary data. The other records `entity` returns nothing for are read
@@ -1257,7 +1260,7 @@ fn parse_entities(recs: &[(String, &[Tag])], d: &mut Drawing, rx: &mut Rx, skipp
     let mut seen = std::collections::HashSet::new();
     for (_, _, e) in &mut out {
         if !seen.insert(e.handle) {
-            e.handle = d.new_handle();
+            Shared::make_mut(e).handle = d.new_handle();
             seen.insert(e.handle);
         }
     }
@@ -1667,14 +1670,19 @@ fn ltype_pattern(tags: &[Tag], styles: &HashMap<String, String>) -> Vec<DashElem
 /// Read a DXF file into a drawing.
 pub fn read(bytes: &[u8]) -> Result<Drawing> {
     let tags = cadcraft_dxf::parse(bytes).map_err(|e| IoError::Format(e.to_string()))?;
-    let secs = sections(&tags);
+    read_tags(&tags)
+}
+
+/// Build from parsed tags so callers can release the source bytes before building entities.
+pub(crate) fn read_tags(tags: &[Tag]) -> Result<Drawing> {
+    let secs = sections(tags);
     if secs.is_empty() {
         return Err(IoError::Format("no sections found".into()));
     }
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     let mut rx = Rx { pstyles: plot_style_names(&secs), ..Rx::default() };
-    let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Entity)>, i64)> = Vec::new();
+    let mut blocks: Vec<(String, Vec3, String, Vec<(Option<String>, bool, Shared<Entity>)>, i64)> = Vec::new();
     let mut layout_objs: Vec<(String, u32, String, PageSetup, bool)> = Vec::new();
     let mut entities = Vec::new();
     let mut objs = Objects::default();
@@ -1690,7 +1698,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         }
     }
     let mut skipped = std::collections::BTreeMap::new();
-    count_skipped(&mut skipped, "(no section)", outside_sections(&tags));
+    count_skipped(&mut skipped, "(no section)", outside_sections(tags));
     for s in &secs {
         match s.name.as_str() {
             "HEADER" => header(s.tags, &mut d),

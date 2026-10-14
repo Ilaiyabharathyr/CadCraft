@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (layout printable origins and plot-offset round trips) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (bounded import allocations and large-drawing save costs) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -36,6 +36,17 @@ converting it to a DWG of the chosen version (#421): SAVEAS `version`, else the 
 version (the file's `$ACADVER`, 2018 for a new drawing), at least 2004 unless 2000 is asked for.
 The bridge repairs two acadrust 0.6.3 gaps in 2010+ DWG: merged table cells and table-style
 title/header suppression.
+
+Large native imports reserve ASCII tags from the bounded input pair count, build entities in
+shared allocations reused by the document store, and release the converted DXF bytes before
+building the drawing. Foreign-data handle indexes use numeric handles. Saves move unchanged
+records, skip unknown-entity planning when none exist, reserve retained groups before merging,
+and inspect only TABLES when adding APPIDs. The DWG writer consumes its intermediate DXF
+instead of copying it. Foreign records, xdata and document snapshots keep their existing
+semantics. The complete DWG→DXF intermediate and full tag list still exist; this is not a
+streaming importer. Synthetic allocation/snapshot/xdata regressions supplement the existing
+round-trip tests. The PR records measurements of the public 47.8 MB sample from #1076/#1077;
+reference-machine desktop targets and staged progress remain unverified.
 
 On macOS the app accepts both its fallback DWG type and `com.autodesk.autocad.dwg`, the
 type AutoCAD registers for the extension, so Finder's Open With can offer CADCraft even
@@ -190,6 +201,7 @@ previous displacement; no reference drawing is committed.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Large imports reuse shared entity allocations and bound spare tag capacity; foreign-data saves move unchanged records, reserve retained groups and avoid whole-file APPID metadata. Public heavy-drawing equivalence/round-trip checks and allocation regressions; streaming/progress remain open |
 | 2026-10-14 | minor | Layout paper and printable origins agree with rotated device margins; per-layout plot offsets survive DXF/DWG, with shared screen/plot placement and synthetic two-layout/PDF/PNG regressions |
 | 2026-10-14 | minor | Source-version DWG bridge preserves foreign class semantics; native sheet units are millimetres and layouts reference their overall viewport. Synthetic regressions and zero-error AutoCAD opening/audit of a local topographic copy |
 | 2026-10-14 | minor | Imported font paths resolve to installed file names while the stored style remains intact; PDF glyph aliases retain original Unicode through ActualText, with synthetic font/round-trip tests and local Poppler extraction |

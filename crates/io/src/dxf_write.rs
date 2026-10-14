@@ -2487,12 +2487,16 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
 /// restores foreign classes and objects so every class gets its actual instance count.
 fn add_class_instance_counts(tags: &mut Vec<Tag>) {
     let mut counts: HashMap<String, i64> = HashMap::new();
+    let mut classes = 0;
     for t in tags.iter().filter(|t| t.code == 0) {
         let kind = t.str();
-        if kind != "CLASS" {
+        if kind == "CLASS" {
+            classes += 1;
+        } else {
             *counts.entry(kind.to_ascii_uppercase()).or_default() += 1;
         }
     }
+    tags.reserve_exact(classes);
 
     let mut start = 0;
     while start < tags.len() {

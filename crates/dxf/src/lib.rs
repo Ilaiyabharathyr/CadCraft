@@ -263,7 +263,22 @@ pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
 
 #[allow(clippy::while_let_loop)]
 fn parse_ascii_with_limit(text: &str, max_tags: usize) -> Result<Vec<Tag>> {
-    let mut tags = Vec::new();
+    // Count actual pairs without allocating, respecting blank code lines and early EOF.
+    // Geometric growth leaves millions of spare slots alive alongside the drawing.
+    let mut pairs = text.lines();
+    let mut count = 0;
+    while count < max_tags {
+        let Some(code) = pairs.next() else { break };
+        if code.trim().is_empty() {
+            continue;
+        }
+        let Some(value) = pairs.next() else { break };
+        count += 1;
+        if value == "EOF" && code.trim().parse::<i32>() == Ok(0) {
+            break;
+        }
+    }
+    let mut tags = Vec::with_capacity(count);
     let mut lines = text.lines().enumerate();
     loop {
         let Some((ln, code_line)) = lines.next() else { break };
@@ -584,6 +599,21 @@ pub fn record_slices(tags: &[Tag]) -> Vec<(String, &[Tag])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_ascii_input_bounds_spare_tag_memory() {
+        let text = format!("{}0\nEOF\n", "0\nCIRCLE\n10\n1\n20\n2\n40\n3\n".repeat(20_000));
+        let tags = parse(text.as_bytes()).unwrap();
+        assert_eq!(tags.len(), 80_001);
+        assert!(tags.capacity() <= tags.len() + tags.len() / 10, "spare tag slots: {}", tags.capacity() - tags.len());
+    }
+
+    #[test]
+    fn blank_code_lines_and_data_after_eof_do_not_reserve_tags() {
+        let tags = parse_ascii(&format!("{}0\nEOF\n{}", "\n".repeat(100_000), "0\nCIRCLE\n".repeat(100_000))).unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags.capacity(), 1);
+    }
 
     #[test]
     fn borrowed_sections_and_records_preserve_boundaries_without_copying_tags() {
