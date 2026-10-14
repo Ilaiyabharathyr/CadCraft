@@ -60,6 +60,35 @@ fn top_view_target_moves_the_model_window_and_survives_saving() {
 }
 
 #[test]
+fn top_view_direction_length_and_rounding_noise_do_not_change_the_model_center() {
+    for z in [0.000001, 1.0, 873.0, 63_379.0] {
+        let source = dxf(&format!(
+            "0\nVIEWPORT\n5\n20\n67\n1\n410\nLayout1\n10\n100\n20\n100\n40\n200\n41\n150\n12\n-4000\n22\n3000\n17\n4300\n27\n4000\n37\n-4\n16\n{}\n26\n{}\n36\n{z}\n45\n6000\n69\n2\n",
+            2e-16 * z,
+            -1e-16 * z
+        ));
+        let doc = read_dxf(source.as_bytes()).unwrap();
+        let space = Space::Paper("Layout1".into());
+        for reopened in [
+            doc.clone(),
+            read_dxf(write_dxf(&doc).as_bytes()).unwrap(),
+            cadcraft_io::read(&cadcraft_io::write(&doc, "view.dwg").unwrap(), "view.dwg").unwrap(),
+        ] {
+            let vp = reopened
+                .space(&space)
+                .unwrap()
+                .iter()
+                .find_map(|e| match &e.kind {
+                    EntityKind::Viewport(v) if v.id == 2 => Some(v),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(vp.view_center, Vec2::new(300.0, 7000.0), "direction length {z}");
+        }
+    }
+}
+
+#[test]
 fn overall_viewport_freezes_paper_entities_only_in_its_layout() {
     use cadcraft_doc::{Common, Drawing, Entity, Handle, Layer, Line, Viewport};
     use cadcraft_geom::Vec3;

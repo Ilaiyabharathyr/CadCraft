@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (native layout visibility, attribute alignment, MTEXT indents and Finder document delivery corrected) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (top-view viewport targets also applied with scaled, noisy view directions) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -157,6 +157,7 @@ files, fonts or screenshots are committed.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Top-view direction checks are scale invariant: a long vertical vector with numerical noise still applies the WCS target. A local 40.9 MB topographic drawing's whole model is correctly centred in its layout; synthetic direction-length cases survive DXF/DWG saving. No reference files committed |
 | 2026-10-13 | minor | Native Finder document delivery (cold and running), attribute group 74, absolute/relative MTEXT paragraph lengths, ISOCP system-font substitution, top-view targets, native viewport freeze lists and inactive-layout viewport ids; synthetic regressions and manual template/AutoCAD checks; exact missing-font glyphs and absent external images remain limitations |
 | 2026-10-13 | minor | First activation initializes imported, unsized empty layouts with landscape media and a model viewport; configured or populated sheets and erased viewports stay unchanged. Unvisited state survives DXF/DWG save; paper framing fits custom media and narrow drawing areas. Synthetic regression tests and a local user-DWG check added; weighted percentages not re-measured |
 | 2026-10-12 | minor | PDF output: object transparency plotted as PDF alpha (`/ExtGState` `/ca` `/CA`) when the page setup's or the plot's "Plot transparency" is on; PNG plots blend it, SVG uses `opacity`; plots without it are unchanged byte for byte |

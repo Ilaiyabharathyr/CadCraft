@@ -249,11 +249,11 @@ fn mirror_text(t: &mut Text, align: Option<Vec3>, insert: Vec3) {
 /// projection for other directions/twists, which the 2D viewport model does not yet represent.
 fn viewport_center(t: &T) -> Vec2 {
     let center = Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0));
-    if t.fd(16, 0.0).abs() < 1e-12 && t.fd(26, 0.0).abs() < 1e-12 && t.fd(36, 1.0) > 0.0 && t.fd(51, 0.0).abs() < 1e-12 {
-        center + t.p(17).xy()
-    } else {
-        center
-    }
+    // The viewing direction is not necessarily a unit vector. Test its direction, not
+    // absolute components: a long vertical vector can carry harmless rounding noise.
+    let dir = Vec3::new(t.fd(16, 0.0), t.fd(26, 0.0), t.fd(36, 1.0));
+    let top = dir.is_finite() && dir.z > 0.0 && (dir.x / dir.z).abs() < 1e-12 && (dir.y / dir.z).abs() < 1e-12;
+    if top && t.fd(51, 0.0).abs() < 1e-12 { center + t.p(17).xy() } else { center }
 }
 
 /// Parse one entity record. POLYLINE/INSERT followers are handled by the caller.
