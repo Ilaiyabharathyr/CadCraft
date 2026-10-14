@@ -288,7 +288,7 @@ impl TextFont {
         if let Some(f) = ttf::find(name) {
             return TextFont::Outline(f);
         }
-        let n = name.trim();
+        let n = ttf::file_name(name);
         if n.is_empty() || n.eq_ignore_ascii_case(BUILTIN_FONT) {
             return TextFont::Stroke;
         }

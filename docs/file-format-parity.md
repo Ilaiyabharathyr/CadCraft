@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (top-view viewport targets also applied with scaled, noisy view directions) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (portable font file names and correct copied PDF text for shared glyphs) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -153,10 +153,26 @@ Original font names remain in saved files. Private application bundles are never
 The source template's missing externally referenced image remains unresolved. No reference
 files, fonts or screenshots are committed.
 
+Font lookup now accepts Windows and Unix file paths from imported styles, resolving only the
+file name against installed/registered fonts. The source path is retained in DXF/DWG; imported
+paths do not trigger reads outside the font directories. ISOCP substitution also uses the file
+name. Synthetic font tests prove identical font selection and PDF placement through a DXF
+round trip, including rotation, width factor and obliquing.
+
+A font can map several Unicode characters to the same glyph. PDF subsets still retain glyph
+ids and their canonical ToUnicode map; alias occurrences now carry a Span ActualText string
+([PDF Reference 1.7, §10.8.3](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf)),
+so copying them preserves their original characters without changing rendering. A synthetic
+font deliberately maps A and B to one outline: Poppler extracts `ABBA` from the local exported
+PDF, and embedded-text and geometry exports were rendered for visual comparison. No font
+files, PDFs or user drawings are repository fixtures. Missing SHX fonts and external images
+remain unsupported; these fixes do not claim complete font/plot parity.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Imported font paths resolve to installed file names while the stored style remains intact; PDF glyph aliases retain original Unicode through ActualText, with synthetic font/round-trip tests and local Poppler extraction |
 | 2026-10-14 | minor | Top-view direction checks are scale invariant: a long vertical vector with numerical noise still applies the WCS target. A local 40.9 MB topographic drawing's whole model is correctly centred in its layout; synthetic direction-length cases survive DXF/DWG saving. No reference files committed |
 | 2026-10-13 | minor | Native Finder document delivery (cold and running), attribute group 74, absolute/relative MTEXT paragraph lengths, ISOCP system-font substitution, top-view targets, native viewport freeze lists and inactive-layout viewport ids; synthetic regressions and manual template/AutoCAD checks; exact missing-font glyphs and absent external images remain limitations |
 | 2026-10-13 | minor | First activation initializes imported, unsized empty layouts with landscape media and a model viewport; configured or populated sheets and erased viewports stay unchanged. Unvisited state survives DXF/DWG save; paper framing fits custom media and narrow drawing areas. Synthetic regression tests and a local user-DWG check added; weighted percentages not re-measured |
