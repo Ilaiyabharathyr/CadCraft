@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use cadcraft_doc::{Block, ClipBoundary, Common, Drawing, Entity, EntityKind, Insert, Line, Space};
+use cadcraft_doc::{Block, ClipBoundary, Common, Drawing, Entity, EntityKind, Handle, Insert, Line, Space};
 use cadcraft_geom::{Vec2, Vec3};
 use cadcraft_io::{read, read_dxf, write, write_dxf};
 
@@ -82,4 +82,68 @@ fn spatial_filter_survives_dwg_bridge() {
     let bytes = write(&d, "x.dwg").unwrap();
     let back = read(&bytes, "x.dwg").unwrap();
     assert_eq!(clip(&back), clip(&d));
+}
+
+fn dictionary_entry(d: &Drawing, dictionary: Handle, name: &str) -> Handle {
+    let tags = &d.foreign.objects.iter().find(|o| o.handle == dictionary).unwrap().tags;
+    let pair = tags.windows(2).find(|pair| pair[0].code == 3 && pair[0].value == name && matches!(pair[1].code, 350 | 360)).unwrap();
+    Handle::parse_hex(&pair[1].value).unwrap()
+}
+
+fn spatial_filter(d: &Drawing, insert: Handle) -> (&cadcraft_doc::foreign::ForeignObject, Handle) {
+    let extension = d.foreign.entities.get(&insert).unwrap().xdict.unwrap();
+    let owner = dictionary_entry(d, extension, "ACAD_FILTER");
+    let filter = dictionary_entry(d, owner, "SPATIAL");
+    (d.foreign.objects.iter().find(|o| o.handle == filter).unwrap(), owner)
+}
+
+#[test]
+fn exported_filters_use_spatial_owner_and_preserve_transforms() {
+    let mut d = drawing();
+    let template = match &d.model.iter().next().unwrap().kind {
+        EntityKind::Insert(i) => i.clone(),
+        _ => unreachable!(),
+    };
+    let cases = [
+        (150.0, vec![Vec2::new(20.0, 20.0), Vec2::new(80.0, 20.0), Vec2::new(80.0, 80.0), Vec2::new(20.0, 80.0)]),
+        (300.0, vec![Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(50.0, 100.0)]),
+    ];
+    let mut handles = Vec::new();
+    for (x, points) in &cases {
+        let mut insert = template.clone();
+        insert.insert = Vec3::new(*x, 0.0, 0.0);
+        insert.scale = Vec3::new(1.0, 1.0, 1.0);
+        insert.rotation = 0.0;
+        insert.clip = Some(ClipBoundary { points: points.clone(), enabled: true, inverted: false, deleted: false });
+        handles.push(d.add(&Space::Model, Common::default(), EntityKind::Insert(insert)).unwrap());
+    }
+
+    let dxf = write_dxf(&d);
+    let dwg = write(&d, "x.dwg").unwrap();
+    for (is_dxf, reopened) in [(true, read_dxf(dxf.as_bytes()).unwrap()), (false, read(&dwg, "x.dwg").unwrap())] {
+        for ((x, points), handle) in cases.iter().zip(&handles) {
+            let (filter, owner) = spatial_filter(&reopened, *handle);
+            assert_eq!(filter.kind, "SPATIAL_FILTER");
+            if is_dxf {
+                let reactors = filter.tags.windows(3).find(|tags| tags[0].code == 102 && tags[0].value == "{ACAD_REACTORS").unwrap();
+                assert_eq!((reactors[1].code, reactors[1].value.as_str(), reactors[2].code), (330, owner.hex().as_str(), 102));
+            } else {
+                assert_eq!(filter.tags.iter().find(|tag| tag.code == 330).unwrap().value, owner.hex());
+            }
+            assert_eq!(filter.tags.iter().find(|tag| tag.code == 70).unwrap().value.parse::<usize>().unwrap(), points.len());
+            let vertices: Vec<_> = filter
+                .tags
+                .windows(2)
+                .filter(|tags| tags[0].code == 10 && tags[1].code == 20)
+                .map(|tags| Vec2::new(tags[0].value.parse().unwrap(), tags[1].value.parse().unwrap()))
+                .collect();
+            let world: Vec<_> = points.iter().map(|p| Vec2::new(p.x + *x, p.y)).collect();
+            assert_eq!(vertices, world);
+            let matrices: Vec<f64> = filter.tags.iter().filter(|tag| tag.code == 40).map(|tag| tag.value.parse().unwrap()).collect();
+            assert_eq!(
+                matrices,
+                vec![1.0, 0.0, 0.0, -*x, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+            );
+        }
+    }
 }

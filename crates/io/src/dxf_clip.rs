@@ -69,8 +69,21 @@ fn parse_filter(o: &ForeignObject) -> Option<ClipBoundary> {
     // A nontrivial boundary-coordinate transform cannot be represented by the current 2D model.
     // Keep such a filter raw so a later save does not discard or alter it.
     let matrix: Vec<f64> = o.tags.iter().filter(|t| t.code == 40).filter_map(|t| t.value.parse::<f64>().ok()).collect();
-    let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
-    if matrix.len() != 24 || matrix.get(12..24).is_none_or(|m| m.iter().zip(identity).any(|(a, b)| !a.is_finite() || (a - b).abs() > 1e-9)) {
+    let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    // Earlier CADCraft builds wrote these 4×3 matrices as 3×4. Read that legacy
+    // form so saving an old drawing can rewrite it with the correct layout.
+    let legacy_identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+    if matrix.len() != 24
+        || matrix.get(12..24).is_none_or(|m| {
+            let matches = |expected: [f64; 12]| m.iter().zip(expected).all(|(a, b)| a.is_finite() && (a - b).abs() <= 1e-9);
+            !matches(identity) && !matches(legacy_identity)
+        })
+    {
+        return None;
+    }
+    let legacy = matrix[12..24].iter().zip(legacy_identity).all(|(a, b)| (a - b).abs() <= 1e-9);
+    let inverse = Mat3 { a: matrix[0], b: matrix[1], c: matrix[4], d: matrix[5], e: matrix[3], f: matrix[7] };
+    if !matrix.iter().all(|n| n.is_finite()) || (!legacy && inverse.inverse().is_none()) {
         return None;
     }
     let mut points = Vec::with_capacity(count);
@@ -80,7 +93,10 @@ fn parse_filter(o: &ForeignObject) -> Option<ClipBoundary> {
         }
         let x = t.value.parse::<f64>().ok()?;
         let y = o.tags.get(i + 1).filter(|t| t.code == 20)?.value.parse::<f64>().ok()?;
-        let p = cadcraft_geom::Vec2::new(x, y);
+        let world = cadcraft_geom::Vec2::new(x, y);
+        // Standard filters store boundary vertices in drawing coordinates.
+        // Legacy CADCraft filters stored them in block coordinates already.
+        let p = if legacy { world } else { inverse.apply(world) };
         if !p.is_finite() {
             return None;
         }
@@ -144,18 +160,19 @@ fn dict(h: Handle, owner: Handle) -> ForeignObject {
     }
 }
 
-fn spatial(h: Handle, owner: Handle, insert: Handle, clip: &ClipBoundary, inverse: Mat3) -> ForeignObject {
+fn spatial(h: Handle, owner: Handle, clip: &ClipBoundary, transform: Mat3, inverse: Mat3) -> ForeignObject {
     let mut tags = vec![
         raw(5, h.hex()),
         raw(102, "{ACAD_REACTORS"),
-        raw(330, insert.hex()),
+        raw(330, owner.hex()),
         raw(102, "}"),
         raw(330, owner.hex()),
         raw(100, "AcDbFilter"),
         raw(100, "AcDbSpatialFilter"),
         raw(70, clip.points.len()),
     ];
-    for p in &clip.points {
+    for local in &clip.points {
+        let p = transform.apply(*local);
         tags.push(raw(10, p.x));
         tags.push(raw(20, p.y));
     }
@@ -170,12 +187,14 @@ fn spatial(h: Handle, owner: Handle, insert: Handle, clip: &ClipBoundary, invers
         raw(72, 0),
         raw(73, 0),
     ]);
-    // The DXF reference specifies two 4×3 column-major matrices: inverse block reference,
-    // then boundary-coordinate transform. The latter is identity for block-local points.
-    for n in [inverse.a, inverse.b, 0.0, inverse.c, inverse.d, 0.0, 0.0, 0.0, 1.0, inverse.e, inverse.f, 0.0] {
+    // Each 4×3 matrix has four rows and three columns, stored column-major.
+    // The fourth row contains translation, so its values are entries 4, 8, and 12.
+    // The first matrix is the inverse block reference; the second is identity for
+    // boundary points already expressed in drawing coordinates.
+    for n in [inverse.a, inverse.b, 0.0, inverse.e, inverse.c, inverse.d, 0.0, inverse.f, 0.0, 0.0, 1.0, 0.0] {
         tags.push(raw(40, n));
     }
-    for n in [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0] {
+    for n in [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
         tags.push(raw(40, n));
     }
     ForeignObject { handle: h, kind: "SPATIAL_FILTER".into(), tags }
@@ -257,7 +276,7 @@ pub(crate) fn prepare(d: &Drawing) -> Option<Drawing> {
                 o.tags.extend([raw(3, "SPATIAL"), raw(350, h.hex())]);
             }
             if let Some(inv) = inverse {
-                f.objects.push(spatial(h, fd, insert, &clip, inv));
+                f.objects.push(spatial(h, fd, &clip, xf, inv));
             }
         }
     }
