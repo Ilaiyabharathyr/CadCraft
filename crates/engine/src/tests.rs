@@ -26,6 +26,29 @@ fn line_via_command_line() {
 }
 
 #[test]
+fn drawing_inspect_reuses_extents_until_the_drawing_changes() {
+    // Agents poll `drawing.inspect` / `status`, which read the extents (issue #1079).
+    // The cached answer must be identical to a fresh walk, and must follow edits.
+    let mut s = Session::new();
+    s.cmdline("line").unwrap();
+    s.cmdline("0,0").unwrap();
+    s.cmdline("10,0").unwrap();
+    s.cmdline("c").unwrap();
+    let first = s.state().unwrap().extents_cached(&cadcraft_doc::Space::Model);
+    assert_eq!(first.max, Vec2::new(10.0, 0.0));
+    // No edit since: served from the cache, same answer.
+    let again = s.state().unwrap().extents_cached(&cadcraft_doc::Space::Model);
+    assert_eq!(first, again);
+    // An edit changes the drawing: the next call reflects the new geometry.
+    s.cmdline("line").unwrap();
+    s.cmdline("0,0").unwrap();
+    s.cmdline("0,20").unwrap();
+    s.cmdline("c").unwrap();
+    let after = s.state().unwrap().extents_cached(&cadcraft_doc::Space::Model);
+    assert_eq!(after.max, Vec2::new(10.0, 20.0));
+}
+
+#[test]
 fn edits_while_a_command_runs_redraw() {
     // The canvas rebuilds when (revision, doc pointer) changes; each new segment must change it (issue #4).
     fn key(s: &Session) -> (u64, usize) {

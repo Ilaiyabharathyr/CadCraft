@@ -30,6 +30,8 @@ pub mod sysvars;
 pub mod undoctl;
 pub mod units;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, Handle, Space};
@@ -130,6 +132,11 @@ pub struct DocState {
     pub saved: Arc<Drawing>,
     pub revision: u64,
     pub space: Space,
+    /// Cached extents per space, keyed by the revision they were computed at.
+    /// Polling `drawing.inspect` or `status` (agents do) would otherwise walk every
+    /// entity in the space on each call: about 2.5 s on a 985k-entity drawing
+    /// (issue #1079).
+    extents_cache: RefCell<HashMap<Space, (u64, Bounds2)>>,
     /// Tiled model viewports (VPORTS).
     pub tiles: ModelTiles,
     /// MSPACE: the layout viewport whose model space is being edited (None = paper space).
@@ -161,6 +168,7 @@ impl DocState {
             title: title.into(),
             revision: 1,
             space: Space::Model,
+            extents_cache: RefCell::new(HashMap::new()),
             tiles: ModelTiles::default(),
             mspace: None,
             views: Vec::new(),
@@ -174,6 +182,22 @@ impl DocState {
     /// saved into its block.
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(self.drawing(), &self.saved) || self.block_unsaved()
+    }
+    /// The bounds of all visible entities in `space`, cached by revision. The first
+    /// call after an edit pays the walk; later calls in the same revision (agents
+    /// polling `drawing.inspect` or `status`) are a lookup. `touch()` bumps the
+    /// revision for view-only changes, so the cache rebuilds a little more than it
+    /// strictly must — safe, and cheap next to the walk on a large drawing
+    /// (issue #1079).
+    pub fn extents_cached(&self, space: &Space) -> Bounds2 {
+        if let Some(&(rev, b)) = self.extents_cache.borrow().get(space) {
+            if rev == self.revision {
+                return b;
+            }
+        }
+        let b = self.doc.extents(space);
+        self.extents_cache.borrow_mut().insert(space.clone(), (self.revision, b));
+        b
     }
     /// After undo/redo replaced the drawing (`before` is the one shown until then): if the current
     /// layout no longer exists, follow it to its other name when it was renamed (same tab order,
