@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (dense-polyline selection no longer regenerates grips quadratically) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (DWG import borrows DXF sections and records instead of duplicating them) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
 
 The hardware AutoCAD uses and how CADCraft compares, per platform. Work items:
 [gaps.md](gaps.md#hardware).
@@ -67,14 +67,27 @@ also reports the largest polyline's vertex/grip counts and grip-generation time 
 checks. The real DWG and screenshots are not repository fixtures.
 
 This fixes a reproducible selection stall; it does not establish parity with AutoCAD or
-prove the absence of every crash. The CLI import still peaked at about 2.2 GB resident
-memory and took 2.83 s on this file before the grip change. Import-memory reduction and
-broader layout/plot fidelity remain separate work.
+prove the absence of every crash. Opening the same file no longer duplicates the DXF tag stream for sections and records.
+The reader borrows slices, and the checked ASCII line count reserves the tag vector once;
+the existing owned DXF APIs remain available. No geometry, blocks or foreign data are removed.
+Three sequential CLI imports per build on the same Mac gave these medians (`/usr/bin/time -l`,
+optimized development build, before/after the borrowing change):
+
+| DWG import | Before | After |
+|---|---:|---:|
+| Peak resident memory (decimal GB) | 2.40 | 1.42 |
+| Wall time (seconds) | 2.69 | 2.49 |
+
+Every imported summary matched exactly (entity types/counts, extents, blocks and layouts).
+These are local measurements on one drawing, not a bound for every file; the DWG dependency
+still decodes the entire document before the DXF bridge runs. Broader layout/plot fidelity
+remains separate work.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Borrowed DXF sections/records and bounded ASCII reservation; local 40.9 MB DWG peak RSS median 2.40 → 1.42 GB, preserving imported summaries |
 | 2026-10-14 | minor | Dense contour grips generated once per call, preserving editing indices; selected-contour UI CPU median 705.24 → 1.80 ms in a local 40.9 MB DWG; synthetic regressions and CLI grip timing |
 | 2026-10-13 | minor | Zoom and pan regenerate in the background: 2–4.5 s stalls down to 26–64 ms on a hatched DWG |
 | 2026-10-10 | major | First hardware parity doc: GPU backends per platform, input devices, displays, plotters |

@@ -186,7 +186,7 @@ pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     if tags > max_tags {
         return Err(DxfError::TooLarge { tags, limit: max_tags });
     }
-    parse_ascii_with_limit(&codepage::decode_ascii_file(bytes), max_tags)
+    parse_ascii_with_limit(&codepage::decode_ascii_file(bytes), max_tags, tags)
 }
 
 /// The four hex digits of a `\U+XXXX` escape starting at `chars[i]`, if there is one.
@@ -258,12 +258,17 @@ fn unescape_unicode(s: &str) -> String {
 }
 
 pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
-    parse_ascii_with_limit(text, MAX_TAGS)
+    let tags = text.lines().count().div_ceil(2);
+    if tags > MAX_TAGS {
+        return Err(DxfError::TooLarge { tags, limit: MAX_TAGS });
+    }
+    parse_ascii_with_limit(text, MAX_TAGS, tags)
 }
 
 #[allow(clippy::while_let_loop)]
-fn parse_ascii_with_limit(text: &str, max_tags: usize) -> Result<Vec<Tag>> {
-    let mut tags = Vec::new();
+fn parse_ascii_with_limit(text: &str, max_tags: usize, capacity: usize) -> Result<Vec<Tag>> {
+    // The checked line count bounds this allocation and avoids doubling a large tag buffer.
+    let mut tags = Vec::with_capacity(capacity);
     let mut lines = text.lines().enumerate();
     loop {
         let Some((ln, code_line)) = lines.next() else { break };
@@ -525,13 +530,18 @@ fn escape_unicode(s: &str, out: &mut String) {
 
 /// A section: `0 SECTION / 2 NAME ... 0 ENDSEC`.
 #[derive(Clone, Debug, Default)]
-pub struct Section {
+pub struct Section<T = Vec<Tag>> {
     pub name: String,
-    pub tags: Vec<Tag>,
+    pub tags: T,
 }
 
 /// Split a tag stream into sections.
 pub fn sections(tags: &[Tag]) -> Vec<Section> {
+    section_slices(tags).into_iter().map(|s| Section { name: s.name, tags: s.tags.to_vec() }).collect()
+}
+
+/// Sections borrowing their group data. Large drawings need only one copy of the tag stream.
+pub fn section_slices(tags: &[Tag]) -> Vec<Section<&[Tag]>> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < tags.len() {
@@ -543,7 +553,7 @@ pub fn sections(tags: &[Tag]) -> Vec<Section> {
             while j < tags.len() && !(tags.get(j).is_some_and(|t| t.code == 0 && t.str() == "ENDSEC")) {
                 j += 1;
             }
-            out.push(Section { name, tags: tags.get(start..j).unwrap_or(&[]).to_vec() });
+            out.push(Section { name, tags: tags.get(start..j).unwrap_or(&[]) });
             i = j + 1;
         } else {
             i += 1;
@@ -554,13 +564,24 @@ pub fn sections(tags: &[Tag]) -> Vec<Section> {
 
 /// Split a run of tags into records starting at each code-0 tag: (type, tags after the 0).
 pub fn records(tags: &[Tag]) -> Vec<(String, Vec<Tag>)> {
-    let mut out: Vec<(String, Vec<Tag>)> = Vec::new();
-    for t in tags {
-        if t.code == 0 {
-            out.push((t.str(), Vec::new()));
-        } else if let Some(last) = out.last_mut() {
-            last.1.push(t.clone());
+    record_slices(tags).into_iter().map(|(kind, tags)| (kind, tags.to_vec())).collect()
+}
+
+/// Records borrowing their group data, including empty and unterminated final records.
+pub fn record_slices(tags: &[Tag]) -> Vec<(String, &[Tag])> {
+    let mut out = Vec::new();
+    let mut open = None;
+    for (i, t) in tags.iter().enumerate() {
+        if t.code != 0 {
+            continue;
         }
+        if let Some((kind, start)) = open.take() {
+            out.push((kind, tags.get(start..i).unwrap_or(&[])));
+        }
+        open = Some((t.str(), i + 1));
+    }
+    if let Some((kind, start)) = open {
+        out.push((kind, tags.get(start..).unwrap_or(&[])));
     }
     out
 }
@@ -568,6 +589,40 @@ pub fn records(tags: &[Tag]) -> Vec<(String, Vec<Tag>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_sections_and_records_preserve_boundaries_without_copying_tags() {
+        let tags = vec![
+            Tag::s(9, "outside"),
+            Tag::s(0, "SECTION"),
+            Tag::s(2, "ENTITIES"),
+            Tag::s(8, "before a record"),
+            Tag::s(0, "LINE"),
+            Tag::f(10, 3.0),
+            Tag::s(0, "EMPTY"),
+            Tag::s(0, "UNKNOWN"),
+            Tag::s(1000, "foreign data"),
+            Tag::s(0, "ENDSEC"),
+            Tag::s(0, "SECTION"),
+            Tag::s(2, "BLOCKS"),
+            Tag::s(0, "BLOCK"),
+            Tag::s(2, "unterminated"),
+        ];
+        let borrowed = section_slices(&tags);
+        let owned = sections(&tags);
+        assert_eq!(borrowed.len(), 2);
+        assert!(std::ptr::eq(borrowed[0].tags.as_ptr(), tags[3..].as_ptr()));
+        for (b, o) in borrowed.iter().zip(&owned) {
+            assert_eq!(b.name, o.name);
+            assert_eq!(b.tags, o.tags);
+            let recs = record_slices(b.tags);
+            assert_eq!(records(b.tags), recs.iter().map(|(k, t)| (k.clone(), t.to_vec())).collect::<Vec<_>>());
+        }
+        let recs = record_slices(borrowed[0].tags);
+        assert_eq!(recs.iter().map(|(k, t)| (k.as_str(), t.len())).collect::<Vec<_>>(), [("LINE", 1), ("EMPTY", 0), ("UNKNOWN", 1)]);
+        assert!(std::ptr::eq(recs[0].1.as_ptr(), tags[5..].as_ptr()));
+        assert_eq!(record_slices(borrowed[1].tags)[0].1, &tags[13..]);
+    }
 
     #[test]
     fn ascii_roundtrip() {
