@@ -9,6 +9,7 @@
 
 use std::cell::Cell;
 
+use craft_ui::theme::SuiteDarkPalette;
 use egui::{Color32, FontFamily, FontId, Theme, Visuals};
 use serde::{Deserialize, Serialize};
 
@@ -131,26 +132,26 @@ pub struct Tokens {
 impl Tokens {
     // ArtCraft native dark UI roles. Drafting canvas and selection highlights remain independent.
     pub const DARK: Tokens = Tokens {
-        chrome: Color32::from_rgb(0x0A, 0x0A, 0x0C),
-        chrome_dark: Color32::from_rgb(0x12, 0x13, 0x16),
-        panel: Color32::from_rgb(0x10, 0x10, 0x14),
-        tab_active: Color32::from_rgb(0x1E, 0x1F, 0x22),
-        control: Color32::from_rgb(0x1E, 0x1F, 0x22),
-        control_hover: Color32::from_rgb(0x32, 0x33, 0x37),
-        border: Color32::from_rgb(0x36, 0x37, 0x3A),
+        chrome: SuiteDarkPalette::ARTCRAFT.chrome,
+        chrome_dark: SuiteDarkPalette::ARTCRAFT.window,
+        panel: SuiteDarkPalette::ARTCRAFT.panel,
+        tab_active: SuiteDarkPalette::ARTCRAFT.raised,
+        control: SuiteDarkPalette::ARTCRAFT.raised,
+        control_hover: SuiteDarkPalette::ARTCRAFT.hover,
+        border: SuiteDarkPalette::ARTCRAFT.border,
         canvas: Color32::from_rgb(0x22, 0x28, 0x2f),
         grid_minor: Color32::from_rgb(0x29, 0x30, 0x3a),
         grid_major: Color32::from_rgb(0x31, 0x39, 0x45),
         axis_x: Color32::from_rgb(0x56, 0x28, 0x29),
         axis_y: Color32::from_rgb(0x28, 0x4a, 0x2e),
-        text: Color32::from_rgb(0xF2, 0xF1, 0xEE),
-        text_dim: Color32::from_rgb(0xA6, 0xA6, 0xA8),
-        text_faint: Color32::from_rgb(0x71, 0x71, 0x76),
-        icon: Color32::from_rgb(0xF2, 0xF1, 0xEE),
-        icon_accent: Color32::from_rgb(0x2D, 0x81, 0xFF),
+        text: SuiteDarkPalette::ARTCRAFT.text,
+        text_dim: SuiteDarkPalette::ARTCRAFT.text_secondary,
+        text_faint: SuiteDarkPalette::ARTCRAFT.text_disabled,
+        icon: SuiteDarkPalette::ARTCRAFT.text,
+        icon_accent: SuiteDarkPalette::ARTCRAFT.accent,
         icon_point: Color32::from_rgb(0xf0, 0x7a, 0x3a),
-        accent: Color32::from_rgb(0x2D, 0x81, 0xFF),
-        on_accent: Color32::from_rgb(0x06, 0x06, 0x07),
+        accent: SuiteDarkPalette::ARTCRAFT.accent,
+        on_accent: SuiteDarkPalette::ARTCRAFT.on_accent,
         selection: Color32::from_rgb(0x4a, 0x8f, 0xff),
         hover: Color32::from_rgb(0x9c, 0xc6, 0xff),
         grip: Color32::from_rgb(0x2f, 0x6b, 0xff),
@@ -163,16 +164,16 @@ impl Tokens {
         window_stroke: Color32::from_rgb(0x6f, 0xa8, 0xff),
         crossing_stroke: Color32::from_rgb(0x7f, 0xe0, 0x7f),
         cmd_bg: Color32::from_rgba_premultiplied(0x34, 0x3c, 0x4a, 0xf0),
-        toggle_on: Color32::from_rgb(0x2D, 0x81, 0xFF),
-        field: Color32::from_rgb(0x06, 0x06, 0x07),
-        select_bg: Color32::from_rgb(0x20, 0x3B, 0x65),
+        toggle_on: SuiteDarkPalette::ARTCRAFT.accent,
+        field: SuiteDarkPalette::ARTCRAFT.input,
+        select_bg: SuiteDarkPalette::ARTCRAFT.selection,
         canvas_ink: Color32::from_rgb(0xa3, 0xaa, 0xb4),
         cmd_history: Color32::from_rgba_unmultiplied_const(0x2a, 0x30, 0x3a, 170),
-        cmd_border: Color32::from_rgb(0x77, 0x78, 0x7C),
-        cmd_keyword: Color32::from_rgb(0x59, 0xA7, 0xFF),
-        cmd_keyword_hover: Color32::from_rgb(0x32, 0x33, 0x37),
-        list_bg: Color32::from_rgb(0x10, 0x10, 0x14),
-        list_row: Color32::from_rgb(0x1E, 0x1F, 0x22),
+        cmd_border: SuiteDarkPalette::ARTCRAFT.border_strong,
+        cmd_keyword: SuiteDarkPalette::ARTCRAFT.accent_hover,
+        cmd_keyword_hover: SuiteDarkPalette::ARTCRAFT.hover,
+        list_bg: SuiteDarkPalette::ARTCRAFT.panel,
+        list_row: SuiteDarkPalette::ARTCRAFT.raised,
         warn: Color32::from_rgb(0xff, 0xd0, 0x80),
         crosshair: Color32::from_rgb(0xe8, 0xe8, 0xe8),
         paper: Color32::WHITE,
@@ -653,7 +654,7 @@ fn visuals(theme: Theme) -> Visuals {
     v.widgets.hovered.bg_fill = t.control_hover;
     v.widgets.hovered.weak_bg_fill = t.control_hover;
     if theme == Theme::Dark {
-        v.widgets.hovered.bg_stroke.color = Color32::from_rgb(0x74, 0xAA, 0xFF);
+        v.widgets.hovered.bg_stroke.color = SuiteDarkPalette::ARTCRAFT.focus;
     }
     v.widgets.active.bg_fill = t.accent;
     v.widgets.active.weak_bg_fill = t.accent;
@@ -690,6 +691,77 @@ pub fn apply(ctx: &egui::Context, theme: Theme, follow_system: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_dark_adapter_maps_ui_roles_without_recoloring_drafting() {
+        let suite = super::SuiteDarkPalette::ARTCRAFT;
+        let dark = super::Tokens::DARK;
+        for (actual, expected) in [
+            (dark.chrome, suite.chrome),
+            (dark.chrome_dark, suite.window),
+            (dark.panel, suite.panel),
+            (dark.tab_active, suite.raised),
+            (dark.control, suite.raised),
+            (dark.control_hover, suite.hover),
+            (dark.border, suite.border),
+            (dark.text, suite.text),
+            (dark.text_dim, suite.text_secondary),
+            (dark.text_faint, suite.text_disabled),
+            (dark.icon, suite.text),
+            (dark.icon_accent, suite.accent),
+            (dark.accent, suite.accent),
+            (dark.on_accent, suite.on_accent),
+            (dark.toggle_on, suite.accent),
+            (dark.field, suite.input),
+            (dark.select_bg, suite.selection),
+            (dark.cmd_border, suite.border_strong),
+            (dark.cmd_keyword, suite.accent_hover),
+            (dark.cmd_keyword_hover, suite.hover),
+            (dark.list_bg, suite.panel),
+            (dark.list_row, suite.raised),
+        ] {
+            assert_eq!(actual, expected);
+        }
+        let rgb = |v: u32| egui::Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
+        for (actual, expected) in [
+            (dark.canvas, 0x22282f),
+            (dark.grid_minor, 0x29303a),
+            (dark.grid_major, 0x313945),
+            (dark.axis_x, 0x562829),
+            (dark.axis_y, 0x284a2e),
+            (dark.selection, 0x4a8fff),
+            (dark.hover, 0x9cc6ff),
+            (dark.grip, 0x2f6bff),
+            (dark.grip_hot, 0xff3b3b),
+            (dark.grip_dyn, 0x26c6e8),
+            (dark.snap, 0x2fd062),
+            (dark.compare_this, 0x4cd97b),
+            (dark.compare_other, 0xff5c5c),
+            (dark.compare_area, 0xffb43c),
+            (dark.crosshair, 0xe8e8e8),
+            (dark.warn, 0xffd080),
+        ] {
+            assert_eq!(actual, rgb(expected));
+        }
+        assert_eq!(dark.paper, egui::Color32::WHITE);
+        let visuals = super::visuals(super::Theme::Dark);
+        assert_eq!(visuals.selection.bg_fill, suite.selection);
+        assert_eq!(visuals.widgets.hovered.bg_stroke.color, suite.focus);
+        assert_eq!(visuals.widgets.active.fg_stroke.color, suite.on_accent);
+        assert_eq!(visuals.widgets.active.bg_fill, suite.accent);
+        let light = super::Tokens::LIGHT;
+        assert_eq!(light.chrome, rgb(0xe4e7eb));
+        assert_eq!(light.panel, rgb(0xeef0f3));
+        assert_eq!(light.accent, rgb(0x2f7cf6));
+        assert_eq!(light.select_bg, rgb(0xb6d3fb));
+        let light_visuals = super::visuals(super::Theme::Light);
+        assert_eq!(light_visuals.selection.bg_fill, light.select_bg);
+        assert_eq!(light_visuals.widgets.active.bg_fill, light.accent);
+        assert_eq!(light_visuals.widgets.active.fg_stroke.color, light.on_accent);
+        assert_eq!(super::ThemePref::System.resolve(Some(super::Theme::Light)), super::Theme::Light);
+        assert_eq!(super::ThemePref::System.resolve(Some(super::Theme::Dark)), super::Theme::Dark);
+        assert_eq!(super::ThemePref::System.resolve(None), super::SYSTEM_FALLBACK);
+    }
+
     #[test]
     fn artcraft_dark_roles_preserve_drafting_and_light() {
         let dark = super::Tokens::DARK;
