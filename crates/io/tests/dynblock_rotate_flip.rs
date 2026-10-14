@@ -172,6 +172,42 @@ fn an_angle_by_increments_marks_its_stops_round_the_circle() {
 }
 
 #[test]
+fn a_rotation_grip_off_the_radius_stays_where_its_grip_object_is() {
+    // The grip object a quarter turn round from the radius' end (as AutoCAD saves blocks whose
+    // grip was moved there): the circle is drawn there and turns with the angle, and dragging
+    // it turns the block by the cursor's turn, not to the cursor's direction.
+    let src = include_str!("data/dynblock_symbol.txt")
+        .replace("\r\n", "\n")
+        .replace("100 AcDbBlockGrip\n91 0\n92 0\n1010 2\n1020 0\n", "100 AcDbBlockGrip\n91 0\n92 0\n1010 0\n1020 2\n");
+    let (mut d, r) = symbol_from(&src);
+    let at = |d: &Drawing| grips(d, r).into_iter().find(|g| g.shape == GripShape::Rotation).map(|g| g.at).unwrap();
+    assert!(near(at(&d), (100.0, 102.0)), "{:?}", at(&d));
+    // Dropped where it is: no turn.
+    drag_grip(&mut d, r, 15, GripPart::End, Vec2::new(100.0, 102.0)).unwrap();
+    assert!(props(&d, r).contains(&("Angle1".to_string(), "0".to_string())), "{:?}", props(&d, r));
+    // A quarter turn further round: Angle1 90, and the grip is there.
+    drag_grip(&mut d, r, 15, GripPart::End, Vec2::new(98.0, 100.0)).unwrap();
+    assert!(props(&d, r).contains(&("Angle1".to_string(), "90".to_string())), "{:?}", props(&d, r));
+    assert!(near(at(&d), (98.0, 100.0)), "{:?}", at(&d));
+}
+
+#[test]
+fn an_angle_shows_and_is_typed_as_the_drawing_measures_angles() {
+    // Angles measured clockwise from north (ANGBASE 90°, ANGDIR 1): AutoCAD shows Angle1 0 as
+    // 90 and 0.5 rad as 61.35, and a typed angle is read the same way.
+    let (mut d, r) = symbol();
+    d.header.set_f64("ANGBASE", std::f64::consts::FRAC_PI_2);
+    d.header.set_i64("ANGDIR", 1);
+    assert!(props(&d, r).contains(&("Angle1".to_string(), "90".to_string())), "{:?}", props(&d, r));
+    // 60 shown is 30° counterclockwise: the grip turns from (102, 100) to there.
+    set_property(&mut d, r, "Angle1", "60").unwrap();
+    assert!(props(&d, r).contains(&("Angle1".to_string(), "60".to_string())), "{:?}", props(&d, r));
+    let at = grips(&d, r).into_iter().find(|g| g.shape == GripShape::Rotation).map(|g| g.at).unwrap();
+    let want = (100.0 + 2.0 * 30f64.to_radians().cos(), 100.0 + 2.0 * 30f64.to_radians().sin());
+    assert!(near(at, want), "{at:?} vs {want:?}");
+}
+
+#[test]
 fn bad_angles_and_states_change_nothing() {
     let (mut d, r) = symbol();
     let before = d.clone();
