@@ -186,7 +186,7 @@ pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     if tags > max_tags {
         return Err(DxfError::TooLarge { tags, limit: max_tags });
     }
-    parse_ascii_with_limit(&codepage::decode_ascii_file(bytes), max_tags, tags)
+    parse_ascii_with_limit(&codepage::decode_ascii_file(bytes), max_tags)
 }
 
 /// The four hex digits of a `\U+XXXX` escape starting at `chars[i]`, if there is one.
@@ -258,17 +258,12 @@ fn unescape_unicode(s: &str) -> String {
 }
 
 pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
-    let tags = text.lines().count().div_ceil(2);
-    if tags > MAX_TAGS {
-        return Err(DxfError::TooLarge { tags, limit: MAX_TAGS });
-    }
-    parse_ascii_with_limit(text, MAX_TAGS, tags)
+    parse_ascii_with_limit(text, MAX_TAGS)
 }
 
 #[allow(clippy::while_let_loop)]
-fn parse_ascii_with_limit(text: &str, max_tags: usize, capacity: usize) -> Result<Vec<Tag>> {
-    // The checked line count bounds this allocation and avoids doubling a large tag buffer.
-    let mut tags = Vec::with_capacity(capacity);
+fn parse_ascii_with_limit(text: &str, max_tags: usize) -> Result<Vec<Tag>> {
+    let mut tags = Vec::new();
     let mut lines = text.lines().enumerate();
     loop {
         let Some((ln, code_line)) = lines.next() else { break };
