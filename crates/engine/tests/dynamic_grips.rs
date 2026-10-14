@@ -88,3 +88,18 @@ fn a_grip_drag_previews_the_reference_and_takes_a_point_or_a_distance() {
     assert!(s.start_dyn_grip(h, 1, GripPart::At).is_err());
     assert!(s.start_dyn_grip(h, 2, GripPart::Base).is_err());
 }
+
+#[test]
+fn a_grip_drag_previews_the_reference_in_its_own_colours() {
+    // The reference on layer Doors: the preview's block objects (on layer 0 in the block) draw on
+    // Doors as the reference does, not in the preview colour; the rubber band is the current
+    // layer's.
+    let (mut s, h) = session();
+    s.doc_mut().unwrap().modify_entity(h, |e| e.common.layer = "Doors".into()).unwrap();
+    s.start_dyn_grip(h, 2, GripPart::End).unwrap();
+    let preview = s.preview(Vec2::new(132.0, 0.0));
+    let (band, block) = preview.split_last().unwrap();
+    assert!(!block.is_empty());
+    assert!(block.iter().all(|e| e.common.layer == "Doors"), "{:?}", block.iter().map(|e| &e.common.layer).collect::<Vec<_>>());
+    assert_eq!(band.common.layer, "0");
+}
