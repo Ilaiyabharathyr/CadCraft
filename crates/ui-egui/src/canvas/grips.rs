@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use cadcraft_doc::{Drawing, Handle};
 use egui::epaint::{RectShape, TessellationOptions, Tessellator};
-use egui::{Color32, Mesh, Pos2, Rect, Stroke, StrokeKind, vec2};
+use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, vec2};
 
 use super::Xf;
 use crate::theme::Tokens;
 
 const MAX_BYTES: usize = 128 << 20;
-type Key = (u64, u64, Vec<Handle>, Xf, f32, f32, TessellationOptions);
+type Key = (u64, u64, Xf, f32, f32, TessellationOptions);
 
 struct Mark {
     grip: (Handle, usize),
@@ -23,13 +23,36 @@ struct Mark {
 #[derive(Default)]
 pub(super) struct Cache {
     key: Option<Key>,
+    selection: Vec<Handle>,
     mesh: Option<Arc<Mesh>>,
     marks: Vec<Mark>,
 }
 
 impl Cache {
+    pub(super) fn paint(
+        &mut self,
+        d: &Drawing,
+        uid: u64,
+        revision: u64,
+        sel: &[Handle],
+        xf: Xf,
+        gs: f32,
+        painter: &Painter,
+        hot: &[(Handle, usize)],
+        hover: Option<Pos2>,
+    ) {
+        if let Some(mesh) = self.mesh(d, uid, revision, sel, xf, gs, painter.ctx(), hot, hover) {
+            painter.add(Shape::Mesh(mesh));
+        } else {
+            let t = Tokens::get();
+            for (grip, rect) in rectangles(d, sel, xf, gs) {
+                painter.rect(rect, 0.0, fill(grip, rect, &t, hot, hover), border(), StrokeKind::Middle);
+            }
+        }
+    }
+
     /// None above the memory budget: use the existing uncached drawing path, keeping all grips.
-    pub(super) fn mesh(
+    fn mesh(
         &mut self,
         d: &Drawing,
         uid: u64,
@@ -41,53 +64,34 @@ impl Cache {
         hot: &[(Handle, usize)],
         hover: Option<Pos2>,
     ) -> Option<Arc<Mesh>> {
-        let key = (uid, revision, sel.iter().take(200).copied().collect(), xf, gs, ctx.pixels_per_point(), ctx.tessellation_options(|o| *o));
+        let sel = sel.get(..sel.len().min(200)).unwrap_or_default();
+        let key = (uid, revision, xf, gs, ctx.pixels_per_point(), ctx.tessellation_options(|o| *o));
         let t = Tokens::get();
-        if self.key.as_ref() != Some(&key) {
-            *self = Self::default();
+        if self.key.as_ref() != Some(&key) || self.selection != sel {
+            *self = Self { key: Some(key), selection: sel.to_vec(), ..Self::default() };
             let mut mesh = Mesh::default();
-            let mut tess = Tessellator::new(key.5, key.6, [1, 1], Vec::new());
+            let mut tess = Tessellator::new(key.4, key.5, [1, 1], Vec::new());
             tess.set_clip_rect(xf.rect);
-            for h in sel.iter().take(200) {
-                let Some(e) = d.entity(*h) else { continue };
-                for (i, g) in e.kind.grips().into_iter().enumerate() {
-                    let p = xf.to_screen(g);
-                    if !xf.rect.contains(p) {
-                        continue;
-                    }
-                    let r = Rect::from_center_size(p, vec2(gs * 2.0, gs * 2.0));
-                    let start = mesh.vertices.len();
-                    tess.tessellate_rect(
-                        &RectShape::new(r, 0.0, t.grip, Stroke::new(1.0, Color32::from_rgb(0x10, 0x30, 0x80)), StrokeKind::Middle),
-                        &mut mesh,
-                    );
-                    let fill = start..mesh.vertices.len();
-                    self.marks.push(Mark { grip: (*h, i), rect: r, fill, color: t.grip });
-                    let bytes = mesh
-                        .vertices
-                        .capacity()
-                        .saturating_mul(std::mem::size_of::<egui::epaint::Vertex>())
-                        .saturating_add(mesh.indices.capacity().saturating_mul(std::mem::size_of::<u32>()))
-                        .saturating_add(self.marks.capacity().saturating_mul(std::mem::size_of::<Mark>()));
-                    if bytes > MAX_BYTES {
-                        *self = Self::default();
-                        self.key = Some(key);
-                        return None;
-                    }
+            for (grip, rect) in rectangles(d, sel, xf, gs) {
+                let start = mesh.vertices.len();
+                tess.tessellate_rect(&RectShape::new(rect, 0.0, t.grip, border(), StrokeKind::Middle), &mut mesh);
+                self.marks.push(Mark { grip, rect, fill: start..mesh.vertices.len(), color: t.grip });
+                let bytes = mesh
+                    .vertices
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<egui::epaint::Vertex>())
+                    .saturating_add(mesh.indices.capacity().saturating_mul(std::mem::size_of::<u32>()))
+                    .saturating_add(self.marks.capacity().saturating_mul(std::mem::size_of::<Mark>()));
+                if bytes > MAX_BYTES {
+                    self.marks = Vec::new();
+                    return None;
                 }
             }
             self.mesh = Some(Arc::new(mesh));
-            self.key = Some(key);
         }
         let mesh = self.mesh.as_mut()?;
         for mark in &mut self.marks {
-            let color = if hot.contains(&mark.grip) {
-                t.grip_hot
-            } else if hover.is_some_and(|p| mark.rect.expand(2.0).contains(p)) {
-                Color32::from_rgb(0xff, 0x7f, 0x9f)
-            } else {
-                t.grip
-            };
+            let color = fill(mark.grip, mark.rect, &t, hot, hover);
             if color != mark.color {
                 for v in Arc::make_mut(mesh).vertices.get_mut(mark.fill.clone()).unwrap_or(&mut []) {
                     if v.color == mark.color {
@@ -101,12 +105,34 @@ impl Cache {
     }
 }
 
+fn rectangles<'a>(d: &'a Drawing, sel: &'a [Handle], xf: Xf, gs: f32) -> impl Iterator<Item = ((Handle, usize), Rect)> + 'a {
+    sel.iter().take(200).filter_map(move |h| Some((*h, d.entity(*h)?))).flat_map(move |(h, e)| {
+        e.kind.grips().into_iter().enumerate().filter_map(move |(i, g)| {
+            let p = xf.to_screen(g);
+            xf.rect.contains(p).then(|| ((h, i), Rect::from_center_size(p, vec2(gs * 2.0, gs * 2.0))))
+        })
+    })
+}
+
+fn border() -> Stroke {
+    Stroke::new(1.0, Color32::from_rgb(0x10, 0x30, 0x80))
+}
+
+fn fill(grip: (Handle, usize), rect: Rect, t: &Tokens, hot: &[(Handle, usize)], hover: Option<Pos2>) -> Color32 {
+    if hot.contains(&grip) {
+        t.grip_hot
+    } else if hover.is_some_and(|p| rect.expand(2.0).contains(p)) {
+        Color32::from_rgb(0xff, 0x7f, 0x9f)
+    } else {
+        t.grip
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cadcraft_doc::{Common, EntityKind, LwPolyline, Space};
     use cadcraft_geom::{PolyVertex, Vec2};
-    use egui::Shape;
 
     fn contour(n: u32) -> (Drawing, Handle) {
         let mut d = Drawing::new_metric();

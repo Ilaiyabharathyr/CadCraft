@@ -1752,30 +1752,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && let Ok(st) = app.session.state()
     {
         let gs = app.session.settings.gripsize as f32;
-        if let Some(mesh) = app.canvas.grips.mesh(&st.doc, st.uid, st.revision, &sel, xf, gs, ui.ctx(), &app.canvas.hot_grips, hover_pos) {
-            painter.add(Shape::Mesh(mesh));
-        } else {
-            for h in sel.iter().take(200) {
-                if let Some(e) = st.doc.entity(*h) {
-                    for (gi, g) in e.kind.grips().into_iter().enumerate() {
-                        let sp = xf.to_screen(g);
-                        if rect.contains(sp) {
-                            let r = Rect::from_center_size(sp, vec2(gs * 2.0, gs * 2.0));
-                            let hot = app.canvas.hot_grips.contains(&(*h, gi));
-                            let warm = !hot && hover_pos.is_some_and(|hp| r.expand(2.0).contains(hp));
-                            let fill = if hot {
-                                t.grip_hot
-                            } else if warm {
-                                Color32::from_rgb(0xff, 0x7f, 0x9f)
-                            } else {
-                                t.grip
-                            };
-                            painter.rect(r, 0.0, fill, Stroke::new(1.0, Color32::from_rgb(0x10, 0x30, 0x80)), egui::StrokeKind::Middle);
-                        }
-                    }
-                }
-            }
-        }
+        app.canvas.grips.paint(&st.doc, st.uid, st.revision, &sel, xf, gs, &painter, &app.canvas.hot_grips, hover_pos);
         crate::dyngrips::draw(app, &painter, &xf, rect, hover_pos);
     } else {
         app.canvas.grips = grips::Cache::default();

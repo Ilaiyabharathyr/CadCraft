@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (bounded grip meshes reused across pointer frames for dense selections) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (shared grip painting and selection snapshots reused on unchanged frames) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
 
 The hardware AutoCAD uses and how CADCraft compares, per platform. Work items:
 [gaps.md](gaps.md#hardware).
@@ -88,7 +88,10 @@ revision, selection, view, DPI, grip size and tessellation settings invalidate t
 deselection releases it. A selection above the budget uses the uncached path, without dropping
 grips or retrying the allocation every frame. Fill and border are one egui rectangle, keeping
 pixel rounding and antialiasing. Hot/hover colours and editing indices are tested against the
-uncached rectangles, including overlapping grips at four DPI settings.
+uncached rectangles, including overlapping grips at four DPI settings. Both paths now share
+the rectangle traversal, fill colours and border. The canvas delegates this drawing to the
+cache module, and unchanged frames compare a borrowed selection slice instead of allocating
+a new selection vector.
 
 For the twelve largest contours of the same DWG, selected simultaneously in the same view,
 five pointer moves gave median internal UI CPU work of 17.84 → 7.70 ms and median control-channel
@@ -101,6 +104,7 @@ claim unlimited selection sizes or universal crash freedom.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Cached and uncached grip drawing share rectangle traversal and styles; unchanged frames reuse the selection snapshot. Existing colour, DPI, edit-invalidation and oversized-cache regressions retained |
 | 2026-10-14 | minor | Bounded grip meshes and one rectangle per marker; twelve-contour local UI CPU median 17.84 → 7.70 ms, unchanged grip indices and four-DPI colour regressions |
 | 2026-10-14 | minor | Borrowed DXF sections/records; local 40.9 MB DWG peak RSS median 2.40 → 1.43 GB, preserving imported summaries |
 | 2026-10-14 | minor | Dense contour grips generated once per call, preserving editing indices; selected-contour UI CPU median 705.24 → 1.80 ms in a local 40.9 MB DWG; synthetic regressions and CLI grip timing |

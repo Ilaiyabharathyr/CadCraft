@@ -134,34 +134,17 @@ impl ParaProps {
                 in_tabs = false;
             }
             match key {
-                'i' => {
+                'i' | 'l' | 'r' | 'b' | 'a' => {
                     if let Some(v) = units(rest) {
-                        self.first = v;
-                        self.set_units(0, relative);
-                    }
-                }
-                'l' => {
-                    if let Some(v) = units(rest) {
-                        self.left = v.max(0.0);
-                        self.set_units(1, relative);
-                    }
-                }
-                'r' => {
-                    if let Some(v) = units(rest) {
-                        self.right = v.max(0.0);
-                        self.set_units(2, relative);
-                    }
-                }
-                'b' => {
-                    if let Some(v) = units(rest) {
-                        self.before = v.max(0.0);
-                        self.set_units(4, relative);
-                    }
-                }
-                'a' => {
-                    if let Some(v) = units(rest) {
-                        self.after = v.max(0.0);
-                        self.set_units(5, relative);
+                        let (value, bit) = match key {
+                            'i' => (&mut self.first, 0),
+                            'l' => (&mut self.left, 1),
+                            'r' => (&mut self.right, 2),
+                            'b' => (&mut self.before, 4),
+                            _ => (&mut self.after, 5),
+                        };
+                        *value = if key == 'i' { v } else { v.max(0.0) };
+                        self.set_units(bit, relative);
                     }
                 }
                 'q' => {
