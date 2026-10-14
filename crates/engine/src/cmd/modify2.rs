@@ -2002,9 +2002,16 @@ pub(crate) fn trim_other(k: &EntityKind, cut: &[Segment], pick: Vec2) -> Result<
             // As in AutoCAD, a piece with two ends is a line and an unbounded one a ray (#1235).
             let xline = matches!(k, EntityKind::XLine(_));
             let (base, dir) = (rl.base.xy(), rl.dir.xy().normalized());
-            let far = Segment::Line(Line::new(if xline { base - dir * 1e8 } else { base }, base + dir * 1e8));
-            let mut ts: Vec<f64> =
-                cut.iter().flat_map(|c| intersect_ext(&far, c, false)).map(|x| (x - base).dot(dir)).filter(|t| xline || *t > 1e-9).collect();
+            // An xline is cut as two half-lines from its base: a segment starting 1e8 away puts
+            // the cut points ~1e-8 off, enough for a later TRIM to see the edge again.
+            let sides: &[f64] = if xline { &[1e8, -1e8] } else { &[1e8] };
+            let mut ts: Vec<f64> = sides
+                .iter()
+                .map(|far| Segment::Line(Line::new(base, base + dir * *far)))
+                .flat_map(|half| cut.iter().flat_map(move |c| intersect_ext(&half, c, false)))
+                .map(|x| (x - base).dot(dir))
+                .filter(|t| xline || *t > 1e-9)
+                .collect();
             ts.sort_by(f64::total_cmp);
             let tp = (pick - base).dot(dir);
             let lo = ts.iter().copied().rfind(|t| *t < tp);

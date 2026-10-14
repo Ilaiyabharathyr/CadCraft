@@ -1120,17 +1120,36 @@ const CHAMFER_LINES_ONLY: &str =
 fn as_line(e: &Entity) -> Option<Line> {
     match &e.kind {
         EntityKind::Line(l) => Some(Line::new(l.a.xy(), l.b.xy())),
-        EntityKind::Ray(r) => Some(unbounded_line(r, false)),
-        EntityKind::XLine(r) => Some(unbounded_line(r, true)),
+        EntityKind::Ray(r) | EntityKind::XLine(r) => Some(half_line(r, Some(true))),
         _ => None,
     }
 }
 
-/// A ray or xline as a line whose far ends lie beyond any corner, so that FILLET and CHAMFER
-/// keep the picked side; `unbounded_after_fillet` makes the unbounded ends rays again.
-fn unbounded_line(r: &cadcraft_doc::RayLine, xline: bool) -> Line {
+/// Both objects as lines for FILLET and CHAMFER, an xline as the half-line from its base towards
+/// the side picked of the corner: a line starting 1e8 away puts the corner ~1e-8 off.
+fn fillet_pair(e1: &Entity, p1: Vec2, e2: &Entity, p2: Vec2) -> Option<(Line, Line)> {
+    let (l1, l2) = (as_line(e1)?, as_line(e2)?);
+    let Some((x, _, _)) = line_line_infinite(l1.a, l1.b, l2.a, l2.b) else { return Some((l1, l2)) };
+    let side = |e: &Entity, l: Line, p: Vec2| match &e.kind {
+        EntityKind::XLine(r) => {
+            let t = r.dir.xy().dot(p - x);
+            half_line(r, (t != 0.0).then_some(t > 0.0))
+        }
+        _ => l,
+    };
+    Some((side(e1, l1, p1), side(e2, l2, p2)))
+}
+
+/// A ray or xline as a line from its base whose far end lies beyond any corner, so that FILLET
+/// and CHAMFER keep the picked side; `unbounded_after_fillet` makes the unbounded ends rays
+/// again. With no side (a pick on the corner itself), both far ends.
+fn half_line(r: &cadcraft_doc::RayLine, forward: Option<bool>) -> Line {
     let (base, dir) = (r.base.xy(), r.dir.xy().normalized());
-    Line::new(if xline { base - dir * 1e8 } else { base }, base + dir * 1e8)
+    match forward {
+        Some(true) => Line::new(base, base + dir * 1e8),
+        Some(false) => Line::new(base, base - dir * 1e8),
+        None => Line::new(base - dir * 1e8, base + dir * 1e8),
+    }
 }
 
 /// Fillet (or chamfer) two lines. `p1`/`p2` mark the kept side of each line.
@@ -1149,7 +1168,7 @@ pub(crate) fn fillet_lines(
     let d = s.doc()?;
     let e1 = d.entity(h1).map(|e| (**e).clone()).ok_or_else(|| EngineError::Other("no such object".into()))?;
     let e2 = d.entity(h2).map(|e| (**e).clone()).ok_or_else(|| EngineError::Other("no such object".into()))?;
-    let (Some(l1), Some(l2)) = (as_line(&e1), as_line(&e2)) else {
+    let Some((l1, l2)) = fillet_pair(&e1, p1, &e2, p2) else {
         if chamfer.is_none() {
             return super::modify2::fillet_curves(s, h1, p1, h2, p2, radius);
         }
@@ -2715,21 +2734,18 @@ fn fillet_corner(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, r:
     let d = s.doc()?;
     let k1 = d.entity(h1).map(|e| e.kind.clone());
     let k2 = d.entity(h2).map(|e| e.kind.clone());
+    let pair = || fillet_pair(d.entity(h1)?, p1, d.entity(h2)?, p2);
     let chamfer = match cut {
         None => None,
         Some(c) => {
-            let l = |h| d.entity(h).and_then(|e| as_line(e)).ok_or_else(|| EngineError::Other(CHAMFER_LINES_ONLY.into()));
-            let (l1, l2) = (l(h1)?, l(h2)?);
+            let (l1, l2) = pair().ok_or_else(|| EngineError::Other(CHAMFER_LINES_ONLY.into()))?;
             let (x, _, _) = line_line_infinite(l1.a, l1.b, l2.a, l2.b).ok_or_else(|| EngineError::Other("Lines are parallel.".into()))?;
             // The direction along each line towards its picked side.
             let dir = |l: &Line, p: Vec2| if (l.a - x).dot(p - x) >= (l.b - x).dot(p - x) { (l.a - x).normalized() } else { (l.b - x).normalized() };
             Some(c.distances(dir(&l1, p1), dir(&l2, p2))?)
         }
     };
-    let corner = {
-        let l = |h| d.entity(h).and_then(|e| as_line(e));
-        l(h1).zip(l(h2)).and_then(|(l1, l2)| line_line_infinite(l1.a, l1.b, l2.a, l2.b)).map(|(x, _, _)| x)
-    };
+    let lines = pair().is_some();
     let made = fillet_lines(s, h1, p1, h2, p2, r, chamfer)?;
     if !trim {
         let doc = s.doc_mut()?;
@@ -2738,10 +2754,10 @@ fn fillet_corner(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, r:
                 doc.modify_entity(h, |e| e.kind = k)?;
             }
         }
-    } else if let Some(x) = corner {
-        for (h, p, k) in [(h1, p1, &k1), (h2, p2, &k2)] {
+    } else if lines {
+        for (h, k) in [(h1, &k1), (h2, &k2)] {
             if let Some(k) = k {
-                unbounded_after_fillet(s, h, p, x, k)?;
+                unbounded_after_fillet(s, h, k)?;
             }
         }
     }
@@ -2749,22 +2765,18 @@ fn fillet_corner(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, r:
 }
 
 /// What FILLET or CHAMFER leaves of a ray or xline `was`, trimmed by `fillet_lines` as a line to
-/// the corner `x`: a ray where the picked side is unbounded, as in AutoCAD (#1235).
-fn unbounded_after_fillet(s: &mut Session, h: Handle, pick: Vec2, x: Vec2, was: &EntityKind) -> Result<()> {
-    let (whole, xline) = match was {
-        EntityKind::Ray(r) => (unbounded_line(r, false), false),
-        EntityKind::XLine(r) => (unbounded_line(r, true), true),
-        _ => return Ok(()),
-    };
-    // The end `fillet_lines` kept: the far one on the picked side.
-    let forward = (whole.b - whole.a).dot(pick - x) > 0.0;
-    if !forward && !xline {
-        return Ok(());
-    }
-    let kept = if forward { whole.b } else { whole.a };
+/// the corner: a ray where the picked side is unbounded, as in AutoCAD (#1235).
+fn unbounded_after_fillet(s: &mut Session, h: Handle, was: &EntityKind) -> Result<()> {
+    let (EntityKind::Ray(r) | EntityKind::XLine(r)) = was else { return Ok(()) };
+    // The far end `half_line` gave it, if `fillet_lines` kept one; a ray never has the backward one.
+    let far = [half_line(r, Some(true)).b, half_line(r, Some(false)).b];
     let doc = s.doc_mut()?;
     let Some(EntityKind::Line(l)) = doc.entity(h).map(|e| e.kind.clone()) else { return Ok(()) };
-    let t = if l.a.xy() == kept { l.b.xy() } else { l.a.xy() };
+    let (kept, t) = match (l.a.xy(), l.b.xy()) {
+        (a, b) if far.contains(&a) => (a, b),
+        (a, b) if far.contains(&b) => (b, a),
+        _ => return Ok(()),
+    };
     let ray = cadcraft_doc::RayLine { base: v3(t), dir: v3((kept - t).normalized()) };
     doc.modify_entity(h, |e| e.kind = EntityKind::Ray(ray))?;
     Ok(())

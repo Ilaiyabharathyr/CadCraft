@@ -123,3 +123,44 @@ fn extend_a_ray_moves_its_base_back_to_the_edge() {
     s.script("EXTEND 6,0\n\n").unwrap();
     assert_eq!(objects(&s), want(&[EDGE, "RAY (5.0, 0.0) (1.0, 0.0)"]));
 }
+
+/// An xline at 30 degrees through the origin and vertical lines at x = 123.456 and 200: values
+/// that are not binary fractions, so a cut point computed from far away shows its error.
+fn slanted(more: &str) -> Session {
+    let mut s = Session::new();
+    s.script(&format!("XLINE A 30 0,0\n\nLINE 123.456,-10 123.456,300\n\n{more}")).unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    s
+}
+
+/// The point of the 30 degree xline at `x`, as command-line text.
+fn on_slant(x: f64) -> String {
+    format!("{x},{}", x * 30f64.to_radians().tan())
+}
+
+fn ray_base_x(s: &Session) -> f64 {
+    let rays: Vec<f64> = s.doc().unwrap().model.iter().filter_map(|e| if let EntityKind::Ray(k) = &e.kind { Some(k.base.x) } else { None }).collect();
+    assert_eq!(rays.len(), 1, "{:?}", objects(s));
+    rays[0]
+}
+
+#[test]
+fn an_xline_cut_keeps_the_cut_point_exact() {
+    let mut s = slanted("");
+    s.script(&format!("TRIM {}\n\n", on_slant(100.0))).unwrap();
+    assert!((ray_base_x(&s) - 123.456).abs() < 1e-10, "{}", ray_base_x(&s) - 123.456);
+    let mut s = slanted("");
+    s.script(&format!("FILLET R 0 {} 123.456,0\n", on_slant(200.0))).unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert!((ray_base_x(&s) - 123.456).abs() < 1e-10, "{}", ray_base_x(&s) - 123.456);
+}
+
+#[test]
+fn a_ray_left_by_trim_does_not_see_its_own_edge_as_a_cut() {
+    // The ray left by the first TRIM starts on the edge: the second TRIM must cut only at x = 200,
+    // not also leave a sliver between the ray's base and the edge it was trimmed to.
+    let mut s = slanted("LINE 200,-10 200,300\n\n");
+    s.script(&format!("TRIM {}\n\nTRIM {}\n\n", on_slant(100.0), on_slant(160.0))).unwrap();
+    assert!(s.running.is_none(), "{}", s.prompt_text());
+    assert_eq!(objects(&s).len(), 3, "{:?}", objects(&s));
+}
