@@ -1,5 +1,5 @@
 //! TRIM, FILLET and CHAMFER on rays and xlines (#1235): what is left of a ray with a finite end
-//! is a line, what is left of an xline is a ray, as in AutoCAD.
+//! is a line, what is left of an xline is a ray, as in AutoCAD. EXTEND moves a ray's base (#1236).
 
 use cadcraft_engine::Session;
 use cadcraft_engine::doc::EntityKind;
@@ -113,4 +113,13 @@ fn chamfer_a_ray_and_an_xline() {
         run("XLINE H 0,0", "CHAMFER D 2 2 5,0 10,5\n"),
         want(&["LINE (10.0, 2.0) (10.0, 12.0)", "LINE (8.0, 0.0) (10.0, 2.0)", "RAY (8.0, 0.0) (-1.0, 0.0)"])
     );
+}
+
+#[test]
+fn extend_a_ray_moves_its_base_back_to_the_edge() {
+    assert_eq!(run("RAY 15,0 16,0", "EXTEND 16,0\n\n"), want(&[EDGE, "RAY (10.0, 0.0) (1.0, 0.0)"]));
+    // The edge lies ahead of the base, not behind it: the ray is left alone.
+    let mut s = session("RAY 5,0 6,0");
+    s.script("EXTEND 6,0\n\n").unwrap();
+    assert_eq!(objects(&s), want(&[EDGE, "RAY (5.0, 0.0) (1.0, 0.0)"]));
 }

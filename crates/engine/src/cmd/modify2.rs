@@ -2053,6 +2053,18 @@ pub(crate) fn extend_other(k: &EntityKind, cut: &[Segment], pick: Vec2) -> Resul
             Ok(ellipse_kind(&if from_end { Ellipse { end: t, ..ge } } else { Ellipse { start: t, ..ge } }))
         }
         EntityKind::Spline(sp) => curve_edits::extend_spline(sp, cut, pick),
+        EntityKind::Ray(rl) => {
+            // A ray's one end is its base: EXTEND moves it back to the nearest edge (#1236).
+            let (base, dir) = (rl.base.xy(), rl.dir.xy().normalized());
+            let back = Segment::Line(Line::new(base, base - dir * 1e8));
+            let np = cut
+                .iter()
+                .flat_map(|c| intersect_ext(&back, c, false))
+                .filter(|x| (*x - base).dot(dir) < -1e-9)
+                .min_by(|x, y| x.dist(base).total_cmp(&y.dist(base)))
+                .ok_or_else(|| other("Object does not intersect an edge."))?;
+            Ok(EntityKind::Ray(cadcraft_doc::RayLine { base: v3(np), dir: rl.dir }))
+        }
         _ => Err(other("Cannot extend that object.")),
     }
 }
