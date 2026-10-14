@@ -139,6 +139,33 @@ fn viewport_ids_survive_dwg_and_the_paper_viewport_stays_implicit() {
     assert!(!text.contains("PAPERVIEW"));
     assert_eq!(viewport_ids(&cadcraft_io::read_dxf(text.as_bytes()).unwrap().layouts[0]), [1, 2]);
 }
+
+/// Each layout has its own printable origin. Changing the paper's margins/offset must not
+/// translate its entities, and neither DXF nor native DWG saving may reset those offsets.
+#[test]
+fn two_layouts_keep_distinct_paper_origins_without_moving_viewports() {
+    let mut d = Drawing::new_metric();
+    d.layouts[0].page.margins_mm = [6.35; 4];
+    d.layouts[1].page.margins_mm = [7.5, 20.0, 7.5, 20.0];
+    d.layouts[1].page.offset_mm = [3.0, -2.0];
+    let mut handles = Vec::new();
+    for name in d.layouts.iter().map(|l| l.name.clone()).collect::<Vec<_>>() {
+        handles.push(d.add(&Space::Paper(name), Common::default(), viewport(2)).unwrap());
+    }
+    for back in [cadcraft_io::read_dxf(cadcraft_io::write_dxf(&d).as_bytes()).unwrap(), through_dwg(&d)] {
+        for (before, after) in d.layouts.iter().zip(&back.layouts) {
+            assert_eq!(after.page, before.page);
+            assert_eq!(cadcraft_render::sheet(&back, &after.name), cadcraft_render::sheet(&d, &before.name));
+        }
+        for h in &handles {
+            assert_eq!(back.entity(*h).unwrap().kind, d.entity(*h).unwrap().kind);
+        }
+        let first = cadcraft_render::sheet(&back, &back.layouts[0].name).unwrap();
+        let second = cadcraft_render::sheet(&back, &back.layouts[1].name).unwrap();
+        assert_eq!(first.origin, Vec2::new(-6.35, -6.35));
+        assert_eq!(second.origin, Vec2::new(-23.0, -5.5));
+    }
+}
 /// Foreign class versions are interpreted against the source DXF version before the
 /// bridge converts them to the requested DWG. A 2013 record labelled 2000 was shifted twice.
 #[test]

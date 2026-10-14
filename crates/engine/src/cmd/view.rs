@@ -296,7 +296,7 @@ fn run_layout_set(s: &mut Session, p: &Value) -> Result<Value> {
         && let Some(sheet) = cadcraft_render::sheet(&st.doc, n)
     {
         // Default paper view: the sheet.
-        st.set_view_quiet(View { center: sheet.size * 0.5, height: sheet.size.y.max(sheet.size.x / aspect) * 1.15 });
+        st.set_view_quiet(View { center: sheet.bounds().center(), height: sheet.size.y.max(sheet.size.x / aspect) * 1.15 });
     }
     s.touch();
     ok()

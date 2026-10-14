@@ -735,6 +735,8 @@ pub struct PageSetup {
     pub width_mm: f64,
     pub height_mm: f64,
     pub margins_mm: [f64; 4],
+    /// Plot origin offset from the printable area's lower-left corner, in millimetres.
+    pub offset_mm: [f64; 2],
     pub landscape: bool,
     /// "layout" | "extents" | "display" | "window" | "limits".
     pub plot_area: String,
@@ -760,6 +762,7 @@ impl Default for PageSetup {
             width_mm: 215.9,
             height_mm: 279.4,
             margins_mm: [6.35, 6.35, 6.35, 6.35],
+            offset_mm: [0.0; 2],
             landscape: true,
             plot_area: "layout".into(),
             scale_to_fit: false,

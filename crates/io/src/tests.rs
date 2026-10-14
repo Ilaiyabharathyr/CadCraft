@@ -512,8 +512,8 @@ fn pdf_layout_one_to_one_with_viewport() {
     let content = check_pdf(&bytes);
     // ANSI A landscape (inches → points).
     assert_eq!(media_box(&bytes), (792.0, 612.0));
-    // Viewport border at 1:1: x from 1in to 9in = 72pt..648pt.
-    assert!(content.contains("72 72 m") || content.contains("72 72 l"), "{content}");
+    // Viewport border at 1:1, plus the quarter-inch device margin: 90pt..666pt.
+    assert!(content.contains("90 90 m") || content.contains("90 90 l"), "{content}");
     // Lineweights on: default 0.25 mm = 0.709 pt.
     assert!(content.contains("0.709 w"));
     let off = plot(&d, &paper, &serde_json::json!({"lineweights": false})).unwrap();

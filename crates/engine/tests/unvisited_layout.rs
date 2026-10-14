@@ -81,7 +81,7 @@ fn configured_empty_layouts_are_left_empty_and_custom_pages_are_kept() {
     assert!(d.layouts[0].entities.is_empty());
     let sheet = cadcraft_render::sheet(d, "Layout1").unwrap();
     assert!(sheet.size.x > sheet.size.y);
-    assert_eq!(s.state().unwrap().paper_view().center, sheet.size * 0.5);
+    assert_eq!(s.state().unwrap().paper_view().center, sheet.bounds().center());
     assert!(s.state().unwrap().paper_view().height >= sheet.size.x * 1000.0 / 900.0, "the entire sheet fits a narrow drawing area");
     // Previous saved/serialized drawings have no initialization field and remain configured.
     let value = serde_json::to_value(Drawing::new_metric().layouts[0].clone()).unwrap();

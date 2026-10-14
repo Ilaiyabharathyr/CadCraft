@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (source-version DWG bridge, millimetre sheets and native overall-view links) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (layout printable origins and plot-offset round trips) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -178,10 +178,19 @@ versions across R2013/R2018. The class-version and viewport-link regressions fai
 fix. A local 40.9 MB topographic copy now opens in AutoCAD 2026 without the former two-error
 warning, and AUDIT reports zero errors. No drawing or audit output is committed.
 
+Layout sheets now use the printable origin, with landscape margins rotated into drawing
+coordinates, instead of fixing the physical paper corner at zero. PLOTSETTINGS 46/47
+offsets survive DXF/DWG saving. The canvas, initial paper view, implicit overall viewport,
+PDF/PNG/SVG plots and preview share that origin without translating drawing entities.
+Synthetic two-layout round trips and PDF/PNG coordinate checks cover distinct margins and
+positive/negative offsets. A local two-layout drawing resaved by AutoCAD reproduces the
+previous displacement; no reference drawing is committed.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Layout paper and printable origins agree with rotated device margins; per-layout plot offsets survive DXF/DWG, with shared screen/plot placement and synthetic two-layout/PDF/PNG regressions |
 | 2026-10-14 | minor | Source-version DWG bridge preserves foreign class semantics; native sheet units are millimetres and layouts reference their overall viewport. Synthetic regressions and zero-error AutoCAD opening/audit of a local topographic copy |
 | 2026-10-14 | minor | Imported font paths resolve to installed file names while the stored style remains intact; PDF glyph aliases retain original Unicode through ActualText, with synthetic font/round-trip tests and local Poppler extraction |
 | 2026-10-14 | minor | Top-view direction checks are scale invariant: a long vertical vector with numerical noise still applies the WCS target. A local 40.9 MB topographic drawing's whole model is correctly centred in its layout; synthetic direction-length cases survive DXF/DWG saving. No reference files committed |

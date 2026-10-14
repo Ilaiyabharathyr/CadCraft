@@ -2226,6 +2226,8 @@ fn page_setup(t: &T) -> PageSetup {
         p.height_mm = w.max(h);
     }
     p.margins_mm = [mm(40, p.margins_mm[0]), mm(41, p.margins_mm[1]), mm(42, p.margins_mm[2]), mm(43, p.margins_mm[3])];
+    let offset = |code| t.f(code).filter(|v| v.is_finite() && v.abs() <= 100_000.0).unwrap_or(0.0);
+    p.offset_mm = [offset(46), offset(47)];
     // Plot rotation 1 or 3 turns the media a quarter turn; media defined wider than tall is
     // already landscape.
     let rotated = matches!(t.i(73), Some(1 | 3));
