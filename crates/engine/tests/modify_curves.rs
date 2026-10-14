@@ -568,6 +568,42 @@ fn fillet_and_chamfer_a_line_into_a_polyline() {
 }
 
 #[test]
+fn a_line_crossing_a_polyline_end_segment_keeps_the_picked_side() {
+    // An L whose end segment a line crosses. Picked right of the crossing, the polyline keeps that
+    // part and drops the rest past the crossing, the line's picked part joining it (as AutoCAD).
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 1.0], [0.0, 0.0], [4.0, 0.0]], false);
+    let l = h(&s.execute("line", &json!({ "points": [[2, -1], [2, 1.5]] })).unwrap());
+    s.execute("fillet", &json!({ "h1": l, "p1": [2, 1], "h2": p, "p2": [3, 0], "radius": 0 })).unwrap();
+    assert_eq!(verts(&s, &p), vec![(2.0, 1.5, 0.0), (2.0, 0.0, 0.0), (4.0, 0.0, 0.0)]);
+    assert_eq!(count(&s), 1);
+    // Picked left of it, the L stays and the line's lower part joins.
+    let mut s = Session::new();
+    let p = pline(&mut s, &[[0.0, 1.0], [0.0, 0.0], [4.0, 0.0]], false);
+    let _ = h(&s.execute("line", &json!({ "points": [[2, -1], [2, 1.5]] })).unwrap());
+    s.script("FILLET R 0 1,0 2,-0.5\n").unwrap();
+    assert_eq!(verts(&s, &p), vec![(0.0, 1.0, 0.0), (0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, -1.0, 0.0)]);
+}
+
+#[test]
+fn fillet_joins_two_polylines_at_their_end_segments() {
+    // A wall line short of the corner and an open outline ending under it: one polyline, as AutoCAD.
+    let mut s = Session::new();
+    let a = pline(&mut s, &[[0.0, 8.55], [0.0, 1.25]], false);
+    let b = pline(&mut s, &[[0.15, 0.15], [1.0, 0.15], [1.0, 0.0], [0.0, 0.0]], false);
+    s.execute("fillet", &json!({ "h1": a, "p1": [0, 5], "h2": b, "p2": [0.5, 0], "radius": 0 })).unwrap();
+    assert_eq!(verts(&s, &a), vec![(0.0, 8.55, 0.0), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.15, 0.0), (0.15, 0.15, 0.0)]);
+    assert_eq!(count(&s), 1);
+    // The other picked first keeps its direction; a radius rounds the corner.
+    let mut s = Session::new();
+    let a = pline(&mut s, &[[0.0, 8.0], [0.0, 2.0]], false);
+    let b = pline(&mut s, &[[5.0, 5.0], [5.0, 0.0], [1.0, 0.0]], false);
+    s.execute("fillet", &json!({ "h1": b, "p1": [3, 0], "h2": a, "p2": [0, 5], "radius": 1 })).unwrap();
+    assert_eq!(verts(&s, &b), vec![(5.0, 5.0, 0.0), (5.0, 0.0, 0.0), (1.0, 0.0, -quarter()), (0.0, 1.0, 0.0), (0.0, 8.0, 0.0)]);
+    assert_eq!(count(&s), 1);
+}
+
+#[test]
 fn polyline_fillets_at_the_command_line_and_with_no_trim() {
     let mut s = Session::new();
     let p = pline(&mut s, &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false);
