@@ -1115,13 +1115,22 @@ pub(crate) fn extend(s: &mut Session, h: Handle, pick: Vec2, edges: Edges) -> Re
 
 /// What CHAMFER takes (as in AutoCAD, not arcs, circles, ellipses or splines).
 const CHAMFER_LINES_ONLY: &str =
-    "CHAMFER works on lines (and polylines with the Polyline option); it cannot chamfer arcs, circles, ellipses or splines.";
+    "CHAMFER works on lines, rays and xlines (and polylines with the Polyline option); it cannot chamfer arcs, circles, ellipses or splines.";
 
 fn as_line(e: &Entity) -> Option<Line> {
     match &e.kind {
         EntityKind::Line(l) => Some(Line::new(l.a.xy(), l.b.xy())),
+        EntityKind::Ray(r) => Some(unbounded_line(r, false)),
+        EntityKind::XLine(r) => Some(unbounded_line(r, true)),
         _ => None,
     }
+}
+
+/// A ray or xline as a line whose far ends lie beyond any corner, so that FILLET and CHAMFER
+/// keep the picked side; `unbounded_after_fillet` makes the unbounded ends rays again.
+fn unbounded_line(r: &cadcraft_doc::RayLine, xline: bool) -> Line {
+    let (base, dir) = (r.base.xy(), r.dir.xy().normalized());
+    Line::new(if xline { base - dir * 1e8 } else { base }, base + dir * 1e8)
 }
 
 /// Fillet (or chamfer) two lines. `p1`/`p2` mark the kept side of each line.
@@ -2717,6 +2726,10 @@ fn fillet_corner(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, r:
             Some(c.distances(dir(&l1, p1), dir(&l2, p2))?)
         }
     };
+    let corner = {
+        let l = |h| d.entity(h).and_then(|e| as_line(e));
+        l(h1).zip(l(h2)).and_then(|(l1, l2)| line_line_infinite(l1.a, l1.b, l2.a, l2.b)).map(|(x, _, _)| x)
+    };
     let made = fillet_lines(s, h1, p1, h2, p2, r, chamfer)?;
     if !trim {
         let doc = s.doc_mut()?;
@@ -2725,8 +2738,36 @@ fn fillet_corner(s: &mut Session, h1: Handle, p1: Vec2, h2: Handle, p2: Vec2, r:
                 doc.modify_entity(h, |e| e.kind = k)?;
             }
         }
+    } else if let Some(x) = corner {
+        for (h, p, k) in [(h1, p1, &k1), (h2, p2, &k2)] {
+            if let Some(k) = k {
+                unbounded_after_fillet(s, h, p, x, k)?;
+            }
+        }
     }
     Ok(made)
+}
+
+/// What FILLET or CHAMFER leaves of a ray or xline `was`, trimmed by `fillet_lines` as a line to
+/// the corner `x`: a ray where the picked side is unbounded, as in AutoCAD (#1235).
+fn unbounded_after_fillet(s: &mut Session, h: Handle, pick: Vec2, x: Vec2, was: &EntityKind) -> Result<()> {
+    let (whole, xline) = match was {
+        EntityKind::Ray(r) => (unbounded_line(r, false), false),
+        EntityKind::XLine(r) => (unbounded_line(r, true), true),
+        _ => return Ok(()),
+    };
+    // The end `fillet_lines` kept: the far one on the picked side.
+    let forward = (whole.b - whole.a).dot(pick - x) > 0.0;
+    if !forward && !xline {
+        return Ok(());
+    }
+    let kept = if forward { whole.b } else { whole.a };
+    let doc = s.doc_mut()?;
+    let Some(EntityKind::Line(l)) = doc.entity(h).map(|e| e.kind.clone()) else { return Ok(()) };
+    let t = if l.a.xy() == kept { l.b.xy() } else { l.a.xy() };
+    let ray = cadcraft_doc::RayLine { base: v3(t), dir: v3((kept - t).normalized()) };
+    doc.modify_entity(h, |e| e.kind = EntityKind::Ray(ray))?;
+    Ok(())
 }
 
 /// CHAMFER Polyline: cut every corner between two straight segments of a 2D polyline. Returns

@@ -1998,6 +1998,32 @@ pub(crate) fn trim_other(k: &EntityKind, cut: &[Segment], pick: Vec2) -> Result<
             }
             Ok(v)
         }
+        EntityKind::Ray(rl) | EntityKind::XLine(rl) => {
+            // As in AutoCAD, a piece with two ends is a line and an unbounded one a ray (#1235).
+            let xline = matches!(k, EntityKind::XLine(_));
+            let (base, dir) = (rl.base.xy(), rl.dir.xy().normalized());
+            let far = Segment::Line(Line::new(if xline { base - dir * 1e8 } else { base }, base + dir * 1e8));
+            let mut ts: Vec<f64> =
+                cut.iter().flat_map(|c| intersect_ext(&far, c, false)).map(|x| (x - base).dot(dir)).filter(|t| xline || *t > 1e-9).collect();
+            ts.sort_by(f64::total_cmp);
+            let tp = (pick - base).dot(dir);
+            let lo = ts.iter().copied().rfind(|t| *t < tp);
+            let hi = ts.iter().copied().find(|t| *t > tp);
+            if lo.is_none() && hi.is_none() {
+                return Err(none());
+            }
+            let ray = |p: Vec2, d: Vec2| EntityKind::Ray(cadcraft_doc::RayLine { base: v3(p), dir: v3(d) });
+            let mut v = Vec::new();
+            match lo {
+                Some(t) if xline => v.push(ray(base + dir * t, -dir)),
+                Some(t) => v.push(line(base, base + dir * t)),
+                None => {}
+            }
+            if let Some(t) = hi {
+                v.push(ray(base + dir * t, dir));
+            }
+            Ok(v)
+        }
         _ => Err(other("Cannot trim that object.")),
     }
 }
