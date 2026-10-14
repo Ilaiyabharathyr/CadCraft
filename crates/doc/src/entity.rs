@@ -1406,11 +1406,14 @@ impl EntityKind {
                 vec![c, c + mj, c + mn, c - mj, c - mn]
             }
             EntityKind::LwPolyline(p) => {
-                let mut g: Vec<Vec2> = Vec::new();
                 let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
+                // Segment generation walks every vertex. Do it once, rather than once for
+                // each grip: dense contour lines otherwise take quadratic time per frame.
+                let segments = pl.segments();
+                let mut g = Vec::with_capacity(p.vertices.len().saturating_add(segments.len()));
                 for (i, v) in p.vertices.iter().enumerate() {
                     g.push(v.p);
-                    if let Some(s) = pl.segments().get(i) {
+                    if let Some(s) = segments.get(i) {
                         g.push(s.mid());
                     }
                 }
