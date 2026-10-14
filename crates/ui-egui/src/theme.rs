@@ -88,6 +88,8 @@ pub struct Tokens {
     pub icon_accent: Color32,
     pub icon_point: Color32,
     pub accent: Color32,
+    /// Block-editor marks on the drawing, independent of the interface accent.
+    pub editor_accent: Color32,
     /// Foreground for controls filled with the blue accent.
     pub on_accent: Color32,
     pub selection: Color32,
@@ -151,6 +153,7 @@ impl Tokens {
         icon_accent: SuiteDarkPalette::ARTCRAFT.accent,
         icon_point: Color32::from_rgb(0xf0, 0x7a, 0x3a),
         accent: SuiteDarkPalette::ARTCRAFT.accent,
+        editor_accent: Color32::from_rgb(0x3d, 0x8b, 0xfd),
         on_accent: SuiteDarkPalette::ARTCRAFT.on_accent,
         selection: Color32::from_rgb(0x4a, 0x8f, 0xff),
         hover: Color32::from_rgb(0x9c, 0xc6, 0xff),
@@ -196,6 +199,7 @@ impl Tokens {
         icon_accent: Color32::from_rgb(0x1b, 0x6f, 0xd6),
         icon_point: Color32::from_rgb(0xd3, 0x5a, 0x1c),
         accent: Color32::from_rgb(0x2f, 0x7c, 0xf6),
+        editor_accent: Color32::from_rgb(0x2f, 0x7c, 0xf6),
         on_accent: Color32::from_rgb(0x1d, 0x23, 0x2b),
         cmd_bg: Color32::from_rgba_unmultiplied_const(0xf9, 0xfa, 0xfb, 0xf0),
         toggle_on: Color32::from_rgb(0x2f, 0x7c, 0xf6),
@@ -723,6 +727,7 @@ mod tests {
         }
         let rgb = |v: u32| egui::Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
         for (actual, expected) in [
+            (dark.editor_accent, 0x3d8bfd),
             (dark.canvas, 0x22282f),
             (dark.grid_minor, 0x29303a),
             (dark.grid_major, 0x313945),
@@ -752,6 +757,7 @@ mod tests {
         assert_eq!(light.chrome, rgb(0xe4e7eb));
         assert_eq!(light.panel, rgb(0xeef0f3));
         assert_eq!(light.accent, rgb(0x2f7cf6));
+        assert_eq!(light.editor_accent, rgb(0x2f7cf6));
         assert_eq!(light.select_bg, rgb(0xb6d3fb));
         let light_visuals = super::visuals(super::Theme::Light);
         assert_eq!(light_visuals.selection.bg_fill, light.select_bg);
