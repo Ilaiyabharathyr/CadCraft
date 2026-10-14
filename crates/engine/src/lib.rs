@@ -1397,6 +1397,17 @@ impl Session {
         }
     }
 
+    /// What the running command would place for `typed`, the line being typed at its text
+    /// prompt ([`Interactive::typing`]), with the current properties.
+    pub fn typing_preview(&self, typed: &str) -> Vec<Entity> {
+        let Some(r) = self.running.as_ref() else { return Vec::new() };
+        if typed.is_empty() || self.lisp_prompt().is_some() {
+            return Vec::new();
+        }
+        let common = self.current_common();
+        r.machine.typing(self, typed).into_iter().map(|k| Entity { handle: Handle(0), common: common.clone(), kind: k }).collect()
+    }
+
     /// Rubber-band preview entities for the cursor.
     pub fn preview(&self, cursor: Vec2) -> Vec<Entity> {
         let common = self.current_common();
