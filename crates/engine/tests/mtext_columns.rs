@@ -133,7 +133,7 @@ fn scale_scales_multileader_text_width_and_columns() {
         spline: false,
         block: None,
     };
-    let h = s.add_entity(EntityKind::MLeader(ml)).unwrap();
+    let h = s.add_entity(EntityKind::MLeader(Box::new(ml))).unwrap();
     s.execute("scale", &json!({ "handles": [h.hex()], "base": [0, 0], "factor": 2 })).unwrap();
     let t = match &s.doc().unwrap().entity(h).unwrap().kind {
         EntityKind::MLeader(m) => m.text.clone().unwrap(),

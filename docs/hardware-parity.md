@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (shared grip painting and selection snapshots reused on unchanged frames) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (compact entity representation reduces retained drawing memory) · **Target:** Autodesk AutoCAD 2027 (Mac and Windows)
 
 The hardware AutoCAD uses and how CADCraft compares, per platform. Work items:
 [gaps.md](gaps.md#hardware).
@@ -100,10 +100,41 @@ it is not an end-to-end input benchmark or an AutoCAD comparison. Every selected
 editable. Dense overlapping grips still produce substantial GPU/egui work; this does not
 claim unlimited selection sizes or universal crash freedom.
 
+## Retained drawing memory
+
+On 2026-10-15, the public `CADCraft_Heavy_Engineering_sample.dwg` (47,844,432 bytes,
+985,250 model/paper entities, plus block contents) was measured on an Apple M4 with 16 GB RAM.
+Dimensions, attribute definitions, multileaders and tables now keep their large payloads in
+`Box` allocations. A simple entity occupies 368 rather than 672 inline bytes on this target;
+these four variants require one additional allocation, so annotation-only drawings may not
+benefit. JSON and file representations remain unchanged. A synthetic size-budget regression
+keeps each entity's inline data below 400 bytes.
+
+Three fresh processes per version, interleaved before/after/after/before/before/after, compare
+this change with `27c4060`. A reader-only probe retains the drawing after `cadcraft_io::read`
+returns, with no canvas, takes three one-second RSS samples, and reports their median. The
+table reports medians across the three processes (decimal GB). Separate release CLI `info`
+processes use `/usr/bin/time -l` for import/inspection peaks and wall time.
+
+| Public heavy DWG | Before | After |
+|---|---:|---:|
+| Resident memory after import, reader probe | 2.37 GB | 2.12 GB |
+| CLI import/inspection peak footprint | 2.78 GB | 2.31 GB |
+| CLI import/inspection maximum RSS | 2.41 GB | 2.65 GB |
+| CLI import/inspection wall time | 8.43 s | 7.98 s |
+
+Retained RSS falls by 245 MB (10.4%) in this local check. Maximum RSS remains variable and
+its median increases here; this does not establish a reduction in peak RSS. These are reader
+and CLI measurements, not desktop resident-memory or reference-machine targets. Existing
+full-document conversion buffers and renderer/GPU allocations remain separate costs.
+Imported summaries match exactly, and the exported DXF is byte-identical to the preceding
+version. The sample is used only locally and is not a repository fixture.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Four large annotation variants boxed; entity inline size 672 → 368 bytes on arm64, size-budget regression and public heavy-DWG retained RSS median 2.37 → 2.12 GB. Peak RSS improvement is not established |
 | 2026-10-14 | minor | Cached and uncached grip drawing share rectangle traversal and styles; unchanged frames reuse the selection snapshot. Existing colour, DPI, edit-invalidation and oversized-cache regressions retained |
 | 2026-10-14 | minor | Bounded grip meshes and one rectangle per marker; twelve-contour local UI CPU median 17.84 → 7.70 ms, unchanged grip indices and four-DPI colour regressions |
 | 2026-10-14 | minor | Borrowed DXF sections/records; local 40.9 MB DWG peak RSS median 2.40 → 1.43 GB, preserving imported summaries |
