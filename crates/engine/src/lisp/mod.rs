@@ -612,6 +612,8 @@ fn file_key(name: &str) -> String {
 }
 
 #[cfg(test)]
+mod curve_props;
+#[cfg(test)]
 mod curve_tests;
 #[cfg(test)]
 mod tests;

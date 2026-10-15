@@ -342,3 +342,104 @@ fn hostile_arguments_are_errors_not_crashes() {
     add(&mut s, "c", EntityKind::Circle(Circle { center: v3(0.0, 0.0, 0.0), radius: 0.0 }));
     is_t(&mut s, "(equal (vlax-curve-getClosestPointTo c '(3 4)) '(0.0 0.0 0.0) 1e-12)");
 }
+
+#[test]
+fn curves_through_entsel_ssget_and_the_lisp_command() {
+    let mut s = session();
+    let h = s.add_entity(EntityKind::Circle(Circle { center: v3(5.0, 5.0, 0.0), radius: 1.0 })).unwrap();
+    // A routine walking a selection set, as real ones do.
+    let code = "(setq ss (ssget \"X\" '((0 . \"CIRCLE\"))) tot 0.0 i 0)
+                (repeat (sslength ss) (setq e (ssname ss i) tot (+ tot (vlax-curve-getDistAtParam e (vlax-curve-getEndParam e))) i (1+ i)))
+                tot";
+    is_t(&mut s, &format!("(equal (progn {code}) (* 2 pi) 1e-12)"));
+    // Programmatically (scripts, the control channel, MCP): the same answer.
+    let r = s.execute("lisp", &serde_json::json!({"code": format!("(vlax-curve-getArea (handent \"{}\"))", h.hex())})).unwrap();
+    assert_eq!(r["value"], "3.14159", "{r}");
+    // An erased object is no longer a curve.
+    ok(&mut s, &format!("(setq c (handent \"{}\"))", h.hex()));
+    s.execute("erase", &serde_json::json!({"handles": [h.hex()]})).unwrap();
+    assert!(eval(&mut s, "(vlax-curve-getArea c)").is_err());
+    // vl-catch-all-apply turns the error into a value, as routines guard these calls.
+    assert_eq!(ok(&mut s, "(vl-catch-all-error-p (vl-catch-all-apply 'vlax-curve-getArea (list c)))"), "T");
+}
+
+#[test]
+fn getfiled_extensions_spaces_and_cancel() {
+    let mut s = session();
+    // The first of several extensions, with or without its dot; a name with spaces stays whole.
+    s.cmdline("(setq f (getfiled \"Save\" \"\" \"dwg;dxf\" 1))").unwrap();
+    s.cmdline("my plans/site plan").unwrap();
+    assert_eq!(to_text(&s.lisp_var("F"), true), "\"my plans/site plan.dwg\"");
+    s.cmdline("(setq f (getfiled \"Save\" \"\" \".csv\" 1))").unwrap();
+    s.cmdline("\"quoted name\"").unwrap();
+    assert_eq!(to_text(&s.lisp_var("F"), true), "\"quoted name.csv\"");
+    // A name with its own extension keeps it; "*" adds none.
+    s.cmdline("(setq f (getfiled \"Save\" \"\" \"dxf\" 1))").unwrap();
+    s.cmdline("report.txt").unwrap();
+    assert_eq!(to_text(&s.lisp_var("F"), true), "\"report.txt\"");
+    s.cmdline("(setq f (getfiled \"Save\" \"\" \"*\" 1))").unwrap();
+    s.cmdline("README").unwrap();
+    assert_eq!(to_text(&s.lisp_var("F"), true), "\"README\"");
+    // An existing file is found.
+    let dir = std::env::temp_dir().join(format!("cadcraft-getfiled-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("tool.lsp"), "(princ)").unwrap();
+    let base = dir.join("tool").to_string_lossy().replace('\\', "/");
+    s.cmdline("(setq f (getfiled \"Load\" \"\" \"lsp\" 0))").unwrap();
+    s.cmdline(&base).unwrap();
+    assert!(!s.lisp_running());
+    assert_eq!(to_text(&s.lisp_var("F"), false), format!("{base}.lsp"));
+    let _ = std::fs::remove_dir_all(&dir);
+    // Esc stops the routine, as at any prompt; *error* hears "Function cancelled".
+    s.cmdline("(defun *error* (m) (setq why m))").unwrap();
+    s.cmdline("(setq f (getfiled \"Open\" \"\" \"lsp\" 0))").unwrap();
+    assert!(s.lisp_running());
+    s.cancel();
+    assert!(!s.lisp_running());
+    assert_eq!(to_text(&s.lisp_var("WHY"), true), "\"Function cancelled\"");
+    // A programmatic run has no one to ask: nil.
+    assert_eq!(ok(&mut s, "(getfiled \"Open\" \"\" \"lsp\" 0)"), "nil");
+}
+
+#[test]
+fn osnap_modes_and_heights() {
+    let mut s = session();
+    add(&mut s, "c", EntityKind::Circle(Circle { center: v3(20.0, 0.0, 0.0), radius: 3.0 }));
+    // A 3D point keeps its height; a 2D one gives a 2D point.
+    is_t(&mut s, "(equal (osnap '(23.0001 0.0001 7.0) \"_qua\") '(23.0 0.0 7.0) 1e-9)");
+    is_t(&mut s, "(equal (osnap '(23.0001 0.0001) \"QUA\") '(23.0 0.0) 1e-9)");
+    is_t(&mut s, "(equal (osnap '(20.0001 0.0001) \"_cen\") '(20.0 0.0) 1e-9)");
+    assert_eq!(ok(&mut s, "(osnap '(23 0) \"_non\")"), "nil", "NONE snaps to nothing");
+    assert_eq!(ok(&mut s, "(osnap '(23 0) \"\")"), "nil");
+}
+
+#[test]
+fn files_with_spaces_and_unicode_names() {
+    let mut s = session();
+    let dir = std::env::temp_dir().join(format!("cadcraft lisp ünï {}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let d = dir.to_string_lossy().replace('\\', "/");
+    assert_eq!(ok(&mut s, &format!("(vl-mkdir \"{d}\")")), "T");
+    ok(&mut s, &format!("(setq f (open \"{d}/plan é.txt\" \"w\")) (write-line \"x\" f) (close f)"));
+    assert_eq!(ok(&mut s, &format!("(vl-directory-files \"{d}\" \"*.TXT\" 1)")), "(\"plan é.txt\")", "patterns ignore case");
+    assert_eq!(ok(&mut s, &format!("(vl-file-size \"{d}/plan é.txt\")")), "2");
+    assert_eq!(ok(&mut s, &format!("(vl-file-delete \"{d}/plan é.txt\")")), "T");
+    assert_eq!(ok(&mut s, &format!("(vl-directory-files \"{d}\" nil 1)")), "nil", "nothing left");
+    let _ = std::fs::remove_dir_all(&dir);
+    // The current folder lists without arguments.
+    assert!(ok(&mut s, "(listp (vl-directory-files))") == "T");
+    // getenv reaches the system's own variables.
+    assert_eq!(ok(&mut s, "(eq (type (getenv \"PATH\")) 'STR)"), "T");
+}
+
+#[test]
+fn new_functions_are_listed_and_print() {
+    let mut s = session();
+    for name in ["VLAX-CURVE-GETAREA", "VL-FILE-COPY", "GETFILED", "OSNAP", "GETENV", "BOOLE"] {
+        assert_eq!(ok(&mut s, &format!("(type {name})")), "SUBR", "{name}");
+        assert_eq!(ok(&mut s, &format!("(atoms-family 1 '(\"{name}\"))")), format!("(\"{name}\")"));
+    }
+    // write-char goes to the command line without a file.
+    ok(&mut s, "(write-char 65) (write-char 10)");
+    assert!(s.log.iter().any(|l| l.contains('A')), "{:?}", s.log);
+}

@@ -248,7 +248,7 @@ impl Curve {
                 if !(lo.is_finite() && hi.is_finite() && hi >= lo) {
                     return None;
                 }
-                let n = (sp.control.len().saturating_mul(128)).clamp(256, MAX_SAMPLES);
+                let n = (sp.control.len().saturating_mul(256)).clamp(1024, MAX_SAMPLES);
                 let pts: Vec<(f64, P3)> = (0..=n)
                     .map(|i| {
                         let t = lo + (hi - lo) * i as f64 / n as f64;
@@ -459,7 +459,16 @@ impl Curve {
                 let (c, ma, mi) = (e.center, e.major, e.minor());
                 (c.x * (p1.y - p0.y) - c.y * (p1.x - p0.x) + (ma.x * mi.y - ma.y * mi.x) * (t1 - t0)) / 2.0
             }
-            _ => self.pieces.iter().map(|p| p.seg.area_term()).sum(),
+            // Simpson's rule on the exact curve over each stretch: the chords of the flattening
+            // would cut a little off every bend.
+            Exact::Spline(_) => {
+                let f = |t: f64| match (self.point_at_param(t), self.derivs(t)) {
+                    (Some(p), Some((d, _))) => p[0] * d[1] - p[1] * d[0],
+                    _ => 0.0,
+                };
+                self.pieces.iter().map(|p| (p.p1 - p.p0) / 6.0 * (f(p.p0) + 4.0 * f((p.p0 + p.p1) / 2.0) + f(p.p1)) / 2.0).sum()
+            }
+            Exact::None => self.pieces.iter().map(|p| p.seg.area_term()).sum(),
         };
         if !self.closed
             && let (Some(s), Some(e)) = (self.point_at_param(self.start), self.point_at_param(self.end))
