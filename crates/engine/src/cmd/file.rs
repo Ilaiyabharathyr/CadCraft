@@ -64,6 +64,20 @@ pub type DeliverHook = fn(&str, &str, &[u8]) -> std::result::Result<(), String>;
 
 static DELIVER: OnceLock<DeliverHook> = OnceLock::new();
 
+/// Plot sheets of several drawings into one PDF, one page each: a `(drawing, space, plot
+/// options)` part per page, then the file-wide options. PUBLISH's combined file.
+pub type PlotBookHook = fn(&[(&Drawing, cadcraft_doc::Space, Value)], &Value) -> std::result::Result<Vec<u8>, String>;
+
+static PLOT_BOOK: OnceLock<PlotBookHook> = OnceLock::new();
+
+/// Install the host's combined-PDF plotter (optional: without one, PUBLISH can't combine).
+pub fn set_plot_book(h: PlotBookHook) {
+    let _ = PLOT_BOOK.set(h);
+}
+pub fn plot_book() -> Option<PlotBookHook> {
+    PLOT_BOOK.get().copied()
+}
+
 /// Install the host's file delivery (the web app: a browser download). Saving uses it on wasm;
 /// anything else that produces a file on the web (plots) can use [`deliver`] too.
 pub fn set_deliver(h: DeliverHook) {

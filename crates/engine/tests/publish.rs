@@ -1,26 +1,40 @@
 //! PUBLISH with a `sheets` list: sheets from open drawings and from drawing files (read for the
 //! run only), a page setup override per sheet that leaves the drawing as it was, file names from a
-//! pattern, one result per sheet, and a run that keeps going when one sheet fails.
+//! pattern, one result per sheet, and a run that keeps going when one sheet fails. Combining puts
+//! the sheets of any drawings in one PDF; SVG and PNG give a file per sheet.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use cadcraft_engine::Session;
-use cadcraft_engine::cmd::file::{IoHooks, base64_decode, set_io};
+use cadcraft_engine::cmd::file::{IoHooks, base64_decode, set_io, set_plot_book};
 use serde_json::{Value, json};
 
-/// Files this test's reader decoded.
-static READS: AtomicUsize = AtomicUsize::new(0);
+/// How often this test's reader decoded each file (tests run in parallel, so by file).
+static READS: Mutex<BTreeMap<String, usize>> = Mutex::new(BTreeMap::new());
+
+fn reads(name: &str) -> usize {
+    READS.lock().map(|r| r.get(name).copied().unwrap_or(0)).unwrap_or(0)
+}
 
 /// A plotter that echoes what it was asked to plot.
 fn echo_plot(_: &cadcraft_doc::Drawing, space: &cadcraft_doc::Space, opts: &Value) -> Result<Vec<u8>, String> {
     Ok(format!("%PDF-1.4 {space:?} {opts}").into_bytes())
 }
 
+/// A combined-PDF plotter that lists its pages: `%PDF book <n>: <sheet>, <sheet>…`.
+fn echo_book(parts: &[(&cadcraft_doc::Drawing, cadcraft_doc::Space, Value)], opts: &Value) -> Result<Vec<u8>, String> {
+    let pages: Vec<String> = parts.iter().map(|(_, space, o)| format!("{} {}", space.tab_name(), o["title"].as_str().unwrap_or(""))).collect();
+    Ok(format!("%PDF book {}: {} | {opts}", parts.len(), pages.join(", ")).into_bytes())
+}
+
 /// A reader for `*.sheets` files (a metric drawing with Layout1 and Layout2); anything else is
 /// unreadable.
 fn read(bytes: &[u8], name: &str) -> Result<cadcraft_doc::Drawing, String> {
     if name.ends_with(".sheets") && bytes == b"sheets" {
-        READS.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut r) = READS.lock() {
+            *r.entry(name.to_string()).or_default() += 1;
+        }
         Ok(cadcraft_doc::Drawing::new_metric())
     } else {
         Err("not a drawing".into())
@@ -29,6 +43,7 @@ fn read(bytes: &[u8], name: &str) -> Result<cadcraft_doc::Drawing, String> {
 
 fn session() -> Session {
     set_io(IoHooks { read, write: |_, _| Err("no writer in this test".into()), plot: Some(echo_plot) });
+    set_plot_book(echo_book);
     let mut s = Session::new();
     s.execute("line", &json!({"points": [[0, 0], [100, 0]]})).unwrap();
     s
@@ -130,7 +145,6 @@ fn sheets_come_from_open_drawings_and_files_without_opening_them() {
     let file = temp("files").join("site plan.sheets");
     std::fs::write(&file, b"sheets").unwrap();
     let path = file.to_string_lossy().to_string();
-    let reads = READS.load(Ordering::SeqCst);
     let r = s
         .execute(
             "publish",
@@ -143,7 +157,7 @@ fn sheets_come_from_open_drawings_and_files_without_opening_them() {
         .unwrap();
     assert_eq!(files(&r), ["Drawing1-Model.pdf", "site plan-Layout1.pdf", "site plan-Layout2.pdf"]);
     assert_eq!(r["sheets"][1]["drawing"], path);
-    assert_eq!(READS.load(Ordering::SeqCst) - reads, 1, "a file is read once per run");
+    assert_eq!(reads(&path), 1, "a file is read once per run");
     assert_eq!((s.docs.len(), s.active), (2, 1), "no drawing is opened and the current one stays current");
     let _ = std::fs::remove_file(file);
 }
@@ -226,4 +240,74 @@ fn bad_parameters_are_refused_before_anything_is_written() {
     assert_eq!(files(&r), ["{Layout1}.pdf"]);
     let opts = plotted(&r["sheets"][0]);
     assert!(opts.contains(r#""layers":false"#) && opts.contains(r#""text":"geometry""#), "{opts}");
+}
+
+#[test]
+fn combine_puts_sheets_of_several_drawings_in_one_pdf() {
+    let mut s = session();
+    let dir = temp("combined");
+    let file = dir.join("site.sheets");
+    std::fs::write(&file, b"sheets").unwrap();
+    let path = file.to_string_lossy().to_string();
+    let r = s
+        .execute(
+            "publish",
+            &json!({"sheets": [
+                {"layout": "Model"},
+                {"drawing": path, "layout": "Layout2", "pageSetup": {"paper": "A3"}},
+                {"layout": "Nope"},
+                {"drawing": path, "layout": "Layout1"},
+            ], "combine": true, "folder": dir.to_string_lossy(), "pdf": {"layers": false}}),
+        )
+        .unwrap();
+    let combined = &r["combined"];
+    assert_eq!((combined["file"].as_str(), combined["pages"].as_u64()), (Some("Drawing1.pdf"), Some(3)), "named after the first sheet's drawing");
+    let written = std::fs::read_to_string(combined["path"].as_str().unwrap()).unwrap();
+    assert!(written.starts_with("%PDF book 3: Model Drawing1 - Model, Layout2 site - Layout2, Layout1 site - Layout1"), "{written}");
+    assert!(written.contains(r#""layers":false"#), "file-wide PDF settings reach the plotter: {written}");
+    let pages: Vec<Option<u64>> = r["sheets"].as_array().unwrap().iter().map(|x| x["page"].as_u64()).collect();
+    assert_eq!(pages, [Some(1), Some(2), None, Some(3)]);
+    assert_eq!(r["sheets"][2]["ok"], false, "the missing layout is reported, the rest are combined");
+    assert_eq!((r["published"].as_u64(), r["failed"].as_u64()), (Some(3), Some(1)));
+    // A name pattern names the combined file too; without a folder it comes back as data.
+    let r =
+        s.execute("publish", &json!({"sheets": [{"layout": "Layout1"}, {"layout": "Layout2"}], "combine": true, "name": "{drawing} set"})).unwrap();
+    assert_eq!(r["combined"]["file"], "Drawing1 set.pdf");
+    assert!(plotted(&r["combined"]).starts_with("%PDF book 2"));
+    // Only PDFs combine; the older form doesn't.
+    for p in [
+        json!({"sheets": [{"layout": "Layout1"}], "combine": true, "to": "svg"}),
+        json!({"sheets": [{"layout": "Layout1"}], "combine": "yes"}),
+        json!({"layouts": ["Layout1"], "combine": true}),
+    ] {
+        assert!(s.execute("publish", &p).is_err(), "refused: {p}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn svg_and_png_give_a_file_per_sheet() {
+    let mut s = session();
+    for to in ["svg", "png"] {
+        let dir = temp(&format!("each-{to}"));
+        let r = s
+            .execute(
+                "publish",
+                &json!({"sheets": [{"layout": "Model"}, {"layout": "Layout1"}, {"layout": "Layout2"}], "to": to, "folder": dir.to_string_lossy()}),
+            )
+            .unwrap();
+        let expected: Vec<String> = ["Model", "Layout1", "Layout2"].iter().map(|l| format!("Drawing1-{l}.{to}")).collect();
+        assert_eq!(files(&r), expected);
+        let mut on_disk: Vec<String> =
+            std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        on_disk.sort();
+        let mut sorted = expected.clone();
+        sorted.sort();
+        assert_eq!(on_disk, sorted, "{to}: three files in the folder");
+        for sheet in r["sheets"].as_array().unwrap() {
+            let text = std::fs::read_to_string(sheet["path"].as_str().unwrap()).unwrap();
+            assert!(text.contains(&format!(r#""output":"{to}""#)), "{to}: the plotter's {to} output: {text}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

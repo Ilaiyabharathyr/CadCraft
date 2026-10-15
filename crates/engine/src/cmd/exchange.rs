@@ -17,7 +17,7 @@ use cadcraft_render::paper::{self, Sheet};
 use cadcraft_render::raster::{RasterOptions, View};
 use serde_json::{Value, json};
 
-use super::file::{base64_decode, base64_encode, io};
+use super::file::{base64_decode, base64_encode, io, plot_book};
 use super::*;
 use crate::{EngineError, Result, Session};
 
@@ -47,7 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])
-            .params("{sheets?: [{drawing?: open drawing index | file path (default: the current drawing; files are read for this run only, never opened), layout: name | \"Model\", pageSetup?: {paper?, width?, height?, landscape?, fit?, scale?, margins?, plotStyleTable?, lineweights?, plotTransparency?} (this run only; the drawing doesn't change)}] (default: Model if it has objects, then every layout in tab order), to?: pdf|svg|png, folder? (else returns base64 `data` per sheet), name?: pattern with {drawing} {sheet} {n} (default \"{drawing}-{sheet}\"), pdf?: {layers?, offLayers?, text?: text|geometry}, copies?: 1-100, stamp?: not available yet; older form: path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf), layouts?: [name | \"Model\"]} → {sheets: [{drawing, layout, ok, file, bytes, path? | data} | {drawing, layout, ok: false, error}], published, failed, copies, message}: a sheet that fails is reported and the rest still publish; an error only when none did")
+            .params("{sheets?: [{drawing?: open drawing index | file path (default: the current drawing; files are read for this run only, never opened), layout: name | \"Model\", pageSetup?: {paper?, width?, height?, landscape?, fit?, scale?, margins?, plotStyleTable?, lineweights?, plotTransparency?} (this run only; the drawing doesn't change)}] (default: Model if it has objects, then every layout in tab order), to?: pdf|svg|png, folder? (else returns base64 `data` per sheet), name?: pattern with {drawing} {sheet} {n} (default \"{drawing}-{sheet}\", or \"{drawing}\" when combining), combine?: one PDF with a page per sheet, from any drawings, pdf?: {layers?, offLayers?, text?: text|geometry}, copies?: 1-100, stamp?: not available yet; older form: path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf), layouts?: [name | \"Model\"]} → {sheets: [{drawing, layout, ok, file, bytes, path? | data} (combining: {drawing, layout, ok, page, file}) | {drawing, layout, ok: false, error}], combined?: {file, bytes, pages, path? | data}, published, failed, copies, message}: a sheet that fails is reported and the rest still publish; an error only when none did")
             .noundo(),
         CommandSpec::new("pdfbook", "Sheet Books to PDF...", run_pdfbook)
             .menu(&["File", "Sheet Books to PDF..."])
@@ -372,7 +372,9 @@ const MAX_NAME: usize = 200;
 /// The file name pattern when none is given: the drawing's name, then the sheet's.
 const DEFAULT_NAME: &str = "{drawing}-{sheet}";
 /// Parameters PUBLISH takes (anything else is refused, so a misspelt name is never ignored).
-const PUBLISH_KEYS: &[&str] = &["sheets", "to", "folder", "name", "pdf", "copies", "stamp", "path", "layouts"];
+const PUBLISH_KEYS: &[&str] = &["sheets", "to", "folder", "name", "combine", "pdf", "copies", "stamp", "path", "layouts"];
+/// The combined file's name pattern when none is given.
+const DEFAULT_COMBINED_NAME: &str = "{drawing}";
 /// What a sheet's `pageSetup` may change for one run.
 const SETUP_KEYS: &[&str] =
     &["paper", "width", "height", "landscape", "fit", "scale", "margins", "plotStyleTable", "lineweights", "plotTransparency"];
@@ -422,6 +424,8 @@ struct PublishOutput {
     /// PDF settings (`layers`, `offLayers`, `text`).
     pdf: serde_json::Map<String, Value>,
     copies: u64,
+    /// One PDF with a page per sheet, instead of a file per sheet.
+    combine: bool,
 }
 
 fn unknown_key(cmd: &str, v: &serde_json::Map<String, Value>, allowed: &[&str], what: &str) -> Result<()> {
@@ -675,30 +679,58 @@ fn publish_request(s: &Session, p: &Value) -> Result<(Vec<SheetRequest>, Publish
             .filter(|c| (1..=MAX_COPIES).contains(c))
             .ok_or_else(|| bad(cmd, format!("`copies` must be a whole number from 1 to {MAX_COPIES}")))?,
     };
+    let combine = match o.get("combine") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(cmd, "`combine` must be true or false")),
+    };
+    if combine && to != "pdf" {
+        return Err(bad(cmd, "only PDFs can be combined: use `to: \"pdf\"`, or one file per sheet for SVG and PNG"));
+    }
+    if combine && legacy {
+        return Err(bad(cmd, "`combine` goes with `sheets`, not the older `path` and `layouts`"));
+    }
+    // A combined file is named after its first sheet's drawing unless a pattern is given.
+    let name = if combine && o.get("name").is_none_or(Value::is_null) { DEFAULT_COMBINED_NAME.to_string() } else { name };
     match o.get("stamp") {
         None | Some(Value::Null) | Some(Value::Bool(false)) => {}
         Some(_) => return Err(bad(cmd, "sheet stamps are not available yet")),
     }
-    Ok((sheets, PublishOutput { to, folder, name, pdf, copies }))
+    Ok((sheets, PublishOutput { to, folder, name, pdf, copies, combine }))
 }
 
-/// Plot one sheet and write or return it. `files` holds the drawings read from paths so far
-/// (each file is read once per run, or its error kept); `used` the file names written so far.
-fn publish_sheet(
-    s: &Session,
-    files: &mut BTreeMap<String, std::result::Result<Drawing, String>>,
+/// One sheet ready to plot: its drawing, space and plot options.
+struct Prepared<'a> {
+    d: &'a Drawing,
+    space: Space,
+    /// The layout's own name (`Model` for model space).
+    layout: String,
+    /// The drawing's title, or the file's path.
+    title: String,
+    opts: Value,
+}
+
+/// Read each drawing file the sheets name, once; a file that can't be read keeps its error.
+fn read_sheet_files(sheets: &[SheetRequest]) -> BTreeMap<String, std::result::Result<Drawing, String>> {
+    let mut files = BTreeMap::new();
+    for sheet in sheets {
+        if let Source::File(path) = &sheet.source
+            && !files.contains_key(path)
+        {
+            files.insert(path.clone(), super::file::read_detached("publish", path).map_err(|e| error_text(&e)));
+        }
+    }
+    files
+}
+
+/// Find a sheet's drawing and layout and build its plot options.
+fn prepare<'a>(
+    s: &'a Session,
+    files: &'a BTreeMap<String, std::result::Result<Drawing, String>>,
     out: &PublishOutput,
     sheet: &SheetRequest,
-    n: usize,
-    used: &mut BTreeSet<String>,
-) -> Result<Value> {
+) -> Result<Prepared<'a>> {
     let cmd = "publish";
-    let hook = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
-    if let Source::File(path) = &sheet.source
-        && !files.contains_key(path)
-    {
-        files.insert(path.clone(), super::file::read_detached(cmd, path).map_err(|e| e.to_string()));
-    }
     let (d, title) = match &sheet.source {
         Source::Open(i) => {
             let ds = s.docs.get(*i).ok_or_else(|| bad(cmd, format!("there is no open drawing {i}")))?;
@@ -731,48 +763,106 @@ fn publish_sheet(
             }
         }
     }
-    let bytes = hook(d, &space, &opts).map_err(|e| bad(cmd, e))?;
-    let stem = render_name(&out.name, &drawing_stem(&title), &layout, n).map_err(|e| bad(cmd, e))?;
-    // Two sheets that would get one name (two drawings called Plan) get " (2)", " (3)"…
+    Ok(Prepared { d, space, layout, title, opts })
+}
+
+/// The file name for a sheet (or the combined file): the pattern, then " (2)", " (3)"… when an
+/// earlier file of the run took the name.
+fn unique_file(out: &PublishOutput, used: &mut BTreeSet<String>, title: &str, layout: &str, n: usize) -> Result<String> {
+    let stem = render_name(&out.name, &drawing_stem(title), layout, n).map_err(|e| bad("publish", e))?;
     let mut file = format!("{stem}.{}", out.to);
     let mut k = 2;
     while used.contains(&file.to_lowercase()) {
         file = format!("{stem} ({k}).{}", out.to);
         k += 1;
     }
-    let mut r = json!({ "drawing": title, "layout": layout, "ok": true, "file": file, "bytes": bytes.len(), "pages": 1 });
+    used.insert(file.to_lowercase());
+    Ok(file)
+}
+
+/// Write `bytes` as `file` in the run's folder, or return them as base64 `data`; adds `path` or
+/// `data` to `r`.
+fn deliver_file(out: &PublishOutput, file: &str, bytes: &[u8], r: &mut Value) -> Result<()> {
     match &out.folder {
         Some(folder) => {
-            let path = folder.join(&file).to_string_lossy().to_string();
-            super::layout::write_plot_file(cmd, &path, &bytes)?;
+            let path = folder.join(file).to_string_lossy().to_string();
+            super::layout::write_plot_file("publish", &path, bytes)?;
             r["path"] = json!(path);
         }
-        None => r["data"] = json!(base64_encode(&bytes)),
+        None => r["data"] = json!(base64_encode(bytes)),
     }
-    used.insert(file.to_lowercase());
-    Ok(r)
+    Ok(())
+}
+
+/// An error's message without the "invalid parameters for `publish`" frame.
+fn error_text(e: &EngineError) -> String {
+    match e {
+        EngineError::BadParams { msg, .. } => msg.clone(),
+        e => e.to_string(),
+    }
 }
 
 fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "publish";
     let (sheets, out) = publish_request(s, p)?;
-    let mut files = BTreeMap::new();
+    let plot = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
+    let book =
+        if out.combine { Some(plot_book().ok_or_else(|| bad(cmd, "combining sheets into one PDF is not available in this build"))?) } else { None };
+    let files = read_sheet_files(&sheets);
+    let label = |sheet: &SheetRequest| match &sheet.source {
+        Source::Open(i) => s.docs.get(*i).map_or_else(|| format!("drawing {i}"), |d| d.title.clone()),
+        Source::File(path) => path.clone(),
+    };
     let mut used = BTreeSet::new();
     let mut results = Vec::with_capacity(sheets.len());
     let mut failures = Vec::new();
-    for (i, sheet) in sheets.iter().enumerate() {
-        match publish_sheet(s, &mut files, &out, sheet, i + 1, &mut used) {
-            Ok(r) => results.push(r),
-            Err(e) => {
-                let drawing = match &sheet.source {
-                    Source::Open(i) => s.docs.get(*i).map_or_else(|| format!("drawing {i}"), |d| d.title.clone()),
-                    Source::File(path) => path.clone(),
-                };
-                let error = match e {
-                    EngineError::BadParams { msg, .. } => msg,
-                    e => e.to_string(),
-                };
-                failures.push(format!("{} ({drawing}): {error}", sheet.layout));
-                results.push(json!({ "drawing": drawing, "layout": sheet.layout, "ok": false, "error": error }));
+    let mut fail = |sheet: &SheetRequest, e: &EngineError, results: &mut Vec<Value>| {
+        let (drawing, error) = (label(sheet), error_text(e));
+        failures.push(format!("{} ({drawing}): {error}", sheet.layout));
+        results.push(json!({ "drawing": drawing, "layout": sheet.layout, "ok": false, "error": error }));
+    };
+    let mut combined = None;
+    match book {
+        None => {
+            for (i, sheet) in sheets.iter().enumerate() {
+                let r = prepare(s, &files, &out, sheet).and_then(|sh| {
+                    let bytes = plot(sh.d, &sh.space, &sh.opts).map_err(|e| bad(cmd, e))?;
+                    let file = unique_file(&out, &mut used, &sh.title, &sh.layout, i + 1)?;
+                    let mut r = json!({ "drawing": sh.title, "layout": sh.layout, "ok": true, "file": file, "bytes": bytes.len(), "pages": 1 });
+                    deliver_file(&out, &file, &bytes, &mut r)?;
+                    Ok(r)
+                });
+                match r {
+                    Ok(r) => results.push(r),
+                    Err(e) => fail(sheet, &e, &mut results),
+                }
+            }
+        }
+        Some(book) => {
+            // One PDF, a page per sheet that could be found; the others are reported.
+            let mut parts: Vec<(&Drawing, Space, Value)> = Vec::new();
+            let mut first: Option<(String, String)> = None;
+            for sheet in &sheets {
+                match prepare(s, &files, &out, sheet) {
+                    Ok(sh) => {
+                        parts.push((sh.d, sh.space, sh.opts));
+                        first.get_or_insert_with(|| (sh.title.clone(), sh.layout.clone()));
+                        results.push(json!({ "drawing": sh.title, "layout": sh.layout, "ok": true, "page": parts.len() }));
+                    }
+                    Err(e) => fail(sheet, &e, &mut results),
+                }
+            }
+            if let Some((title, layout)) = first {
+                let mut file_opts = Value::Object(out.pdf.clone());
+                file_opts["title"] = json!(drawing_stem(&title));
+                let bytes = book(&parts, &file_opts).map_err(|e| bad(cmd, format!("the combined PDF could not be made: {e}")))?;
+                let file = unique_file(&out, &mut used, &title, &layout, 1)?;
+                let mut r = json!({ "file": file, "bytes": bytes.len(), "pages": parts.len() });
+                deliver_file(&out, &file, &bytes, &mut r)?;
+                for sheet in results.iter_mut().filter(|r| r["ok"] == true) {
+                    sheet["file"] = json!(file);
+                }
+                combined = Some(r);
             }
         }
     }
@@ -781,15 +871,22 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
         let shown: Vec<&str> = failures.iter().take(3).map(String::as_str).collect();
         let more = failures.len().saturating_sub(shown.len());
         let tail = if more > 0 { format!("; and {more} more") } else { String::new() };
-        return Err(bad("publish", format!("no sheet was published: {}{tail}", shown.join("; "))));
+        return Err(bad(cmd, format!("no sheet was published: {}{tail}", shown.join("; "))));
     }
-    let paths: Vec<&str> = results.iter().filter_map(|r| r["path"].as_str()).collect();
+    let paths: Vec<&str> = match &combined {
+        Some(c) => c["path"].as_str().into_iter().collect(),
+        None => results.iter().filter_map(|r| r["path"].as_str()).collect(),
+    };
     let mut message =
         if paths.is_empty() { format!("Published {published} sheet(s)") } else { format!("Published {published} sheet(s): {}", paths.join(", ")) };
     if !failures.is_empty() {
         message.push_str(&format!("; {} failed: {}", failures.len(), failures.join("; ")));
     }
-    Ok(json!({ "sheets": results, "published": published, "failed": failures.len(), "copies": out.copies, "message": message }))
+    let mut r = json!({ "sheets": results, "published": published, "failed": failures.len(), "copies": out.copies, "message": message });
+    if let Some(c) = combined {
+        r["combined"] = c;
+    }
+    Ok(r)
 }
 
 // ---------- PDFBOOK ----------
