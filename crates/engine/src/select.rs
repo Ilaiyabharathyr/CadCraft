@@ -446,6 +446,61 @@ impl SelectMode {
     }
 }
 
+/// What a lasso selects (AutoCAD's lasso modes; Spacebar cycles them while dragging).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LassoKind {
+    /// Objects entirely inside the lasso: a drag to the right.
+    Window,
+    /// Objects inside or crossing the lasso: a drag to the left.
+    Crossing,
+    /// Objects the lasso's path crosses, as with the `F` keyword.
+    Fence,
+}
+
+/// A free-form lasso drawn by a press-and-drag that starts on empty space (PICKAUTO bit 4): the
+/// points the pointer went through, the press first.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lasso {
+    pub pts: Vec<Vec2>,
+    cycled: Option<LassoKind>,
+}
+
+impl Lasso {
+    pub fn new(start: Vec2) -> Self {
+        Lasso { pts: vec![start], cycled: None }
+    }
+    pub fn push(&mut self, p: Vec2) {
+        if p.is_finite() && self.pts.len() < MAX_MODE_POINTS {
+            self.pts.push(p);
+        }
+    }
+    /// The mode Spacebar picked, else the way the drag first went: left is a crossing lasso.
+    pub fn kind(&self) -> LassoKind {
+        match (self.cycled, self.pts.as_slice()) {
+            (Some(k), _) => k,
+            (None, [a, b, ..]) if b.x < a.x => LassoKind::Crossing,
+            _ => LassoKind::Window,
+        }
+    }
+    /// Spacebar while dragging: crossing, then window, then fence, then crossing again.
+    pub fn cycle(&mut self) {
+        self.cycled = Some(match self.kind() {
+            LassoKind::Crossing => LassoKind::Window,
+            LassoKind::Window => LassoKind::Fence,
+            LassoKind::Fence => LassoKind::Crossing,
+        });
+    }
+    /// The objects the lasso selects; the window and crossing lasso close back to the press.
+    pub fn select(&self, d: &Drawing, space: &Space) -> Vec<Handle> {
+        match self.kind() {
+            LassoKind::Window => select_polygon(d, space, &self.pts, false),
+            LassoKind::Crossing => select_polygon(d, space, &self.pts, true),
+            LassoKind::Fence if self.pts.len() >= 2 => select_fence(d, space, &self.pts),
+            LassoKind::Fence => Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
