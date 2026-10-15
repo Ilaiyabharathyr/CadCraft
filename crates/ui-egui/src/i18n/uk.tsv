@@ -1409,3 +1409,9 @@
 	Published {ok} of {total} sheets to {folder}	Опубліковано {ok} з {total} аркушів у {folder}
 @plural	{n} file	{n} файл|{n} файли|{n} файлів
 @plural	Publish {n} Sheet	Опублікувати {n} аркуш|Опублікувати {n} аркуші|Опублікувати {n} аркушів
+	From {layout}	З {layout}
+	Keep this page setup in the layout (can be undone)	Зберегти ці параметри сторінки в макеті (можна скасувати)
+	Reset	Скинути
+	Save to Layout	Зберегти в макет
+	Saved the page setup in {layout}	Параметри сторінки збережено в {layout}
+	Use the sheet's own page setup again	Знову використати власні параметри сторінки аркуша
