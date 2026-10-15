@@ -255,6 +255,12 @@ pub fn t(source: &str) -> &str {
     CURRENT.with(|l| tr(l.get(), source))
 }
 
+/// Does the current interface language read right to left? (Model answers and other text no
+/// catalog holds are drawn through the visual-order pass when it does — see `bidi`.)
+pub fn is_rtl() -> bool {
+    CURRENT.with(|l| l.get()) == "ar"
+}
+
 /// Menu headings can differ from command or object labels (e.g. Czech Kótování / Kóta).
 /// Catalogs without a `menu` entry retain their ordinary translation.
 pub fn tr_menu<'a>(language: &str, source: &'a str) -> &'a str {
@@ -359,6 +365,10 @@ macro_rules! tf {
     };
 }
 
+// The Craft AI palette draws model answers (text no catalog holds) in visual order for a
+// right-to-left interface, the same pass the catalog rows get at lookup above. (The attribute
+// below belongs to `tests` alone: `bidi` itself is of the shipped app — the pass would not
+// compile otherwise, a slip of the stacked pass this branch fixes.)
+pub(crate) mod bidi;
 #[cfg(test)]
-mod bidi;
 mod tests;
