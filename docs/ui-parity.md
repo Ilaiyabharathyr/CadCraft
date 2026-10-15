@@ -130,7 +130,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 | Press-drag selection windows (PICKDRAG) | yes | yes (#63, PICKDRAG = 2) |
 | Lasso | yes | **no** |
 | Selection cycling (SELECTIONCYCLING) | yes | toggle nothing reads |
-| Selection preview, hover highlight | yes | selected and hovered objects redrawn in the selection colour, fills half see-through (SELECTIONEFFECT 1; 0 dashed), selection effect color; HIGHLIGHT (not saved), SELECTIONPREVIEW, PREVIEWEFFECT, PREVIEWFILTER (Visual Effect Settings) |
+| Selection preview, hover highlight | yes | selected and hovered objects redrawn in the selection colour, fills half see-through (SELECTIONEFFECT 1; 0 dashed), selection effect color; HIGHLIGHT (not saved), SELECTIONPREVIEW, PREVIEWEFFECT, PREVIEWFILTER (Visual Effect Settings); a selected annotative object also shows faded at its other scales (SELECTIONANNODISPLAY) |
 | PICKADD, PICKFIRST, PICKAUTO | yes | PICKADD (Shift), PICKFIRST |
 | QSELECT, SELECTSIMILAR, FILTER | yes | QSELECT dialog; SELECTSIMILAR with SELECTSIMILARMODE (#428, SEttings asks for the bit code; no dialog); no FILTER |
 | Object isolate/hide (ISOLATEOBJECTS, HIDEOBJECTS) | yes | yes, temporary (OBJECTISOLATIONMODE 0; #428): Tools > Isolate, UNISOLATEOBJECTS; no status-bar button |
