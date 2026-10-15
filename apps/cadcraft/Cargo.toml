@@ -47,4 +47,8 @@ hidapi = { version = "2.6.7", default-features = false, features = ["windows-nat
 windows = { version = "0.62", features = ["UI_ViewManagement"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# GNOME/Wayland needs client decorations. Vector controls require no bundled
+# title font; document names remain in the application's tab strip.
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita-notitle"] }
+
 hidapi = { version = "2.6.7", default-features = false, features = ["linux-native-basic-udev"] }

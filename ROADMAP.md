@@ -116,6 +116,10 @@ Ranked; detail and the full beta checklist in [docs/roadmap.md](docs/roadmap.md)
 
 ## Progress log
 
+2026-10-16: Linux desktop builds enable Adwaita vector window controls without
+bundling a title font. See README → Linux window controls for platform selection;
+full GTK theme parity is not claimed.
+
 | Date | Entry |
 |---|---|
 | 2026-10-12 | TRIM: a pick after a closed polyline's last cut keeps only the complementary run instead of an extra circuit of the outline (#726) |
