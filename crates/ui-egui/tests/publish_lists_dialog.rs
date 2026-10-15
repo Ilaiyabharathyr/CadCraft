@@ -58,6 +58,7 @@ fn harness(picks: &Picks) -> Harness<'static, CadApp> {
         pick_open: Some(Box::new(move || o.borrow().clone())),
         pick_list: Some(Box::new(move || l.borrow().clone())),
         pick_save: Some(Box::new(move |_: &str| s.borrow().clone())),
+        open_path: None,
     };
     let mut app = CadApp::new(Session::default(), services);
     app.run("line", json!({ "points": [[0, 0], [100, 0]] })).unwrap();
@@ -112,10 +113,18 @@ fn add_drawings_lists_a_file_without_opening_it() {
     h.get_by_label("6 files · 3 will fail");
     // Publishing reads the file for the run.
     h.get_by_label("Publish 6 Sheets").click();
-    h.run_steps(4);
+    for _ in 0..500 {
+        h.run_steps(1);
+        if !h.state().publishing.busy() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     // The file's folder is the default output folder (Drawing1 has none).
     assert!(dir.join("site plan-Layout1.pdf").exists());
-    // Adding it again doesn't list it twice; × takes it out of the list.
+    // Adding it again doesn't list it twice.
+    h.state_mut().cmdline("PUBLISH");
+    h.run_steps(4);
     h.get_by_label("Add Drawings...").click();
     h.run_steps(6);
     assert_eq!(h.get_all_by_label("site plan.sheets").count(), 1);

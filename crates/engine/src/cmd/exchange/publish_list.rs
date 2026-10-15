@@ -10,7 +10,8 @@ use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-use super::{MAX_SHEETS, check_name, setup_override, unknown_key};
+use super::MAX_SHEETS;
+use super::publish::{check_name, setup_override, stamp_settings, unknown_key};
 use crate::cmd::bad;
 use crate::{Result, Session};
 
@@ -28,7 +29,7 @@ const MAX_LAYOUT: usize = 255;
 
 const FILE_KEYS: &[&str] = &["cadcraft", "version", "sheets", "output"];
 const SHEET_KEYS: &[&str] = &["drawing", "layout", "include", "pageSetup"];
-const OUTPUT_KEYS: &[&str] = &["to", "combine", "folder", "name", "layers"];
+const OUTPUT_KEYS: &[&str] = &["to", "combine", "folder", "name", "layers", "stamp"];
 
 pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "publishlist";
@@ -83,7 +84,7 @@ fn sheet_entry(cmd: &str, at: usize, v: &Value) -> Result<(String, String, bool,
 fn output(cmd: &str, v: Option<&Value>) -> Result<Map<String, Value>> {
     let mut out = Map::new();
     let Some(v) = v.filter(|v| !v.is_null()) else { return Ok(out) };
-    let o = v.as_object().ok_or_else(|| bad(cmd, "`output` must be an object: {to?, combine?, folder?, name?, layers?}"))?;
+    let o = v.as_object().ok_or_else(|| bad(cmd, "`output` must be an object: {to?, combine?, folder?, name?, layers?, stamp?}"))?;
     unknown_key(cmd, o, OUTPUT_KEYS, "output setting")?;
     if let Some(to) = o.get("to") {
         let to = to.as_str().map(str::to_ascii_lowercase).filter(|t| ["pdf", "svg", "png"].contains(&t.as_str()));
@@ -96,6 +97,10 @@ fn output(cmd: &str, v: Option<&Value>) -> Result<Map<String, Value>> {
     }
     if let Some(f) = o.get("folder") {
         out.insert("folder".into(), json!(path_text(cmd, Some(f), "`output.folder`")?));
+    }
+    if let Some(stamp) = o.get("stamp").filter(|v| !v.is_null()) {
+        stamp_settings(cmd, stamp)?;
+        out.insert("stamp".into(), stamp.clone());
     }
     if let Some(n) = o.get("name") {
         let n = n.as_str().ok_or_else(|| bad(cmd, "`output.name` must be a file name pattern"))?;
@@ -224,7 +229,7 @@ fn write(cmd: &str, path: &str, sheets: &Value, out: Option<&Value>) -> Result<V
 /// A drawing file's sheets, read without opening it: model space when it has objects, then the
 /// layouts in tab order, each with its page setup.
 fn drawing(cmd: &str, _s: &Session, path: &str) -> Result<Value> {
-    let d = super::detached(cmd, path)?;
+    let d = super::publish::detached(cmd, path)?;
     let mut sheets = Vec::new();
     if !d.model.is_empty() {
         sheets.push(json!({ "layout": "Model", "model": true }));

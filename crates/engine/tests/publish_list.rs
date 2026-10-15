@@ -69,7 +69,7 @@ fn a_list_round_trips_with_relative_paths() {
         {"drawing": a, "layout": "Layout1", "include": false, "pageSetup": {"paper": "A3", "landscape": true, "fit": false}},
         {"drawing": b, "layout": "Layout1"},
     ]);
-    let output = json!({"to": "PDF", "combine": true, "folder": root.join("out").to_string_lossy(), "name": "{drawing} set", "layers": false});
+    let output = json!({"to": "PDF", "combine": true, "folder": root.join("out").to_string_lossy(), "name": "{drawing} set", "layers": false, "stamp": {"text": "{sheet} {date}", "corner": "top-left"}});
     let r = s.execute("publishlist", &json!({"action": "write", "path": list, "sheets": sheets, "output": output})).unwrap();
     assert_eq!(r["sheets"], 3);
     // On disk: our own format, paths relative to the list's folder.
@@ -89,6 +89,7 @@ fn a_list_round_trips_with_relative_paths() {
     assert_eq!(r["output"]["to"], "pdf");
     assert_eq!(r["output"]["folder"].as_str().map(std::path::PathBuf::from), Some(root.join("out")));
     assert_eq!((r["output"]["combine"].as_bool(), r["output"]["layers"].as_bool()), (Some(true), Some(false)));
+    assert_eq!(r["output"]["stamp"], json!({"text": "{sheet} {date}", "corner": "top-left"}));
     // The folder of drawings and its list can move together.
     let moved = temp("moved");
     std::fs::rename(&root, moved.join("project")).unwrap();
@@ -142,6 +143,7 @@ fn hostile_lists_are_refused() {
         ("huge paper", json!({"cadcraft": "publish-list", "version": 1, "sheets": [{"drawing": "a.sheets", "layout": "Model", "pageSetup": {"width": 1e300, "height": 1}}]}).to_string().into_bytes()),
         ("bad output", json!({"cadcraft": "publish-list", "version": 1, "sheets": [], "output": {"to": "dwg"}}).to_string().into_bytes()),
         ("escaping name", json!({"cadcraft": "publish-list", "version": 1, "sheets": [], "output": {"name": "../../{sheet}"}}).to_string().into_bytes()),
+        ("bad stamp", json!({"cadcraft": "publish-list", "version": 1, "sheets": [], "output": {"stamp": {"text": "{rm}"}}}).to_string().into_bytes()),
         ("unknown output", json!({"cadcraft": "publish-list", "version": 1, "sheets": [], "output": {"printer": "x"}}).to_string().into_bytes()),
         ("deep nesting", format!("{}{}", "[".repeat(100_000), "]".repeat(100_000)).into_bytes()),
         ("too big", vec![b' '; (1 << 20) + 1]),

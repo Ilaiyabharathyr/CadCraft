@@ -693,6 +693,7 @@ mod tests {
                 answer.clone()
             })),
             pick_list: None,
+            open_path: None,
         };
         (CadApp::new(Session::new(), services), asked)
     }

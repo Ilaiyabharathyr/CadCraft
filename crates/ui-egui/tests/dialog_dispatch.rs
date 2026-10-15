@@ -21,6 +21,7 @@ fn app() -> (CadApp, Rc<Cell<u32>>) {
             None
         })),
         pick_list: None,
+        open_path: None,
     };
     (CadApp::new(Session::new(), services), picks)
 }

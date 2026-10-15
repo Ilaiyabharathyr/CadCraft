@@ -76,6 +76,19 @@ fn settle(h: &mut Harness<'static, CadApp>) {
     h.run_steps(4);
 }
 
+/// Wait for a background run to end (the worker thread writes the files).
+fn wait_for_publish(h: &mut Harness<'static, CadApp>) {
+    for _ in 0..500 {
+        h.run_steps(1);
+        if !h.state().publishing.busy() {
+            h.run_steps(2);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("publishing didn't finish");
+}
+
 fn window_width(h: &Harness<'static, CadApp>) -> f32 {
     h.ctx.memory(|m| m.area_rect(egui::Id::new("cc_publish"))).map_or(0.0, |r| r.width())
 }
@@ -160,16 +173,17 @@ fn publish_is_one_engine_call_and_writes_every_sheet() {
     let mut h = harness_for(app(Some(dir.clone())), 1280.0, 820.0, 1.0);
     let previous = h.state().session.active;
     h.get_by_label("Publish 3 Sheets").click();
-    h.run_steps(3);
+    wait_for_publish(&mut h);
     // The unsaved drawing has no folder: the save picker gave one, and the engine made it.
     let mut files: Vec<String> =
         std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
     files.sort();
     assert_eq!(files, ["Drawing1-Layout1.pdf", "Drawing1-Layout2.pdf", "Drawing1-Model.pdf"]);
     assert_eq!(h.state().session.active, previous, "the current drawing stays current");
-    let report = format!("Published 3 of 3 sheets to {}", dir.to_string_lossy());
-    let status = h.state().status.as_ref().map(|(s, _)| s.clone());
-    assert!(status.as_deref().is_some_and(|s| s.starts_with(&report)), "{status:?}");
+    // The report lists every sheet.
+    h.get_by_label("Publish Report");
+    h.get_by_label("Published 3 of 3 sheets");
+    assert_eq!(h.get_all_by_label("Published").count(), 3);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -191,7 +205,7 @@ fn a_page_setup_change_is_for_this_run_only() {
     h.get(By::new().value("Changed for this run"));
     h.get_by_label("A3, landscape");
     h.get_by_label("Publish 3 Sheets").click();
-    h.run_steps(3);
+    wait_for_publish(&mut h);
     let plotted = std::fs::read_to_string(dir.join("Drawing1-Layout1.pdf")).unwrap();
     assert!(plotted.contains(r#""paper":"A3""#), "the plotter got A3: {plotted}");
     assert_eq!(h.state().session.doc().unwrap().layout("Layout1").unwrap().page, before, "the drawing keeps its page setup");

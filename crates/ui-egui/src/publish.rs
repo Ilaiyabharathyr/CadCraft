@@ -25,7 +25,6 @@ const INDENT: f32 = 29.0;
 const PAPER_COL: f32 = 96.0;
 const STATUS_COL: f32 = 110.0;
 const GAP: f32 = 8.0;
-const NOT_YET: &str = "Not available yet";
 /// Seconds after the last change before the Status column is checked again.
 const STATUS_DELAY: f64 = 0.25;
 /// Papers offered for a one-run page setup change.
@@ -106,6 +105,39 @@ pub struct PublishState {
     list: Option<String>,
     /// A file name pattern from a list (the window has no field for it yet).
     name: Option<String>,
+    /// Publish now, in the window, instead of on a worker thread.
+    foreground: bool,
+    /// Open the PDF (or the folder) when the run ends.
+    open_result: bool,
+    /// The sheet stamp: whether it's added, and its settings.
+    stamp_on: bool,
+    stamp: StampSettings,
+    /// The Sheet Stamp window is open.
+    editing_stamp: bool,
+}
+
+/// Text in a corner of every sheet, with `{drawing}`, `{sheet}`, `{n}`, `{date}` and `{time}`.
+#[derive(Clone, Debug, PartialEq)]
+struct StampSettings {
+    text: String,
+    corner: usize,
+    height: f64,
+}
+
+/// The stamp's corners as the engine names them, and as the window shows them.
+const CORNERS: [(&str, &str); 4] =
+    [("bottom-right", "Bottom right"), ("bottom-left", "Bottom left"), ("top-right", "Top right"), ("top-left", "Top left")];
+
+impl Default for StampSettings {
+    fn default() -> Self {
+        StampSettings { text: "{drawing} · {sheet} · {date} {time}".into(), corner: 0, height: 2.5 }
+    }
+}
+
+impl StampSettings {
+    fn json(&self) -> Value {
+        json!({ "text": self.text, "corner": CORNERS.get(self.corner).map_or("bottom-right", |c| c.0), "height": self.height })
+    }
 }
 
 /// A drawing listed from its file: read for publishing, never opened as a tab.
@@ -167,6 +199,9 @@ struct Group {
 
 #[derive(Default)]
 struct Actions {
+    /// In: a run is in progress; the host can open files.
+    busy: bool,
+    can_open: bool,
     publish: bool,
     add: bool,
     open_list: bool,
@@ -405,6 +440,19 @@ fn open_list(app: &mut CadApp, st: &mut PublishState, path: &str) -> Result<(), 
     next.drop_layers = out["layers"] == false;
     next.folder = out["folder"].as_str().map(str::to_string);
     next.name = out["name"].as_str().map(str::to_string);
+    if let Some(stamp) = out["stamp"].as_object() {
+        next.stamp_on = true;
+        let d = StampSettings::default();
+        next.stamp = StampSettings {
+            text: stamp.get("text").and_then(Value::as_str).map_or(d.text, str::to_string),
+            corner: stamp.get("corner").and_then(Value::as_str).and_then(|c| CORNERS.iter().position(|k| k.0 == c)).unwrap_or(0),
+            height: stamp.get("height").and_then(Value::as_f64).unwrap_or(d.height),
+        };
+    } else if out["stamp"] == true {
+        next.stamp_on = true;
+    }
+    next.foreground = st.foreground;
+    next.open_result = st.open_result;
     *st = next;
     Ok(())
 }
@@ -438,6 +486,9 @@ fn save_list(app: &mut CadApp, groups: &[Group], st: &mut PublishState, path: &s
     }
     if let Some(name) = &st.name {
         output["name"] = json!(name);
+    }
+    if st.stamp_on {
+        output["stamp"] = st.stamp.json();
     }
     match app.run("publishlist", json!({ "action": "write", "path": path, "sheets": sheets, "output": output })) {
         Ok(_) => {
@@ -486,6 +537,9 @@ fn publish_request(groups: &[Group], st: &PublishState) -> Value {
     let mut r = json!({ "sheets": sheets, "to": st.to.id(), "combine": combining(st) });
     if let Some(name) = &st.name {
         r["name"] = json!(name);
+    }
+    if st.stamp_on {
+        r["stamp"] = st.stamp.json();
     }
     if st.to == To::Pdf {
         r["pdf"] = json!({ "layers": !st.drop_layers });
@@ -574,7 +628,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             .map(|(g, s)| (g.uid, s.name.clone()));
     }
     refresh_status(app, ctx, &groups, &mut st);
-    let mut act = Actions::default();
+    let mut act = Actions { busy: app.publishing.busy(), can_open: app.services.open_path.is_some(), ..Actions::default() };
     let screen = ctx.content_rect();
     let center = screen.center();
     // Fit the screen: the window's frame and title bar take about 60 points beyond its content.
@@ -633,20 +687,31 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         }
     }
     if act.publish {
-        let report = run(app, &groups, &st);
-        app.set_status(report.clone());
-        st.report = Some(report);
+        match run(app, &groups, &st) {
+            // In the background the window closes; the report opens when the run ends.
+            Ok(true) => *open = false,
+            Ok(false) => {}
+            Err(report) => {
+                app.set_status(report.clone());
+                st.report = Some(report);
+            }
+        }
         // The files exist now; check again so the names and statuses are current.
         st.checked = None;
+    }
+    if st.editing_stamp {
+        stamp_window(ctx, &mut st);
     }
     ctx.data_mut(|d| d.insert_temp(id, st));
 }
 
-/// Publish the ticked sheets with one engine `publish` call; returns the report line.
-fn run(app: &mut CadApp, groups: &[Group], st: &PublishState) -> String {
+/// Publish the ticked sheets with one engine `publish` call: on a worker thread, or now when
+/// "Run in the background" is off. `Ok(true)` when it runs in the background; `Err` says why it
+/// didn't start.
+fn run(app: &mut CadApp, groups: &[Group], st: &PublishState) -> Result<bool, String> {
     let sheets = picked(groups, st);
     let Some((first, first_sheet)) = sheets.first() else {
-        return crate::tl!("Nothing selected").to_string();
+        return Err(crate::tl!("Nothing selected").to_string());
     };
     let mut request = publish_request(groups, st);
     let mut folder = default_folder(groups, st);
@@ -657,9 +722,9 @@ fn run(app: &mut CadApp, groups: &[Group], st: &PublishState) -> String {
             .and_then(|c| c.files.first().cloned())
             .unwrap_or_else(|| format!("{}-{}.{}", first.stem, first_sheet.name, st.to.id()));
         let Some(pick) = app.services.pick_save.as_ref() else {
-            return crate::tl!("Choose a folder to publish to.").to_string();
+            return Err(crate::tl!("Choose a folder to publish to.").to_string());
         };
-        let Some(path) = pick(&suggested) else { return crate::tl!("Publishing cancelled.").to_string() };
+        let Some(path) = pick(&suggested) else { return Err(crate::tl!("Publishing cancelled.").to_string()) };
         let p = std::path::Path::new(&path);
         folder = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
         // A combined file takes the name given; braces in it stay braces.
@@ -670,21 +735,76 @@ fn run(app: &mut CadApp, groups: &[Group], st: &PublishState) -> String {
         }
     }
     request["folder"] = json!(folder);
-    let total = sheets.len();
-    match app.run("publish", request) {
-        Ok(r) => {
-            let ok = r["published"].as_u64().unwrap_or(0);
-            let done = crate::tf!("Published {ok} of {total} sheets to {folder}", ok = ok, total = total, folder = folder);
-            let failed: Vec<String> = r["sheets"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|x| x["ok"] == false)
-                .map(|x| format!("{}: {}", x["layout"].as_str().unwrap_or(""), x["error"].as_str().unwrap_or("")))
-                .collect();
-            if failed.is_empty() { done } else { format!("{done} — {}", failed.join("; ")) }
+    let background = !st.foreground && !cfg!(target_arch = "wasm32");
+    crate::publish_run::start(app, request, background, st.open_result)?;
+    Ok(background)
+}
+
+/// The Sheet Stamp window: the stamp's text, corner and height, with a sample of how it reads.
+fn stamp_window(ctx: &egui::Context, st: &mut PublishState) {
+    let t = Tokens::get();
+    let mut open = true;
+    let mut done = false;
+    egui::Window::new(crate::tl!("Sheet Stamp"))
+        .id(egui::Id::new("cc_publish_stamp"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(420.0)
+        .pivot(Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            ui.label(RichText::new(crate::tl!("Text")).color(t.text_dim));
+            ui.add(egui::TextEdit::singleline(&mut st.stamp.text).desired_width(f32::INFINITY).char_limit(200));
+            ui.label(
+                RichText::new(crate::tl!("Use {drawing}, {sheet}, {n}, {date} and {time}. The date and time are UTC."))
+                    .font(crate::theme::small())
+                    .color(t.text_faint),
+            );
+            ui.add_space(6.0);
+            egui::Grid::new("cc_publish_stamp_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                ui.label(RichText::new(crate::tl!("Corner")).color(t.text_dim));
+                let shown = CORNERS.get(st.stamp.corner).map_or("", |c| c.1);
+                egui::ComboBox::from_id_salt("cc_publish_stamp_corner").selected_text(crate::i18n::t(shown)).show_ui(ui, |ui| {
+                    for (i, (_, label)) in CORNERS.iter().enumerate() {
+                        ui.selectable_value(&mut st.stamp.corner, i, crate::i18n::t(label));
+                    }
+                });
+                ui.end_row();
+                ui.label(RichText::new(crate::tl!("Height on paper")).color(t.text_dim));
+                ui.add(egui::DragValue::new(&mut st.stamp.height).range(0.5..=50.0).speed(0.1).suffix(" mm"));
+                ui.end_row();
+            });
+            ui.add_space(6.0);
+            let sample = st
+                .stamp
+                .text
+                .replace("{{", "\u{1}")
+                .replace("}}", "\u{2}")
+                .replace("{drawing}", "Drawing1")
+                .replace("{sheet}", "Layout1")
+                .replace("{n}", "1")
+                .replace("{date}", "2026-10-15")
+                .replace("{time}", "09:30 UTC")
+                .replace('\u{1}', "{")
+                .replace('\u{2}', "}");
+            ui.label(RichText::new(crate::tl!("Example")).color(t.text_dim));
+            ui.label(RichText::new(sample).font(crate::theme::mono()).color(t.text));
+            ui.separator();
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button(crate::tl!("Done")).clicked() {
+                    done = true;
+                }
+                if ui.button(crate::tl!("Reset")).clicked() {
+                    st.stamp = StampSettings::default();
+                }
+            });
+        });
+    if !open || done {
+        st.editing_stamp = false;
+        if st.stamp.text.trim().is_empty() {
+            st.stamp = StampSettings::default();
         }
-        Err(e) => e,
     }
 }
 
@@ -1075,11 +1195,23 @@ fn inspector(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Act
         Tab::Output => output_tab(ui, groups, st, act),
     });
     ui.separator();
-    let not_yet = crate::i18n::t(NOT_YET);
-    let mut off = false;
-    ui.add_enabled(false, egui::Checkbox::new(&mut off, crate::tl!("Add a sheet stamp"))).on_disabled_hover_text(not_yet);
-    ui.add_enabled(false, egui::Checkbox::new(&mut off, crate::tl!("Run in the background"))).on_disabled_hover_text(not_yet);
-    ui.add_enabled(false, egui::Checkbox::new(&mut off, crate::tl!("Open the result when done"))).on_disabled_hover_text(not_yet);
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut st.stamp_on, crate::tl!("Add a sheet stamp")).on_hover_text(crate::tl!("A line of text in a corner of every sheet"));
+        if ui.add_enabled(st.stamp_on, egui::Button::new(crate::tl!("Edit stamp...")).small()).clicked() {
+            st.editing_stamp = true;
+        }
+    });
+    let mut background = !st.foreground;
+    let threads = !cfg!(target_arch = "wasm32");
+    let resp = ui.add_enabled(threads, egui::Checkbox::new(&mut background, crate::tl!("Run in the background")));
+    if threads {
+        resp.on_hover_text(crate::tl!("Keep working while the sheets are published; a report opens when they're done"));
+    } else {
+        resp.on_disabled_hover_text(crate::tl!("The web version publishes while you wait."));
+    }
+    st.foreground = !background;
+    ui.add_enabled(act.can_open, egui::Checkbox::new(&mut st.open_result, crate::tl!("Open the result when done")))
+        .on_disabled_hover_text(crate::tl!("Not available yet"));
     let _ = t;
 }
 
@@ -1314,7 +1446,10 @@ fn footer_row(ui: &mut Ui, groups: &[Group], st: &PublishState, act: &mut Action
             let button = egui::Button::new(RichText::new(label).color(if n == 0 { t.text_faint } else { t.paper }).strong())
                 .fill(if n == 0 { t.control } else { t.accent })
                 .min_size(vec2(120.0, 26.0));
-            if ui.add_enabled(n > 0, button).clicked() {
+            let resp = ui.add_enabled(n > 0 && !act.busy, button);
+            if act.busy {
+                resp.on_disabled_hover_text(crate::tl!("Publishing is already running."));
+            } else if resp.clicked() {
                 act.publish = true;
             }
             if ui.add(egui::Button::new(crate::tl!("Cancel")).min_size(vec2(80.0, 26.0))).clicked() {

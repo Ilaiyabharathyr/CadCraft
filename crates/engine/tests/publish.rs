@@ -247,7 +247,8 @@ fn bad_parameters_are_refused_before_anything_is_written() {
         json!({"sheets": [{"layout": "Layout1"}], "pdf": {"dpi": 600}}),
         json!({"sheets": [{"layout": "Layout1"}], "copies": 0}),
         json!({"sheets": [{"layout": "Layout1"}], "copies": 101}),
-        json!({"sheets": [{"layout": "Layout1"}], "stamp": true}),
+        json!({"sheets": [{"layout": "Layout1"}], "stamp": "yes"}),
+        json!({"sheets": [{"layout": "Layout1"}], "stamp": {"text": "{who}"}}),
         json!([1, 2]),
     ];
     for p in cases {

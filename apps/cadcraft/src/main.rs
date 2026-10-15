@@ -151,7 +151,42 @@ fn services() -> Services {
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        open_path: Some(Box::new(open_path)),
     }
+}
+
+/// Open `path` in its usual app, or with `reveal` show it selected in the file manager. The
+/// command is started and not waited for; the path is one argument, never parsed by a shell.
+fn open_path(path: &str, reveal: bool) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!("{path}: not found"));
+    }
+    let mut c;
+    #[cfg(target_os = "macos")]
+    {
+        c = std::process::Command::new("open");
+        if reveal {
+            c.arg("-R");
+        }
+        c.arg(p);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        c = std::process::Command::new("explorer");
+        if reveal {
+            c.arg(format!("/select,{path}"));
+        } else {
+            c.arg(p);
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // xdg-open can't select a file: reveal opens the folder it is in.
+        c = std::process::Command::new("xdg-open");
+        c.arg(if reveal && p.is_file() { p.parent().unwrap_or(p) } else { p });
+    }
+    c.spawn().map(|_| ()).map_err(|e| format!("{path}: {e}"))
 }
 
 /// File types for the Save dialog, the suggested name's type first: Windows adds the first

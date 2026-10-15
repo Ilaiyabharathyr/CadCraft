@@ -1332,6 +1332,30 @@
 	Text color	Колір тексту
 	Click the ruler to add a tab stop, right-click to remove one	Натисніть на лінійку, щоб додати табуляцію; права кнопка видаляє її
 	Publish Sheets	Публікація аркушів
+	A line of text in a corner of every sheet	Рядок тексту в куті кожного аркуша
+	Cancelling...	Скасування...
+	Corner	Кут
+	Done	Готово
+	Edit stamp...	Редагувати штамп...
+	Example	Приклад
+	Height on paper	Висота на папері
+	Keep working while the sheets are published; a report opens when they're done	Працюйте далі, поки аркуші публікуються; після завершення відкриється звіт
+	Publish Again	Опублікувати ще раз
+	Publish Report	Звіт про публікацію
+	Published {ok} of {total} sheets	Опубліковано {ok} з {total} аркушів
+	Publishing is already running.	Публікація вже триває.
+	Publishing {done} of {total} sheets...	Публікація {done} з {total} аркушів...
+	Reset	Скинути
+	Reveal in Finder	Показати у Finder
+	Sheet Stamp	Штамп аркуша
+	Show in Explorer	Показати в Провіднику
+	Show in Folder	Показати в теці
+	The web version publishes while you wait.	Вебверсія публікує, поки ви чекаєте.
+	Use {drawing}, {sheet}, {n}, {date} and {time}. The date and time are UTC.	Використовуйте {drawing}, {sheet}, {n}, {date} і {time}. Дата й час — за UTC.
+	cancelled	скасовано
+	page {n}	сторінка {n}
+	Published	Опубліковано
+	Failed	Не вдалося
 	Unsaved list	Незбережений список
 	New List	Новий список
 	Open List...	Відкрити список...

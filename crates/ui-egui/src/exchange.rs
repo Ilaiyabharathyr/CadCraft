@@ -174,6 +174,7 @@ mod tests {
                 None
             })),
             pick_list: None,
+            open_path: None,
         };
         (CadApp::new(Session::new(), services), asked)
     }

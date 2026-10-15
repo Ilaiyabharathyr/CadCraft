@@ -13,6 +13,7 @@ mod draw2;
 mod draworder;
 mod edit;
 mod exchange;
+pub use exchange::PublishJob;
 pub mod file;
 mod gripcmds;
 mod griphot;
