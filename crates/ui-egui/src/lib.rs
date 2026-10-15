@@ -189,6 +189,8 @@ impl Default for UiState {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Choose a publish list (`.ccpub`) to open; without one, Open List... uses `pick_open`.
+    pub pick_list: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 pub struct CadApp {

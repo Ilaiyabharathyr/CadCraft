@@ -5,7 +5,9 @@
 //! Publishing is one call to the engine's `publish` with the ticked sheets, so the window and
 //! scripts produce the same files and names. The Status column and the file names come from
 //! `publish {"action": "status"}`, refreshed a moment after the list or the options change.
-//! Options the engine can't honour yet are shown disabled with "Not available yet".
+//! Add Drawings... lists a drawing file's sheets without opening it, and a list can be saved to and
+//! opened from a `.ccpub` file (the engine's `publishlist`). Options the engine can't honour yet
+//! are shown disabled with "Not available yet".
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -98,6 +100,40 @@ pub struct PublishState {
     checked: Option<Checked>,
     /// A change waiting to be checked: (fingerprint, when it was seen).
     pending: Option<(u64, f64)>,
+    /// Drawings listed from files (Add Drawings..., or a list), in the order they were added.
+    files: Vec<FileDrawing>,
+    /// The list file this list was opened from or saved to.
+    list: Option<String>,
+    /// A file name pattern from a list (the window has no field for it yet).
+    name: Option<String>,
+}
+
+/// A drawing listed from its file: read for publishing, never opened as a tab.
+#[derive(Clone, Debug)]
+struct FileDrawing {
+    path: String,
+    uid: u64,
+    title: String,
+    sheets: Vec<Sheet>,
+    /// False when the file is gone; its sheets are then the ones the list named.
+    found: bool,
+}
+
+/// Where a group's drawing comes from.
+#[derive(Clone, Debug, PartialEq)]
+enum Source {
+    /// An open drawing, by its index in the session.
+    Open(usize),
+    /// A drawing file, by its path.
+    File(String),
+}
+
+/// A listed file's id: its path's hash with the top bit set, so it never meets an open
+/// drawing's uid (those count up from 1).
+fn file_uid(path: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut h);
+    h.finish() | (1 << 63)
 }
 
 /// One sheet as the list shows it.
@@ -116,8 +152,10 @@ struct Sheet {
 /// One open drawing and its sheets, in publishing order.
 #[derive(Clone, Debug)]
 struct Group {
-    index: usize,
+    source: Source,
     uid: u64,
+    /// False for a listed file that is gone.
+    found: bool,
     /// The drawing's revision: the Status column is checked again when it changes.
     revision: u64,
     title: String,
@@ -131,6 +169,8 @@ struct Group {
 struct Actions {
     publish: bool,
     add: bool,
+    open_list: bool,
+    save_list: bool,
     choose: bool,
     help: bool,
     close: bool,
@@ -144,71 +184,273 @@ fn ratio(k: f64) -> String {
     if k < 1.0 { format!("1:{}", num(1.0 / k)) } else { format!("{}:1", num(k)) }
 }
 
+fn model_sheet() -> Sheet {
+    Sheet {
+        name: "Model".into(),
+        model: true,
+        setup: "Default".into(),
+        device: "PDF".into(),
+        size: String::new(),
+        scale: "Fit".into(),
+        landscape: true,
+        default_setup: true,
+    }
+}
+
+fn layout_sheet(name: &str, p: &cadcraft_doc::PageSetup) -> Sheet {
+    let default_setup = *p == cadcraft_doc::PageSetup::default();
+    let (w, h) = if p.landscape {
+        (p.height_mm.max(p.width_mm), p.height_mm.min(p.width_mm))
+    } else {
+        (p.width_mm.min(p.height_mm), p.width_mm.max(p.height_mm))
+    };
+    let device = if p.device.is_empty() || p.device.eq_ignore_ascii_case("none") { "PDF".to_string() } else { p.device.clone() };
+    Sheet {
+        name: name.to_string(),
+        model: false,
+        setup: if default_setup {
+            "Default".into()
+        } else if device == "PDF" {
+            p.paper.clone()
+        } else {
+            device.clone()
+        },
+        device,
+        size: if w.is_finite() && h.is_finite() && w > 0.0 { format!("{w:.0} × {h:.0} mm") } else { String::new() },
+        scale: if p.scale_to_fit { "Fit".into() } else { ratio(p.scale) },
+        landscape: p.landscape,
+        default_setup,
+    }
+}
+
+/// A sheet a list names in a drawing that is gone: only its name is known.
+fn named_sheet(name: &str) -> Sheet {
+    if name.eq_ignore_ascii_case("model") {
+        return model_sheet();
+    }
+    Sheet {
+        name: name.to_string(),
+        model: false,
+        setup: "—".into(),
+        device: String::new(),
+        size: String::new(),
+        scale: String::new(),
+        landscape: true,
+        default_setup: false,
+    }
+}
+
 fn sheets_of(d: &cadcraft_doc::Drawing) -> Vec<Sheet> {
     let mut out = Vec::new();
     if !d.model.is_empty() {
-        out.push(Sheet {
-            name: "Model".into(),
-            model: true,
-            setup: "Default".into(),
-            device: "PDF".into(),
-            size: String::new(),
-            scale: "Fit".into(),
-            landscape: true,
-            default_setup: true,
-        });
+        out.push(model_sheet());
     }
     let mut layouts: Vec<_> = d.layouts.iter().collect();
     layouts.sort_by_key(|l| l.tab_order);
-    for l in layouts {
-        let p = &l.page;
-        let default_setup = *p == cadcraft_doc::PageSetup::default();
-        let (w, h) = if p.landscape {
-            (p.height_mm.max(p.width_mm), p.height_mm.min(p.width_mm))
-        } else {
-            (p.width_mm.min(p.height_mm), p.width_mm.max(p.height_mm))
-        };
-        let device = if p.device.is_empty() || p.device.eq_ignore_ascii_case("none") { "PDF".to_string() } else { p.device.clone() };
-        out.push(Sheet {
-            name: l.name.clone(),
-            model: false,
-            setup: if default_setup {
-                "Default".into()
-            } else if device == "PDF" {
-                p.paper.clone()
-            } else {
-                device.clone()
-            },
-            device,
-            size: if w.is_finite() && h.is_finite() && w > 0.0 { format!("{w:.0} × {h:.0} mm") } else { String::new() },
-            scale: if p.scale_to_fit { "Fit".into() } else { ratio(p.scale) },
-            landscape: p.landscape,
-            default_setup,
-        });
-    }
+    out.extend(layouts.into_iter().map(|l| layout_sheet(&l.name, &l.page)));
     out
+}
+
+/// A drawing file's sheets as the engine's `publishlist {"action": "drawing"}` lists them.
+fn file_drawing(path: &str, r: &Value) -> FileDrawing {
+    let sheets = r["sheets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|x| {
+            let name = x["layout"].as_str()?;
+            if x["model"] == true {
+                return Some(model_sheet());
+            }
+            let page: cadcraft_doc::PageSetup = serde_json::from_value(x["page"].clone()).unwrap_or_default();
+            Some(layout_sheet(name, &page))
+        })
+        .collect();
+    let title = r["title"].as_str().map_or_else(|| path.to_string(), str::to_string);
+    FileDrawing { path: path.to_string(), uid: file_uid(path), title, sheets, found: true }
+}
+
+fn stem_of(name: &str) -> String {
+    std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Drawing".into())
 }
 
 fn gather(app: &CadApp, st: &PublishState) -> Vec<Group> {
     let active = app.session.active;
+    let ordered = |uid: u64, mut sheets: Vec<Sheet>| {
+        if let Some(order) = st.order.get(&uid) {
+            sheets.sort_by_key(|s| order.iter().position(|n| *n == s.name).unwrap_or(usize::MAX));
+        }
+        sheets
+    };
     let mut groups = Vec::new();
     for (index, ds) in app.session.docs.iter().enumerate() {
         if st.removed.contains(&ds.uid) || (st.only_current && index != active) {
             continue;
         }
-        let mut sheets = sheets_of(&ds.doc);
-        if let Some(order) = st.order.get(&ds.uid) {
-            sheets.sort_by_key(|s| order.iter().position(|n| *n == s.name).unwrap_or(usize::MAX));
-        }
-        let stem = std::path::Path::new(&ds.title)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "Drawing".into());
         let folder = ds.path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-        groups.push(Group { index, uid: ds.uid, revision: ds.revision, title: ds.title.clone(), stem, folder, current: index == active, sheets });
+        groups.push(Group {
+            source: Source::Open(index),
+            uid: ds.uid,
+            found: true,
+            revision: ds.revision,
+            title: ds.title.clone(),
+            stem: stem_of(&ds.title),
+            folder,
+            current: index == active,
+            sheets: ordered(ds.uid, sheets_of(&ds.doc)),
+        });
+    }
+    for f in &st.files {
+        let folder = std::path::Path::new(&f.path).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+        groups.push(Group {
+            source: Source::File(f.path.clone()),
+            uid: f.uid,
+            found: f.found,
+            revision: 0,
+            title: f.title.clone(),
+            stem: stem_of(&f.title),
+            folder,
+            current: false,
+            sheets: ordered(f.uid, f.sheets.clone()),
+        });
     }
     groups
+}
+
+/// Add a drawing file's sheets to the list without opening it. A drawing that is already open
+/// comes back into the list as the open drawing.
+fn add_drawing(app: &mut CadApp, st: &mut PublishState, path: &str) -> Result<(), String> {
+    if let Some(ds) = app.session.docs.iter().find(|d| d.path.as_deref() == Some(path)) {
+        st.removed.remove(&ds.uid);
+        return Ok(());
+    }
+    if st.files.iter().any(|f| f.path == path && f.found) {
+        return Ok(());
+    }
+    let r = app.run("publishlist", json!({ "action": "drawing", "path": path }))?;
+    st.files.retain(|f| f.path != path);
+    st.files.push(file_drawing(path, &r));
+    Ok(())
+}
+
+/// Open a list: its drawings (open ones as they are, others from their files), its ticks, order
+/// and page setup changes, and its output settings.
+fn open_list(app: &mut CadApp, st: &mut PublishState, path: &str) -> Result<(), String> {
+    let r = app.run("publishlist", json!({ "action": "read", "path": path }))?;
+    let entries: Vec<&Value> = r["sheets"].as_array().into_iter().flatten().collect();
+    let mut next = PublishState { tab: st.tab, list: Some(path.to_string()), ..PublishState::default() };
+    // The drawings in the list's order, with the sheets it names.
+    let mut drawings: Vec<(String, bool, Vec<&Value>)> = Vec::new();
+    for e in &entries {
+        let d = e["drawing"].as_str().unwrap_or_default().to_string();
+        match drawings.iter_mut().find(|(p, _, _)| *p == d) {
+            Some((_, _, v)) => v.push(e),
+            None => drawings.push((d, e["found"] == true, vec![e])),
+        }
+    }
+    let open: Vec<(u64, Option<String>)> = app.session.docs.iter().map(|d| (d.uid, d.path.clone())).collect();
+    for (uid, p) in &open {
+        if !p.as_ref().is_some_and(|p| drawings.iter().any(|(d, _, _)| d == p)) {
+            next.removed.insert(*uid);
+        }
+    }
+    for (d, found, named) in &drawings {
+        let uid = match open.iter().find(|(_, p)| p.as_deref() == Some(d.as_str())) {
+            Some((uid, _)) => *uid,
+            None => {
+                let file =
+                    if *found { app.run("publishlist", json!({ "action": "drawing", "path": d })).ok().map(|r| file_drawing(d, &r)) } else { None };
+                let file = file.unwrap_or_else(|| FileDrawing {
+                    path: d.clone(),
+                    uid: file_uid(d),
+                    title: std::path::Path::new(d).file_name().map_or_else(|| d.clone(), |n| n.to_string_lossy().to_string()),
+                    sheets: named.iter().filter_map(|e| e["layout"].as_str()).map(named_sheet).collect(),
+                    found: false,
+                });
+                let uid = file.uid;
+                next.files.push(file);
+                uid
+            }
+        };
+        next.order.insert(uid, named.iter().filter_map(|e| e["layout"].as_str().map(str::to_string)).collect());
+        for e in named {
+            let layout = e["layout"].as_str().unwrap_or_default().to_string();
+            if let Some(paper) = e["pageSetup"]["paper"].as_str() {
+                let landscape = e["pageSetup"]["landscape"].as_bool().unwrap_or(true);
+                let fit = e["pageSetup"]["fit"].as_bool().unwrap_or(false);
+                next.changes.insert((uid, layout), SetupChange { paper: paper.to_string(), landscape, fit });
+            }
+        }
+    }
+    // A sheet is ticked when the list ticks it; sheets the list doesn't name are left out.
+    for g in gather(app, &next) {
+        let named = drawings.iter().find(|(d, _, _)| match &g.source {
+            Source::Open(i) => app.session.docs.get(*i).and_then(|ds| ds.path.as_deref()) == Some(d.as_str()),
+            Source::File(p) => p == d,
+        });
+        for s in &g.sheets {
+            let ticked = named.is_some_and(|(_, _, es)| es.iter().any(|e| e["layout"].as_str() == Some(s.name.as_str()) && e["include"] != false));
+            if !ticked {
+                next.skipped.insert((g.uid, s.name.clone()));
+            }
+        }
+    }
+    let out = &r["output"];
+    next.to = match out["to"].as_str() {
+        Some("svg") => To::Svg,
+        Some("png") => To::Png,
+        _ => To::Pdf,
+    };
+    next.combine = out["combine"] == true;
+    next.drop_layers = out["layers"] == false;
+    next.folder = out["folder"].as_str().map(str::to_string);
+    next.name = out["name"].as_str().map(str::to_string);
+    *st = next;
+    Ok(())
+}
+
+/// Save the list as it is shown: every sheet with its tick, order and page setup change, and the
+/// output settings. Returns the report line. Drawings that were never saved have no file to
+/// point to and are left out.
+fn save_list(app: &mut CadApp, groups: &[Group], st: &mut PublishState, path: &str) -> String {
+    let mut sheets = Vec::new();
+    let mut unsaved = Vec::new();
+    for g in groups {
+        let drawing = match &g.source {
+            Source::Open(i) => app.session.docs.get(*i).and_then(|d| d.path.clone()),
+            Source::File(p) => Some(p.clone()),
+        };
+        let Some(drawing) = drawing else {
+            unsaved.push(g.title.clone());
+            continue;
+        };
+        for s in &g.sheets {
+            let mut e = json!({ "drawing": drawing, "layout": s.name, "include": !st.skipped.contains(&(g.uid, s.name.clone())) });
+            if let Some(c) = st.changes.get(&(g.uid, s.name.clone())) {
+                e["pageSetup"] = json!({ "paper": c.paper, "landscape": c.landscape, "fit": c.fit });
+            }
+            sheets.push(e);
+        }
+    }
+    let mut output = json!({ "to": st.to.id(), "combine": st.combine, "layers": !st.drop_layers });
+    if let Some(folder) = st.folder.as_ref().filter(|f| !f.trim().is_empty()) {
+        output["folder"] = json!(folder);
+    }
+    if let Some(name) = &st.name {
+        output["name"] = json!(name);
+    }
+    match app.run("publishlist", json!({ "action": "write", "path": path, "sheets": sheets, "output": output })) {
+        Ok(_) => {
+            st.list = Some(path.to_string());
+            let saved = crate::tf!("Saved the list to {path}", path = path);
+            if unsaved.is_empty() {
+                saved
+            } else {
+                format!("{saved} · {}", crate::tf!("Not saved yet, so left out: {names}", names = unsaved.join(", ")))
+            }
+        }
+        Err(e) => e,
+    }
 }
 
 /// The (group, sheet) pairs that will be published, in order.
@@ -223,7 +465,10 @@ fn default_folder(groups: &[Group], st: &PublishState) -> String {
 /// A `sheets` entry for the engine: the drawing by its index, the sheet, and a page setup
 /// changed for this run.
 fn sheet_json(g: &Group, s: &Sheet, st: &PublishState) -> Value {
-    let mut v = json!({ "drawing": g.index, "layout": s.name });
+    let mut v = match &g.source {
+        Source::Open(i) => json!({ "drawing": i, "layout": s.name }),
+        Source::File(path) => json!({ "drawing": path, "layout": s.name }),
+    };
     if let Some(c) = st.changes.get(&(g.uid, s.name.clone())) {
         v["pageSetup"] = json!({ "paper": c.paper, "landscape": c.landscape, "fit": c.fit });
     }
@@ -239,6 +484,9 @@ fn combining(st: &PublishState) -> bool {
 fn publish_request(groups: &[Group], st: &PublishState) -> Value {
     let sheets: Vec<Value> = picked(groups, st).into_iter().map(|(g, s)| sheet_json(g, s, st)).collect();
     let mut r = json!({ "sheets": sheets, "to": st.to.id(), "combine": combining(st) });
+    if let Some(name) = &st.name {
+        r["name"] = json!(name);
+    }
     if st.to == To::Pdf {
         r["pdf"] = json!({ "layers": !st.drop_layers });
     }
@@ -350,11 +598,30 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         app.ui.dialog = Some("commands".into());
     }
     if act.add
-        && let Some(pick) = app.services.pick_open.as_ref()
-        && let Some(path) = pick()
-        && let Err(e) = app.run("open", json!({ "path": path }))
+        && let Some(path) = app.services.pick_open.as_ref().and_then(|pick| pick())
+        && let Err(e) = add_drawing(app, &mut st, &path)
     {
         st.report = Some(e);
+    }
+    if act.open_list
+        && let Some(path) = app.services.pick_list.as_ref().or(app.services.pick_open.as_ref()).and_then(|pick| pick())
+    {
+        st.report = Some(match open_list(app, &mut st, &path) {
+            Ok(()) => crate::tf!("Opened the list {path}", path = path),
+            Err(e) => e,
+        });
+    }
+    if act.save_list {
+        let suggested = st
+            .list
+            .as_deref()
+            .and_then(|l| std::path::Path::new(l).file_name())
+            .map_or_else(|| format!("{}.ccpub", groups.first().map_or("Sheets", |g| g.stem.as_str())), |n| n.to_string_lossy().to_string());
+        if let Some(path) = app.services.pick_save.as_ref().and_then(|pick| pick(&suggested)) {
+            let path = if path.to_ascii_lowercase().ends_with(".ccpub") { path } else { format!("{path}.ccpub") };
+            let report = save_list(app, &groups, &mut st, &path);
+            st.report = Some(report);
+        }
     }
     if act.choose {
         let stem = groups.first().map_or_else(|| "Drawing".to_string(), |g| g.stem.clone());
@@ -449,14 +716,24 @@ fn list_column(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut A
     let total: usize = groups.iter().map(|g| g.sheets.len()).sum();
     let n = picked(groups, st).len();
     ui.horizontal(|ui| {
-        ui.menu_button(format!("{} ⏷", crate::tl!("Unsaved list")), |ui| {
-            if ui.button(crate::tl!("New List")).clicked() {
-                *st = PublishState { folder: st.folder.clone(), ..PublishState::default() };
+        let list_name = st.list.as_deref().and_then(|l| std::path::Path::new(l).file_name()).map(|n| n.to_string_lossy().to_string());
+        let title = list_name.unwrap_or_else(|| crate::tl!("Unsaved list").to_string());
+        ui.menu_button(format!("{title} ⏷"), |ui| {
+            if ui.button(crate::tl!("New List")).on_hover_text(crate::tl!("Every open drawing's sheets")).clicked() {
+                *st = PublishState { folder: st.folder.clone(), tab: st.tab, ..PublishState::default() };
                 ui.close();
             }
-            ui.add_enabled(false, egui::Button::new(crate::tl!("Open List..."))).on_disabled_hover_text(crate::tl!("Not available yet"));
-            ui.add_enabled(false, egui::Button::new(crate::tl!("Save List As..."))).on_disabled_hover_text(crate::tl!("Not available yet"));
-        });
+            if ui.button(crate::tl!("Open List...")).clicked() {
+                act.open_list = true;
+                ui.close();
+            }
+            if ui.button(crate::tl!("Save List As...")).clicked() {
+                act.save_list = true;
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text(st.list.clone().unwrap_or_default());
         ui.label(RichText::new(crate::tf!("{n} of {total} sheets", n = n, total = total)).color(t.text_faint));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let inspected = st.inspected.clone();
@@ -466,7 +743,7 @@ fn list_column(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut A
             if ui.add_enabled(inspected.is_some(), egui::Button::new("↑")).on_hover_text(crate::tl!("Move up")).clicked() {
                 move_sheet(groups, st, -1);
             }
-            if ui.button(crate::tl!("Add Drawings...")).on_hover_text(crate::tl!("Open a drawing; its sheets join the list")).clicked() {
+            if ui.button(crate::tl!("Add Drawings...")).on_hover_text(crate::tl!("Add a drawing's sheets without opening it")).clicked() {
                 act.add = true;
             }
             ui.separator();
@@ -597,7 +874,12 @@ fn group_row(ui: &mut Ui, g: &Group, st: &mut PublishState) {
         && let Some(at) = resp.interact_pointer_pos()
     {
         if remove.expand(2.0).contains(at) {
-            st.removed.insert(g.uid);
+            match &g.source {
+                Source::Open(_) => {
+                    st.removed.insert(g.uid);
+                }
+                Source::File(_) => st.files.retain(|f| f.uid != g.uid),
+            }
         } else {
             let all_on = state == Some(true);
             for s in &g.sheets {
@@ -617,8 +899,14 @@ fn group_row(ui: &mut Ui, g: &Group, st: &mut PublishState) {
     paint_check(p, check, state);
     let font = crate::theme::body();
     let title = p.text(pos2(check.right() + GAP, rect.center().y), Align2::LEFT_CENTER, &g.title, FontId::proportional(font.size), t.text);
-    let note = if g.current { crate::tl!("current") } else { crate::tl!("open") };
-    p.text(pos2(title.right() + GAP, rect.center().y), Align2::LEFT_CENTER, note, crate::theme::small(), t.text_faint);
+    let (note, color) = match &g.source {
+        Source::Open(_) if g.current => (crate::tl!("current"), t.text_faint),
+        Source::Open(_) => (crate::tl!("open"), t.text_faint),
+        Source::File(_) if g.found => (crate::tl!("not open"), t.text_faint),
+        Source::File(_) => (crate::tl!("File not found"), t.warn),
+    };
+    p.text(pos2(title.right() + GAP, rect.center().y), Align2::LEFT_CENTER, note, crate::theme::small(), color);
+    ui.ctx().accesskit_node_builder(resp.id, |node| node.set_value(note.to_string()));
     let count = crate::tf!("{n} of {total}", n = on, total = g.sheets.len());
     p.text(pos2(remove.left() - GAP, rect.center().y), Align2::RIGHT_CENTER, count, crate::theme::small(), t.text_dim);
     let hot = resp.hovered() && resp.hover_pos().is_some_and(|h| remove.expand(2.0).contains(h));
@@ -702,6 +990,13 @@ fn sheet_row(ui: &mut Ui, g: &Group, s: &Sheet, st: &mut PublishState) {
 fn sheet_status(g: &Group, s: &Sheet, st: &PublishState) -> (String, Color32, String) {
     let t = Tokens::get();
     let key = (g.uid, s.name.clone());
+    if !g.found {
+        let path = match &g.source {
+            Source::File(p) => p.clone(),
+            Source::Open(_) => g.title.clone(),
+        };
+        return (crate::tl!("File not found").to_string(), t.warn, crate::tf!("{path} isn't there any more", path = path));
+    }
     let Some((status, reason)) = st.checked.as_ref().and_then(|c| c.sheets.get(&key)) else {
         return (crate::tl!("Checking...").to_string(), t.text_faint, String::new());
     };

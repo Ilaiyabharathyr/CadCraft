@@ -21,6 +21,8 @@ use super::file::{base64_decode, base64_encode, io, plot_book};
 use super::*;
 use crate::{EngineError, Result, Session};
 
+mod publish_list;
+
 /// Formats EXPORT writes (the io layer picks the writer from the extension).
 pub const EXPORT_FORMATS: &[&str] = &["dxf", "dwg", "svg", "png", "pdf"];
 /// Default and largest plot preview width, in pixels.
@@ -48,6 +50,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])
             .params("{sheets?: [{drawing?: open drawing index | file path (default: the current drawing; files are read for this run only, never opened), layout: name | \"Model\", pageSetup?: {paper?, width?, height?, landscape?, fit?, scale?, margins?, plotStyleTable?, lineweights?, plotTransparency?} (this run only; the drawing doesn't change)}] (default: Model if it has objects, then every layout in tab order), to?: pdf|svg|png, folder? (made if missing; else returns base64 `data` per sheet), name?: pattern with {drawing} {sheet} {n} (default \"{drawing}-{sheet}\", or \"{drawing}\" when combining), combine?: one PDF with a page per sheet, from any drawings, pdf?: {layers?, offLayers?, text?: text|geometry}, copies?: 1-100, stamp?: not available yet, action?: \"status\" (check the sheets and name the files; writes nothing → {sheets: [{drawing, layout, status: ready|default|error, reason?, file?, page?}], ready, default, errors, combined?: {file, pages}}); older form: path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf), layouts?: [name | \"Model\"]} → {sheets: [{drawing, layout, ok, file, bytes, path? | data} (combining: {drawing, layout, ok, page, file}) | {drawing, layout, ok: false, error}], combined?: {file, bytes, pages, path? | data}, published, failed, copies, message}: a sheet that fails is reported and the rest still publish; an error only when none did")
+            .noundo(),
+        CommandSpec::new("publishlist", "Publish List", publish_list::run)
+            .params("{action: \"read\", path: \"NAME.ccpub\"} → {path, sheets: [{drawing: absolute path, layout, include, pageSetup?, found}], output: {to, combine, folder?, name?, layers}} | {action: \"write\", path, sheets: [{drawing: file path, layout, include?, pageSetup?}], output?} → {path, sheets}: drawing paths are stored relative to the list's folder | {action: \"drawing\", path} → {path, title, sheets: [{layout, model, page}]}: a drawing file's sheets, read without opening it")
             .noundo(),
         CommandSpec::new("pdfbook", "Sheet Books to PDF...", run_pdfbook)
             .menu(&["File", "Sheet Books to PDF..."])
@@ -718,26 +723,58 @@ struct Prepared<'a> {
     opts: Value,
 }
 
-/// Read each drawing file the sheets name, once; a file that can't be read keeps its error.
-fn read_sheet_files(sheets: &[SheetRequest]) -> BTreeMap<String, std::result::Result<Drawing, String>> {
+/// Drawing files read for PUBLISH without opening them, most recent last: (path, size,
+/// modified time, drawing). A file is read again when its size or time changes.
+type DetachedCache = Vec<(String, u64, Option<std::time::SystemTime>, Arc<Drawing>)>;
+static DETACHED: std::sync::Mutex<DetachedCache> = std::sync::Mutex::new(Vec::new());
+/// Drawings kept: enough for the status checks of a list, without holding many big drawings.
+const DETACHED_KEPT: usize = 4;
+
+/// A drawing file read without opening it, from the cache when the file hasn't changed. The
+/// Publish Sheets window checks its sheets often; a big file is read once, not on every check.
+pub(crate) fn detached(cmd: &str, path: &str) -> Result<Arc<Drawing>> {
+    let meta = std::fs::metadata(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    if !meta.is_file() {
+        return Err(bad(cmd, format!("{path}: not a drawing file")));
+    }
+    let (len, modified) = (meta.len(), meta.modified().ok());
+    {
+        let mut cache = DETACHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(i) = cache.iter().position(|(p, l, m, _)| p == path && *l == len && *m == modified) {
+            let hit = cache.remove(i);
+            let d = hit.3.clone();
+            cache.push(hit);
+            return Ok(d);
+        }
+    }
+    let d = Arc::new(super::file::read_detached(cmd, path)?);
+    let mut cache = DETACHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.retain(|(p, _, _, _)| p != path);
+    cache.push((path.to_string(), len, modified, d.clone()));
+    while cache.len() > DETACHED_KEPT {
+        cache.remove(0);
+    }
+    Ok(d)
+}
+
+/// The drawing files a run's sheets name, each read once; a file that can't be read keeps its
+/// error.
+type SheetFiles = BTreeMap<String, std::result::Result<Arc<Drawing>, String>>;
+
+fn read_sheet_files(sheets: &[SheetRequest]) -> SheetFiles {
     let mut files = BTreeMap::new();
     for sheet in sheets {
         if let Source::File(path) = &sheet.source
             && !files.contains_key(path)
         {
-            files.insert(path.clone(), super::file::read_detached("publish", path).map_err(|e| error_text(&e)));
+            files.insert(path.clone(), detached("publish", path).map_err(|e| error_text(&e)));
         }
     }
     files
 }
 
 /// Find a sheet's drawing and layout and build its plot options.
-fn prepare<'a>(
-    s: &'a Session,
-    files: &'a BTreeMap<String, std::result::Result<Drawing, String>>,
-    out: &PublishOutput,
-    sheet: &SheetRequest,
-) -> Result<Prepared<'a>> {
+fn prepare<'a>(s: &'a Session, files: &'a SheetFiles, out: &PublishOutput, sheet: &SheetRequest) -> Result<Prepared<'a>> {
     let cmd = "publish";
     let (d, title) = match &sheet.source {
         Source::Open(i) => {
@@ -745,7 +782,7 @@ fn prepare<'a>(
             (&*ds.doc, ds.title.clone())
         }
         Source::File(path) => match files.get(path) {
-            Some(Ok(d)) => (d, path.clone()),
+            Some(Ok(d)) => (&**d, path.clone()),
             Some(Err(e)) => return Err(bad(cmd, e.clone())),
             None => return Err(bad(cmd, format!("{path}: the file could not be read"))),
         },

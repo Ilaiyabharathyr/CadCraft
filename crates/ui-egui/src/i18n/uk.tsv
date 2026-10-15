@@ -1222,6 +1222,7 @@
 	Import...	Імпорт...
 	Export...	Експорт...
 	Batch Publish...	Пакетна публікація...
+	Publish List	Список публікації
 	Scale List...	Список масштабів...
 	Annotative Object Scale	Масштаб анотативних об'єктів
 	Add Current Scale	Додати поточний масштаб
@@ -1340,7 +1341,16 @@
 	Move up	Перемістити вгору
 	Move down	Перемістити вниз
 	Add Drawings...	Додати креслення...
-	Open a drawing; its sheets join the list	Відкрийте креслення — його аркуші додадуться до списку
+	Add a drawing's sheets without opening it	Додати аркуші креслення, не відкриваючи його
+	Every open drawing's sheets	Аркуші всіх відкритих креслень
+	File not found	Файл не знайдено
+	Not saved yet, so left out: {names}	Ще не збережено, тому пропущено: {names}
+	Opened the list {path}	Відкрито список {path}
+	Saved the list to {path}	Список збережено в {path}
+	not open	не відкрито
+	{path} isn't there any more	{path} більше немає
+	Publish lists (CCPUB)	Списки публікації (CCPUB)
+	Publish list (CCPUB)	Список публікації (CCPUB)
 	No drawings are open. Use Add Drawings... to open one.	Немає відкритих креслень. Скористайтеся «Додати креслення...», щоб відкрити.
 	Include every open drawing	Включити всі відкриті креслення
 	Tick to publish · click a row to inspect it	Позначте, щоб публікувати · клацніть рядок, щоб переглянути
