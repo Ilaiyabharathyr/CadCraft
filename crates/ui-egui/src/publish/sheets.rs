@@ -14,10 +14,12 @@ pub(super) fn ratio(k: f64) -> String {
     if k < 1.0 { format!("1:{}", num(1.0 / k)) } else { format!("{}:1", num(k)) }
 }
 
-pub(super) fn model_sheet() -> Sheet {
+/// Model space, plotted with `page` (fitted to its paper unless the run changes that).
+pub(super) fn model_sheet(page: cadcraft_doc::PageSetup) -> Sheet {
     Sheet {
         name: "Model".into(),
         model: true,
+        page,
         setup: "Default".into(),
         device: "PDF".into(),
         size: String::new(),
@@ -38,6 +40,7 @@ pub(super) fn layout_sheet(name: &str, p: &cadcraft_doc::PageSetup) -> Sheet {
     Sheet {
         name: name.to_string(),
         model: false,
+        page: p.clone(),
         setup: if default_setup {
             "Default".into()
         } else if device == "PDF" {
@@ -56,11 +59,12 @@ pub(super) fn layout_sheet(name: &str, p: &cadcraft_doc::PageSetup) -> Sheet {
 /// A sheet a list names in a drawing that is gone: only its name is known.
 pub(super) fn named_sheet(name: &str) -> Sheet {
     if name.eq_ignore_ascii_case("model") {
-        return model_sheet();
+        return model_sheet(cadcraft_doc::PageSetup::default());
     }
     Sheet {
         name: name.to_string(),
         model: false,
+        page: cadcraft_doc::PageSetup::default(),
         setup: "—".into(),
         device: String::new(),
         size: String::new(),
@@ -73,11 +77,11 @@ pub(super) fn named_sheet(name: &str) -> Sheet {
 pub(super) fn sheets_of(d: &cadcraft_doc::Drawing) -> Vec<Sheet> {
     let mut out = Vec::new();
     if !d.model.is_empty() {
-        out.push(model_sheet());
+        out.push(model_sheet(crate::managers::sheet_page(d, "Model")));
     }
     let mut layouts: Vec<_> = d.layouts.iter().collect();
     layouts.sort_by_key(|l| l.tab_order);
-    out.extend(layouts.into_iter().map(|l| layout_sheet(&l.name, &l.page)));
+    out.extend(layouts.into_iter().map(|l| Sheet { page: crate::managers::sheet_page(d, &l.name), ..layout_sheet(&l.name, &l.page) }));
     out
 }
 
@@ -90,7 +94,8 @@ pub(super) fn file_drawing(path: &str, r: &Value) -> FileDrawing {
         .filter_map(|x| {
             let name = x["layout"].as_str()?;
             if x["model"] == true {
-                return Some(model_sheet());
+                // The file isn't open, so model space starts from the default page setup.
+                return Some(model_sheet(cadcraft_doc::PageSetup::default()));
             }
             let page: cadcraft_doc::PageSetup = serde_json::from_value(x["page"].clone()).unwrap_or_default();
             Some(layout_sheet(name, &page))

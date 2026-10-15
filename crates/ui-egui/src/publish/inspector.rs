@@ -54,7 +54,7 @@ pub(super) fn section(ui: &mut Ui, label: &str) {
     ui.label(RichText::new(crate::i18n::t(label).to_uppercase()).font(FontId::proportional(11.0)).color(Tokens::get().text_faint).strong());
 }
 
-pub(super) fn inspector(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Actions, height: f32) {
+pub(super) fn inspector(ui: &mut Ui, session: &cadcraft_engine::Session, groups: &[Group], st: &mut PublishState, act: &mut Actions, height: f32) {
     let t = Tokens::get();
     let tab = if st.tab == Tab::Sheet { 0 } else { 1 };
     if let Some(i) = segmented(ui, "cc_publish_tab", &["Sheet", "Output"], tab, &[true, true]) {
@@ -62,7 +62,7 @@ pub(super) fn inspector(ui: &mut Ui, groups: &[Group], st: &mut PublishState, ac
     }
     let body_h = (height - 28.0 - 104.0).max(120.0);
     egui::ScrollArea::vertical().id_salt("cc_publish_inspector").max_height(body_h).auto_shrink([false, false]).show(ui, |ui| match st.tab {
-        Tab::Sheet => sheet_tab(ui, groups, st),
+        Tab::Sheet => sheet_tab(ui, session, groups, st, act),
         Tab::Output => output_tab(ui, groups, st, act),
     });
     ui.separator();
@@ -86,7 +86,7 @@ pub(super) fn inspector(ui: &mut Ui, groups: &[Group], st: &mut PublishState, ac
     let _ = t;
 }
 
-pub(super) fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState) {
+pub(super) fn sheet_tab(ui: &mut Ui, session: &cadcraft_engine::Session, groups: &[Group], st: &mut PublishState, act: &mut Actions) {
     let t = Tokens::get();
     let inspected = st.inspected.clone();
     let found = inspected
@@ -101,7 +101,8 @@ pub(super) fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 150.0), Sense::hover());
     let p = ui.painter();
     p.rect(rect, 4.0, t.canvas, Stroke::new(1.0, t.border), StrokeKind::Inside);
-    let paper = if s.landscape || s.model { vec2(176.0, 124.0) } else { vec2(88.0, 124.0) };
+    let landscape = st.changes.get(&(g.uid, s.name.clone())).map_or(s.landscape || s.model, |c| c.page.landscape);
+    let paper = if landscape { vec2(176.0, 124.0) } else { vec2(88.0, 124.0) };
     let sheet = Rect::from_center_size(rect.center(), paper);
     p.rect_filled(sheet.translate(vec2(0.0, 2.0)), 1.0, t.chrome_dark);
     p.rect_filled(sheet, 1.0, t.paper);
@@ -121,7 +122,14 @@ pub(super) fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState) {
     let key = (g.uid, s.name.clone());
     let mut change = st.changes.get(&key).cloned();
     let saved = crate::tf!("As saved ({setup})", setup = crate::i18n::t(&s.setup));
-    let shown = change.as_ref().map_or_else(|| saved.clone(), |c| c.paper.clone());
+    let shown = match &change {
+        None => saved.clone(),
+        Some(SetupChange { from: Some(n), .. }) => crate::tf!("From {layout}", layout = n),
+        Some(SetupChange { from: None, page }) => page.paper.clone(),
+    };
+    // The drawing's other layouts, whose page setups this sheet can borrow for the run.
+    let others: Vec<(&str, &cadcraft_doc::PageSetup)> =
+        g.sheets.iter().filter(|o| !o.model && o.name != s.name).map(|o| (o.name.as_str(), &o.page)).collect();
     egui::ComboBox::from_id_salt("cc_publish_setup")
         .width(ui.available_width())
         .selected_text(shown)
@@ -129,23 +137,67 @@ pub(super) fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState) {
             if ui.selectable_label(change.is_none(), &saved).clicked() {
                 change = None;
             }
+            for (name, page) in &others {
+                let on = change.as_ref().is_some_and(|c| c.from.as_deref() == Some(*name));
+                if ui.selectable_label(on, crate::tf!("From {layout}", layout = name)).clicked() {
+                    let mut page = (*page).clone();
+                    if s.model {
+                        // Model space fits its extents on the borrowed paper.
+                        page.plot_area = "extents".into();
+                        page.scale_to_fit = true;
+                    }
+                    change = Some(SetupChange { from: Some((*name).to_string()), page });
+                }
+            }
+            if !others.is_empty() {
+                ui.separator();
+            }
             for paper in PAPERS {
-                let on = change.as_ref().is_some_and(|c| c.paper == *paper);
-                if ui.selectable_label(on, *paper).clicked() {
-                    let (landscape, fit) = change.as_ref().map_or((true, s.model || s.scale == "Fit"), |c| (c.landscape, c.fit));
-                    change = Some(SetupChange { paper: (*paper).to_string(), landscape, fit });
+                let on = change.as_ref().is_some_and(|c| c.from.is_none() && c.page.paper == *paper);
+                if ui.selectable_label(on, *paper).clicked()
+                    && let Some(size) = cadcraft_render::paper_size(paper)
+                {
+                    let mut page = change.as_ref().map_or_else(|| s.page.clone(), |c| c.page.clone());
+                    page.paper = (*paper).to_string();
+                    page.width_mm = size.width_mm;
+                    page.height_mm = size.height_mm;
+                    if change.is_none() {
+                        page.landscape = true;
+                        page.scale_to_fit = s.model || s.scale == "Fit";
+                    }
+                    change = Some(SetupChange { from: None, page });
                 }
             }
         })
         .response
         .on_hover_text(crate::tl!("Change the paper for this run only. The drawing keeps its page setup."));
-    if let Some(c) = change.as_mut() {
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut c.landscape, false, crate::tl!("Portrait"));
-            ui.radio_value(&mut c.landscape, true, crate::tl!("Landscape"));
-            ui.checkbox(&mut c.fit, crate::tl!("Fit to paper"));
-        });
+    // Every setting the run can change, for an open drawing (a file listed without opening it has
+    // only the paper choices); editing one turns the sheet into a change for this run.
+    let open_index = match &g.source {
+        Source::Open(i) => Some(*i),
+        Source::File(_) => None,
+    };
+    if let Some(d) = open_index.and_then(|i| session.docs.get(i)).map(|ds| &ds.doc) {
+        let mut page = change.as_ref().map_or_else(|| s.page.clone(), |c| c.page.clone());
+        if crate::managers::page_editor(ui, egui::Id::new(("cc_publish_page", g.uid, s.name.as_str())), d, &mut page) {
+            change = Some(SetupChange { from: None, page });
+        }
+    }
+    if let Some(c) = &change {
         ui.label(RichText::new(crate::tl!("For this run only. The drawing keeps its page setup.")).font(crate::theme::small()).color(t.text_faint));
+        let mut reset = false;
+        ui.horizontal(|ui| {
+            reset = ui.button(crate::tl!("Reset")).on_hover_text(crate::tl!("Use the sheet's own page setup again")).clicked();
+            if let Some(i) = open_index
+                && !s.model
+                && ui.button(crate::tl!("Save to Layout")).on_hover_text(crate::tl!("Keep this page setup in the layout (can be undone)")).clicked()
+            {
+                act.save = Some((i, g.uid, s.name.clone(), c.page.clone()));
+            }
+        });
+        if reset {
+            change = None;
+        }
     }
     match change {
         Some(c) => st.changes.insert(key, c),
@@ -158,12 +210,12 @@ pub(super) fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState) {
         let folder = if g.folder.is_empty() { crate::tl!("Not saved yet").to_string() } else { g.folder.clone() };
         let change = st.changes.get(&(g.uid, s.name.clone()));
         let paper = match change {
-            Some(c) => format!("{}, {}", c.paper, if c.landscape { crate::tl!("landscape") } else { crate::tl!("portrait") }),
+            Some(c) => format!("{}, {}", c.page.paper, if c.page.landscape { crate::tl!("landscape") } else { crate::tl!("portrait") }),
             None if s.model => crate::tl!("Fit to paper").to_string(),
             None => format!("{}, {}", s.size, if s.landscape { crate::tl!("landscape") } else { crate::tl!("portrait") }),
         };
         let setup = match st.changes.get(&(g.uid, s.name.clone())) {
-            Some(c) => crate::tf!("{paper}, for this run", paper = c.paper),
+            Some(c) => crate::tf!("{paper}, for this run", paper = c.page.paper),
             None if s.default_setup => crate::tl!("Drawing default").to_string(),
             None => s.setup.clone(),
         };

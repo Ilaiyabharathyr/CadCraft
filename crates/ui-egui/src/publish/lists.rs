@@ -46,25 +46,21 @@ pub(super) fn open_list(app: &mut CadApp, st: &mut PublishState, path: &str) -> 
             }
         };
         next.order.insert(uid, named.iter().filter_map(|e| e["layout"].as_str().map(str::to_string)).collect());
-        for e in named {
-            let layout = e["layout"].as_str().unwrap_or_default().to_string();
-            if let Some(paper) = e["pageSetup"]["paper"].as_str() {
-                let landscape = e["pageSetup"]["landscape"].as_bool().unwrap_or(true);
-                let fit = e["pageSetup"]["fit"].as_bool().unwrap_or(false);
-                next.changes.insert((uid, layout), SetupChange { paper: paper.to_string(), landscape, fit });
-            }
-        }
     }
-    // A sheet is ticked when the list ticks it; sheets the list doesn't name are left out.
+    // A sheet is ticked when the list ticks it; sheets the list doesn't name are left out. A page
+    // setup change in the list is applied to the sheet's own page setup.
     for g in gather(app, &next) {
         let named = drawings.iter().find(|(d, _, _)| match &g.source {
             Source::Open(i) => app.session.docs.get(*i).and_then(|ds| ds.path.as_deref()) == Some(d.as_str()),
             Source::File(p) => p == d,
         });
         for s in &g.sheets {
-            let ticked = named.is_some_and(|(_, _, es)| es.iter().any(|e| e["layout"].as_str() == Some(s.name.as_str()) && e["include"] != false));
-            if !ticked {
+            let entry = named.and_then(|(_, _, es)| es.iter().find(|e| e["layout"].as_str() == Some(s.name.as_str())));
+            if !entry.is_some_and(|e| e["include"] != false) {
                 next.skipped.insert((g.uid, s.name.clone()));
+            }
+            if let Some(change) = entry.and_then(|e| e["pageSetup"].as_object()) {
+                next.changes.insert((g.uid, s.name.clone()), SetupChange { from: None, page: apply_setup(s.page.clone(), change) });
             }
         }
     }
@@ -113,7 +109,7 @@ pub(super) fn save_list(app: &mut CadApp, groups: &[Group], st: &mut PublishStat
         for s in &g.sheets {
             let mut e = json!({ "drawing": drawing, "layout": s.name, "include": !st.skipped.contains(&(g.uid, s.name.clone())) });
             if let Some(c) = st.changes.get(&(g.uid, s.name.clone())) {
-                e["pageSetup"] = json!({ "paper": c.paper, "landscape": c.landscape, "fit": c.fit });
+                e["pageSetup"] = setup_json(&s.page, &c.page);
             }
             sheets.push(e);
         }
@@ -139,5 +135,79 @@ pub(super) fn save_list(app: &mut CadApp, groups: &[Group], st: &mut PublishStat
             }
         }
         Err(e) => e,
+    }
+}
+
+/// `page` with a list's page setup change (as the engine's `pageSetup`, already checked) applied.
+fn apply_setup(mut page: cadcraft_doc::PageSetup, change: &serde_json::Map<String, Value>) -> cadcraft_doc::PageSetup {
+    let num = |k: &str| change.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
+    if let Some(paper) = change.get("paper").and_then(Value::as_str)
+        && let Some(size) = cadcraft_render::paper_size(paper)
+    {
+        page.paper = paper.to_string();
+        page.width_mm = size.width_mm;
+        page.height_mm = size.height_mm;
+    }
+    if let (Some(w), Some(h)) = (num("width"), num("height")) {
+        page.paper = format!("User ({w:.2} x {h:.2} MM)");
+        page.width_mm = w;
+        page.height_mm = h;
+    }
+    if let Some(l) = change.get("landscape").and_then(Value::as_bool) {
+        page.landscape = l;
+    }
+    if let Some(f) = change.get("fit").and_then(Value::as_bool) {
+        page.scale_to_fit = f;
+    }
+    if let Some(k) = num("scale") {
+        page.scale = k;
+    }
+    if let Some(m) = change.get("margins").and_then(Value::as_array).filter(|m| m.len() == 4) {
+        for (slot, v) in page.margins_mm.iter_mut().zip(m) {
+            if let Some(v) = v.as_f64().filter(|v| v.is_finite() && *v >= 0.0) {
+                *slot = v;
+            }
+        }
+    }
+    if let Some(b) = change.get("lineweights").and_then(Value::as_bool) {
+        page.lineweights = b;
+    }
+    if let Some(b) = change.get("plotTransparency").and_then(Value::as_bool) {
+        page.plot_transparency = b;
+    }
+    if let Some(t) = change.get("plotStyleTable").and_then(Value::as_str) {
+        page.plot_style_table = if cadcraft_doc::no_plot_style_table(t) { String::new() } else { t.to_string() };
+    }
+    page
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn a_saved_change_comes_back_as_the_same_page_setup() {
+        let own = cadcraft_doc::PageSetup::default();
+        let mut page = own.clone();
+        page.paper = "A3".into();
+        page.width_mm = 297.0;
+        page.height_mm = 420.0;
+        page.landscape = false;
+        page.scale_to_fit = false;
+        page.scale = 0.02;
+        page.margins_mm = [5.0, 5.0, 5.0, 5.0];
+        page.lineweights = !own.lineweights;
+        page.plot_transparency = !own.plot_transparency;
+        page.plot_style_table = "monochrome.ctb".into();
+        // Saved as the engine's pageSetup, read back onto the sheet's own page setup.
+        let saved = setup_json(&own, &page);
+        let back = apply_setup(own.clone(), saved.as_object().unwrap());
+        assert_eq!(back, page);
+        // A custom paper size goes by its size; bad numbers are ignored, not applied.
+        let custom = json!({"width": 500.0, "height": 700.0, "scale": -3, "margins": [1, 2]});
+        let back = apply_setup(own.clone(), custom.as_object().unwrap());
+        assert_eq!((back.width_mm, back.height_mm, back.scale, back.margins_mm), (500.0, 700.0, own.scale, own.margins_mm));
     }
 }

@@ -20,7 +20,35 @@ pub(super) fn sheet_json(g: &Group, s: &Sheet, st: &PublishState) -> Value {
         Source::File(path) => json!({ "drawing": path, "layout": s.name }),
     };
     if let Some(c) = st.changes.get(&(g.uid, s.name.clone())) {
-        v["pageSetup"] = json!({ "paper": c.paper, "landscape": c.landscape, "fit": c.fit });
+        v["pageSetup"] = setup_json(&s.page, &c.page);
+    }
+    v
+}
+
+/// The engine's `pageSetup` for a run that plots with `page` instead of `own`: paper (by name,
+/// else its size), orientation and fit always; the rest only where they differ.
+pub(super) fn setup_json(own: &cadcraft_doc::PageSetup, page: &cadcraft_doc::PageSetup) -> Value {
+    let mut v = json!({ "landscape": page.landscape, "fit": page.scale_to_fit });
+    if cadcraft_render::paper_size(&page.paper).is_some() {
+        v["paper"] = json!(page.paper);
+    } else {
+        v["width"] = json!(page.width_mm);
+        v["height"] = json!(page.height_mm);
+    }
+    if !page.scale_to_fit {
+        v["scale"] = json!(page.scale);
+    }
+    if page.margins_mm != own.margins_mm {
+        v["margins"] = json!(page.margins_mm);
+    }
+    if page.lineweights != own.lineweights {
+        v["lineweights"] = json!(page.lineweights);
+    }
+    if page.plot_transparency != own.plot_transparency {
+        v["plotTransparency"] = json!(page.plot_transparency);
+    }
+    if page.plot_style_table != own.plot_style_table {
+        v["plotStyleTable"] = json!(if cadcraft_doc::no_plot_style_table(&page.plot_style_table) { "None" } else { page.plot_style_table.as_str() });
     }
     v
 }

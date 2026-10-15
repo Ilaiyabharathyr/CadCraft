@@ -66,10 +66,10 @@ impl To {
 /// A sheet's page setup changed for one run (the drawing keeps its own).
 #[derive(Clone, Debug, PartialEq)]
 struct SetupChange {
-    /// A short paper name (`A3`, `Letter`…).
-    paper: String,
-    landscape: bool,
-    fit: bool,
+    /// The layout whose page setup was copied; `None` when picked or edited here.
+    from: Option<String>,
+    /// The page setup the run plots with (`paper` may be a short name such as `A3`).
+    page: cadcraft_doc::PageSetup,
 }
 
 /// What `publish {"action": "status"}` said, for the request it was asked about.
@@ -156,6 +156,8 @@ fn file_uid(path: &str) -> u64 {
 struct Sheet {
     name: String,
     model: bool,
+    /// The page setup the sheet plots with unless the run changes it.
+    page: cadcraft_doc::PageSetup,
     setup: String,
     device: String,
     size: String,
@@ -185,6 +187,8 @@ struct Actions {
     /// In: a run is in progress; the host can open files.
     busy: bool,
     can_open: bool,
+    /// Keep a sheet's run page setup in its layout: (drawing index, uid, layout, page).
+    save: Option<(usize, u64, String, cadcraft_doc::PageSetup)>,
     publish: bool,
     add: bool,
     open_list: bool,
@@ -224,7 +228,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         .max_size(room)
         .pivot(Align2::CENTER_CENTER)
         .default_pos(center)
-        .show(ctx, |ui| body(ui, &groups, &mut st, &mut act));
+        .show(ctx, |ui| body(ui, &app.session, &groups, &mut st, &mut act));
     if act.close {
         *open = false;
     }
@@ -265,6 +269,19 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         {
             st.folder = Some(dir.to_string_lossy().to_string());
         }
+    }
+    if let Some((index, uid, layout, page)) = act.save.take() {
+        let previous = app.session.active;
+        app.session.active = index;
+        let r = app.run("pagesetup", crate::managers::store_params(&layout, &page));
+        app.session.active = previous.min(app.session.docs.len().saturating_sub(1));
+        st.report = Some(match r {
+            Ok(_) => {
+                st.changes.remove(&(uid, layout.clone()));
+                crate::tf!("Saved the page setup in {layout}", layout = layout)
+            }
+            Err(e) => e,
+        });
     }
     if act.publish {
         match run(app, &groups, &st) {
@@ -320,7 +337,7 @@ fn run(app: &mut CadApp, groups: &[Group], st: &PublishState) -> Result<bool, St
     Ok(background)
 }
 
-fn body(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Actions) {
+fn body(ui: &mut Ui, session: &cadcraft_engine::Session, groups: &[Group], st: &mut PublishState, act: &mut Actions) {
     let size = ui.available_size();
     let footer = 34.0;
     let main_h = (size.y - footer - 14.0).max(240.0);
@@ -336,7 +353,7 @@ fn body(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Actions)
         ui.separator();
         ui.allocate_ui_with_layout(vec2(INSPECTOR, main_h), Layout::top_down(Align::Min), |ui| {
             ui.set_min_size(vec2(INSPECTOR, main_h));
-            inspector(ui, groups, st, act, main_h);
+            inspector(ui, session, groups, st, act, main_h);
         });
     });
     ui.separator();

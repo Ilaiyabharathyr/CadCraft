@@ -230,3 +230,63 @@ fn the_window_fits_a_compact_screen_at_2x() {
     save(&mut h, "publish-compact-2x");
     h.get_by_label("Publish Sheets");
 }
+
+/// Click a sheet's row in the list (the status bar's layout tabs carry the same names).
+fn pick_sheet(h: &mut Harness<'static, CadApp>, name: &str) {
+    h.get(By::new().label(name).predicate(|n| n.value().is_some())).click();
+    h.run_steps(3);
+}
+
+#[test]
+fn every_page_setting_can_change_for_one_run() {
+    let dir = temp("rows");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut h = harness_for(app(Some(dir.clone())), 1280.0, 900.0, 1.0);
+    pick_sheet(&mut h, "Layout1");
+    // The inspector's page setup rows: portrait, and object lineweights off.
+    h.get_by_label("Portrait").click();
+    h.run_steps(3);
+    h.get_by_label("Plot object lineweights").click();
+    settle(&mut h);
+    save(&mut h, "publish-page-setup-rows");
+    h.get(By::new().value("Changed for this run"));
+    assert!(h.state().session.doc().unwrap().layout("Layout1").unwrap().page.landscape, "the drawing keeps its page setup");
+    h.get_by_label("Publish 3 Sheets").click();
+    wait_for_publish(&mut h);
+    let plotted = std::fs::read_to_string(dir.join("Drawing1-Layout1.pdf")).unwrap();
+    assert!(plotted.contains(r#""landscape":false"#), "portrait for this run: {plotted}");
+    assert!(plotted.contains(r#""lineweights":false"#), "no lineweights for this run: {plotted}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn reset_and_save_to_layout() {
+    let mut h = harness(1280.0, 900.0, 1.0);
+    pick_sheet(&mut h, "Layout1");
+    h.get_by_label("Portrait").click();
+    settle(&mut h);
+    h.get_by_label("Reset").click();
+    settle(&mut h);
+    assert_eq!(h.query_all(By::new().value("Changed for this run")).count(), 0, "Reset drops the change");
+    h.get_by_label("Portrait").click();
+    settle(&mut h);
+    h.get_by_label("Save to Layout").click();
+    settle(&mut h);
+    assert!(!h.state().session.doc().unwrap().layout("Layout1").unwrap().page.landscape, "the layout keeps it now");
+    assert_eq!(h.query_all(By::new().value("Changed for this run")).count(), 0, "and the run uses the layout's own again");
+}
+
+#[test]
+fn a_sheet_can_borrow_another_layouts_page_setup() {
+    let mut h = harness(1280.0, 900.0, 1.0);
+    h.run_steps(1);
+    h.state_mut().run("pagesetup", json!({ "layout": "Layout2", "paper": "A3", "landscape": false })).unwrap();
+    settle(&mut h);
+    pick_sheet(&mut h, "Layout1");
+    h.get(By::new().value("As saved (Default)")).click();
+    h.run_steps(3);
+    h.get_by_label("From Layout2").click();
+    settle(&mut h);
+    h.get(By::new().value("From Layout2"));
+    h.get(By::new().value("Changed for this run"));
+}
