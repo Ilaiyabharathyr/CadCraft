@@ -1,13 +1,15 @@
 //! PUBLISH with a `sheets` list: sheets from open drawings and from drawing files (read for the
 //! run only), a page setup override per sheet that leaves the drawing as it was, file names from a
 //! pattern, one result per sheet, and a run that keeps going when one sheet fails. Combining puts
-//! the sheets of any drawings in one PDF; SVG and PNG give a file per sheet.
+//! the sheets of any drawings in one PDF; SVG and PNG give a file per sheet. `action: "status"`
+//! says what each sheet will do and writes nothing.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use cadcraft_engine::Session;
 use cadcraft_engine::cmd::file::{IoHooks, base64_decode, set_io, set_plot_book};
+use cadcraft_engine::cmd::plotters::{PlotterStore, set_plotter_store};
 use serde_json::{Value, json};
 
 /// How often this test's reader decoded each file (tests run in parallel, so by file).
@@ -28,10 +30,16 @@ fn echo_book(parts: &[(&cadcraft_doc::Drawing, cadcraft_doc::Space, Value)], opt
     Ok(format!("%PDF book {}: {} | {opts}", parts.len(), pages.join(", ")).into_bytes())
 }
 
-/// A reader for `*.sheets` files (a metric drawing with Layout1 and Layout2); anything else is
-/// unreadable.
+/// A reader for `*.sheets` files (a metric drawing with Layout1 and Layout2; in a `*.gone.sheets`
+/// file Layout1's page setup names a plotter that isn't set up); anything else is unreadable.
 fn read(bytes: &[u8], name: &str) -> Result<cadcraft_doc::Drawing, String> {
-    if name.ends_with(".sheets") && bytes == b"sheets" {
+    if name.ends_with(".gone.sheets") && bytes == b"sheets" {
+        let mut d = cadcraft_doc::Drawing::new_metric();
+        if let Some(l) = d.layouts.iter_mut().find(|l| l.name == "Layout1") {
+            l.page.device = "Gone Plotter".into();
+        }
+        Ok(d)
+    } else if name.ends_with(".sheets") && bytes == b"sheets" {
         if let Ok(mut r) = READS.lock() {
             *r.entry(name.to_string()).or_default() += 1;
         }
@@ -44,6 +52,7 @@ fn read(bytes: &[u8], name: &str) -> Result<cadcraft_doc::Drawing, String> {
 fn session() -> Session {
     set_io(IoHooks { read, write: |_, _| Err("no writer in this test".into()), plot: Some(echo_plot) });
     set_plot_book(echo_book);
+    set_plotter_store(PlotterStore::memory());
     let mut s = Session::new();
     s.execute("line", &json!({"points": [[0, 0], [100, 0]]})).unwrap();
     s
@@ -310,4 +319,65 @@ fn svg_and_png_give_a_file_per_sheet() {
         }
         let _ = std::fs::remove_dir_all(dir);
     }
+}
+
+#[test]
+fn status_says_what_each_sheet_will_do_and_writes_nothing() {
+    let mut s = session();
+    let dir = temp("status");
+    let unreadable = dir.join("broken.dxf");
+    std::fs::write(&unreadable, b"not a drawing").unwrap();
+    let gone = dir.join("office.gone.sheets");
+    std::fs::write(&gone, b"sheets").unwrap();
+    s.execute("pagesetup", &json!({"layout": "Layout2", "paper": "A3", "landscape": true})).unwrap();
+    s.execute("new", &json!({})).unwrap();
+    let before: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
+    let r = s
+        .execute(
+            "publish",
+            &json!({"action": "status", "folder": dir.to_string_lossy(), "sheets": [
+                {"drawing": 0, "layout": "Layout2"},
+                {"drawing": 0, "layout": "Layout1"},
+                {"drawing": 0, "layout": "Model"},
+                {"layout": "Model"},
+                {"drawing": 0, "layout": "Nope"},
+                {"drawing": unreadable.to_string_lossy(), "layout": "Layout1"},
+                {"drawing": gone.to_string_lossy(), "layout": "Layout1"},
+                {"drawing": 0, "layout": "Layout1", "pageSetup": {"paper": "A4"}},
+            ]}),
+        )
+        .unwrap();
+    let sheets = r["sheets"].as_array().unwrap();
+    let status: Vec<&str> = sheets.iter().map(|x| x["status"].as_str().unwrap()).collect();
+    assert_eq!(status, ["ready", "default", "default", "error", "error", "error", "default", "ready"]);
+    let reason = |i: usize| sheets[i]["reason"].as_str().unwrap_or("").to_string();
+    assert!(reason(1).contains("default page setup"), "{}", reason(1));
+    assert!(reason(2).contains("Model space has no page setup"), "{}", reason(2));
+    assert!(reason(3).contains("model space is empty"), "the new drawing has nothing in model space: {}", reason(3));
+    assert!(reason(4).contains("no layout `Nope`"), "{}", reason(4));
+    assert!(reason(5).contains("not a drawing"), "unreadable file: {}", reason(5));
+    assert!(reason(6).contains("Gone Plotter") && reason(6).contains("isn't set up"), "device not found: {}", reason(6));
+    assert!(reason(7).contains("changed for this run"), "{}", reason(7));
+    assert!(sheets[0]["reason"].is_null(), "a ready sheet has no reason");
+    assert_eq!((r["ready"].as_u64(), r["default"].as_u64(), r["errors"].as_u64()), (Some(2), Some(3), Some(3)));
+    // The files it would write, without writing them.
+    assert_eq!(sheets[0]["file"], "Drawing1-Layout2.pdf");
+    assert_eq!(sheets[6]["file"], "office.gone-Layout1.pdf");
+    assert_eq!(sheets[7]["file"], "Drawing1-Layout1 (2).pdf", "the same names a run would give");
+    assert!(sheets[4]["file"].is_null());
+    let after: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
+    assert_eq!(before, after, "status writes no files");
+    // Combining: every sheet that works is a page of one file.
+    let r = s
+        .execute("publish", &json!({"action": "status", "combine": true, "sheets": [{"drawing": 0, "layout": "Layout1"}, {"layout": "Nope"}, {"drawing": 0, "layout": "Layout2"}]}))
+        .unwrap();
+    assert_eq!(r["combined"], json!({"file": "Drawing1.pdf", "pages": 2}));
+    let pages: Vec<Option<u64>> = r["sheets"].as_array().unwrap().iter().map(|x| x["page"].as_u64()).collect();
+    assert_eq!(pages, [Some(1), None, Some(2)]);
+    // Publishing an empty model space fails that sheet the way status said it would.
+    let e = s.execute("publish", &json!({"sheets": [{"layout": "Model"}]})).unwrap_err().to_string();
+    assert!(e.contains("model space is empty"), "{e}");
+    // A bad action is refused.
+    assert!(s.execute("publish", &json!({"action": "check", "sheets": [{"layout": "Layout1"}]})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
 }
