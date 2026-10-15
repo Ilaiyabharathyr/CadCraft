@@ -94,8 +94,11 @@ pub(super) fn stamp_settings(cmd: &str, v: &Value) -> Result<Option<Stamp>> {
     Ok(Some(Stamp { text, corner, height_mm }))
 }
 
-/// The stamp's text for one sheet. `{{` and `}}` are braces.
-fn stamp_text(pattern: &str, drawing: &str, sheet: &str, n: usize, (date, time): (&str, &str)) -> std::result::Result<String, String> {
+/// Fill a pattern's `{token}`s from `values` (`{{` and `}}` are braces). `what` names the pattern
+/// in errors ("`name`", "the stamp"). An unknown token, a lone `}` or a `{` without its `}` is
+/// refused.
+pub fn fill_tokens(what: &str, pattern: &str, values: &[(&str, &str)]) -> std::result::Result<String, String> {
+    let known = || values.iter().map(|(k, _)| format!("{{{k}}}")).collect::<Vec<_>>().join(", ");
     let mut out = String::new();
     let mut chars = pattern.chars().peekable();
     while let Some(c) = chars.next() {
@@ -109,26 +112,47 @@ fn stamp_text(pattern: &str, drawing: &str, sheet: &str, n: usize, (date, time):
                 out.push('}');
             }
             '{' => {
-                let token: String = chars.by_ref().take_while(|c| *c != '}').collect();
-                match token.as_str() {
-                    "drawing" => out.push_str(drawing),
-                    "sheet" => out.push_str(sheet),
-                    "n" => out.push_str(&n.to_string()),
-                    "date" => out.push_str(date),
-                    "time" => out.push_str(time),
-                    t => return Err(format!("the stamp has an unknown token {{{t}}}: use {{drawing}}, {{sheet}}, {{n}}, {{date}} or {{time}}")),
+                let mut token = String::new();
+                let mut closed = false;
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        closed = true;
+                        break;
+                    }
+                    token.push(c);
+                }
+                if !closed {
+                    return Err(format!("{what} has a {{ without its }}: write {{{{ for a brace"));
+                }
+                match values.iter().find(|(k, _)| *k == token) {
+                    Some((_, v)) => out.push_str(v),
+                    None => return Err(format!("{what} has an unknown token {{{token}}}: use {}", known())),
                 }
             }
-            '}' => return Err("the stamp has a } without its {: write }} for a brace".into()),
+            '}' => return Err(format!("{what} has a }} without its {{: write }}}} for a brace")),
             c => out.push(c),
         }
     }
     Ok(out)
 }
 
+/// The stamp's text for one sheet: `{drawing}`, `{sheet}`, `{n}`, `{date}` and `{time}`.
+fn stamp_text(pattern: &str, drawing: &str, sheet: &str, n: usize, (date, time): (&str, &str)) -> std::result::Result<String, String> {
+    let n = n.to_string();
+    fill_tokens("the stamp", pattern, &[("drawing", drawing), ("sheet", sheet), ("n", &n), ("date", date), ("time", time)])
+}
+
 /// Today's date and the time, UTC (`2026-10-15`, `09:47 UTC`): the same on every sheet of a run.
 fn utc_now() -> (String, String) {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    // The web build has no system clock (`SystemTime::now` panics there): no date or time.
+    if cfg!(target_arch = "wasm32") {
+        return (String::new(), String::new());
+    }
+    utc_at(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()))
+}
+
+/// The date and time `secs` seconds after 1970-01-01, UTC.
+fn utc_at(secs: u64) -> (String, String) {
     let days = i64::try_from(secs / 86_400).unwrap_or(0);
     let rem = secs % 86_400;
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
@@ -168,6 +192,14 @@ fn stamped(d: &Drawing, space: &Space, setup: Option<&serde_json::Map<String, Va
                 }
                 if let Some(l) = set.get("landscape").and_then(Value::as_bool) {
                     page.landscape = l;
+                }
+                // The run's margins move the printable area the stamp sits in.
+                if let Some(m) = set.get("margins").and_then(Value::as_array).filter(|m| m.len() == 4) {
+                    for (slot, v) in page.margins_mm.iter_mut().zip(m) {
+                        if let Some(v) = v.as_f64().filter(|v| v.is_finite() && *v >= 0.0) {
+                            *slot = v;
+                        }
+                    }
                 }
             }
             let unit = cadcraft_render::paper::paper_unit_mm(d);
@@ -403,32 +435,8 @@ pub(super) fn check_name(cmd: &str, pattern: &str) -> Result<()> {
 /// A file name from its pattern (without the extension). `{drawing}` and `{sheet}` are made safe
 /// for a file name; `{n}` is the sheet's place in the run, from 1.
 fn render_name(pattern: &str, drawing: &str, sheet: &str, n: usize) -> std::result::Result<String, String> {
-    let mut out = String::new();
-    let mut chars = pattern.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '{' if chars.peek() == Some(&'{') => {
-                chars.next();
-                out.push('{');
-            }
-            '}' if chars.peek() == Some(&'}') => {
-                chars.next();
-                out.push('}');
-            }
-            '{' => {
-                let token: String = chars.by_ref().take_while(|c| *c != '}').collect();
-                match token.as_str() {
-                    "drawing" => out.push_str(&file_part(drawing)),
-                    "sheet" => out.push_str(&file_part(sheet)),
-                    "n" => out.push_str(&n.to_string()),
-                    t => return Err(format!("`name` has an unknown token {{{t}}}: use {{drawing}}, {{sheet}} or {{n}}")),
-                }
-            }
-            '}' => return Err("`name` has a } without its {: write }} for a brace".into()),
-            c => out.push(c),
-        }
-    }
-    Ok(out)
+    let (drawing, sheet, n) = (file_part(drawing), file_part(sheet), n.to_string());
+    fill_tokens("`name`", pattern, &[("drawing", &drawing), ("sheet", &sheet), ("n", &n)])
 }
 
 /// Read PUBLISH's parameters, both forms. Everything is checked before any sheet is plotted.
@@ -512,6 +520,10 @@ fn publish_request(s: &Session, p: &Value) -> Result<(Vec<SheetRequest>, Publish
             .filter(|c| (1..=MAX_COPIES).contains(c))
             .ok_or_else(|| bad(cmd, format!("`copies` must be a whole number from 1 to {MAX_COPIES}")))?,
     };
+    // Files are written once; copies are for printers and plotters, which publishing can't send to yet.
+    if copies > 1 {
+        return Err(bad(cmd, "more than one copy is not available yet: publishing writes files, once each"));
+    }
     let combine = match o.get("combine") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(b)) => *b,
@@ -554,8 +566,15 @@ struct Prepared<'a> {
 /// modified time, drawing). A file is read again when its size or time changes.
 type DetachedCache = Vec<(String, u64, Option<std::time::SystemTime>, Arc<Drawing>)>;
 static DETACHED: std::sync::Mutex<DetachedCache> = std::sync::Mutex::new(Vec::new());
-/// Drawings kept: enough for the status checks of a list, without holding many big drawings.
-const DETACHED_KEPT: usize = 4;
+/// Drawings kept: enough for a list's status checks to read each file once, without holding
+/// many big drawings (by count, and by objects in all; the most recent is always kept).
+const DETACHED_KEPT: usize = 16;
+const DETACHED_MAX_OBJECTS: usize = 2_000_000;
+
+/// Forget the drawings read for publishing (the Publish Sheets window closed).
+pub fn clear_publish_cache() {
+    DETACHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+}
 
 /// A drawing file read without opening it, from the cache when the file hasn't changed. The
 /// Publish Sheets window checks its sheets often; a big file is read once, not on every check.
@@ -578,7 +597,8 @@ pub(crate) fn detached(cmd: &str, path: &str) -> Result<Arc<Drawing>> {
     let mut cache = DETACHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     cache.retain(|(p, _, _, _)| p != path);
     cache.push((path.to_string(), len, modified, d.clone()));
-    while cache.len() > DETACHED_KEPT {
+    let objects = |c: &DetachedCache| c.iter().map(|(_, _, _, d)| d.entity_count()).fold(0usize, usize::saturating_add);
+    while cache.len() > 1 && (cache.len() > DETACHED_KEPT || objects(&cache) > DETACHED_MAX_OBJECTS) {
         cache.remove(0);
     }
     Ok(d)
@@ -874,7 +894,7 @@ impl PublishJob {
                     if !progress(i, total) {
                         return Err(bad(cmd, "publishing was cancelled"));
                     }
-                    match prepare(self, &files, sheet, Some((prepared.len() + 1, &now))) {
+                    match prepare(self, &files, sheet, Some((i + 1, &now))) {
                         Ok(sh) => {
                             results.push(json!({ "drawing": sh.title, "layout": sh.layout, "ok": true, "page": prepared.len() + 1 }));
                             prepared.push(sh);
@@ -936,4 +956,32 @@ pub(super) fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(job.status());
     }
     job.run(&mut |_, _| true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_are_filled_and_bad_patterns_refused() {
+        let v = [("drawing", "Plan"), ("sheet", "A1")];
+        assert_eq!(fill_tokens("x", "{drawing}-{sheet} {{v2}}", &v).as_deref(), Ok("Plan-A1 {v2}"));
+        for bad in ["{drawing", "{", "a}", "{who}", "{sheet}{"] {
+            assert!(fill_tokens("x", bad, &v).is_err(), "{bad}");
+        }
+        assert!(fill_tokens("x", "{drawing", &v).is_err_and(|e| e.contains("without its }")));
+        // File names make the values safe; the stamp keeps them as they are.
+        assert_eq!(render_name("{sheet}", "", "PV/03", 1).as_deref(), Ok("PV_03"));
+        assert_eq!(stamp_text("{sheet} {n}", "", "PV/03", 2, ("", "")).as_deref(), Ok("PV/03 2"));
+    }
+
+    #[test]
+    fn utc_dates_are_right() {
+        assert_eq!(utc_at(0), ("1970-01-01".to_string(), "00:00 UTC".to_string()));
+        // 2000-02-29 (a leap day) at 12:34.
+        assert_eq!(utc_at(951_827_640), ("2000-02-29".to_string(), "12:34 UTC".to_string()));
+        assert_eq!(utc_at(1_792_026_000).0, "2026-10-15");
+        // Far future: no overflow, still a date.
+        assert!(utc_at(u64::MAX).0.len() >= 10);
+    }
 }

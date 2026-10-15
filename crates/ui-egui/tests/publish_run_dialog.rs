@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cadcraft_engine::Session;
-use cadcraft_engine::cmd::file::{IoHooks, set_io, set_plot_book};
+use cadcraft_engine::cmd::file::{IoHooks, set_deliver, set_io, set_plot_book};
 use cadcraft_ui_egui::{CadApp, Services};
 use egui::vec2;
 use egui_kittest::Harness;
@@ -207,4 +207,48 @@ fn the_stamp_is_edited_in_its_window_and_printed_on_every_sheet() {
     let plotted = std::fs::read_to_string(dir.join("Drawing1-Layout2.pdf")).unwrap();
     assert!(plotted.contains("CHECKED Layout2 of Drawing1"), "{plotted}");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// What the browser download hook was given: (file name, MIME type, size).
+static DELIVERED: std::sync::Mutex<Vec<(String, String, usize)>> = std::sync::Mutex::new(Vec::new());
+
+fn download(name: &str, mime: &str, bytes: &[u8]) -> Result<(), String> {
+    if let Ok(mut d) = DELIVERED.lock() {
+        d.push((name.to_string(), mime.to_string(), bytes.len()));
+    }
+    Ok(())
+}
+
+#[test]
+fn without_a_folder_the_files_are_handed_to_the_browser() {
+    // The web build: its save picker gives a bare name (no folder), and files are downloads.
+    set_deliver(download);
+    let (mut h, _) = harness(std::path::Path::new(""));
+    h.get_by_label("Run in the background").click();
+    h.get_by_label("Publish 3 Sheets").click();
+    h.run_steps(3);
+    h.get_by_label("Published 3 of 3 sheets");
+    let got = DELIVERED.lock().map(|d| d.clone()).unwrap_or_default();
+    let names: Vec<&str> = got.iter().map(|(n, _, _)| n.as_str()).collect();
+    assert_eq!(names, ["Drawing1-Model.pdf", "Drawing1-Layout1.pdf", "Drawing1-Layout2.pdf"]);
+    assert!(got.iter().all(|(_, mime, size)| mime == "application/pdf" && *size > 0));
+}
+
+#[test]
+fn the_stamp_window_shows_what_is_wrong_with_the_text() {
+    let dir = temp("stamp-error");
+    let (mut h, _) = harness(&dir);
+    h.get_by_label("Add a sheet stamp").click();
+    h.run_steps(2);
+    h.get_by_label("Edit stamp...").click();
+    h.run_steps(3);
+    let field =
+        || By::new().role(egui::accesskit::Role::TextInput).predicate(|n| n.is_focused() || n.value().is_some_and(|v| v.starts_with("{drawing}")));
+    h.get(field()).focus();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get(field()).type_text("{sheet");
+    h.run_steps(3);
+    h.get_by_label_contains("without its }");
 }

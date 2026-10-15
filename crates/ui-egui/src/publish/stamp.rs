@@ -67,20 +67,17 @@ pub(super) fn stamp_window(ctx: &egui::Context, st: &mut PublishState) {
                 ui.end_row();
             });
             ui.add_space(6.0);
-            let sample = st
-                .stamp
-                .text
-                .replace("{{", "\u{1}")
-                .replace("}}", "\u{2}")
-                .replace("{drawing}", "Drawing1")
-                .replace("{sheet}", "Layout1")
-                .replace("{n}", "1")
-                .replace("{date}", "2026-10-15")
-                .replace("{time}", "09:30 UTC")
-                .replace('\u{1}', "{")
-                .replace('\u{2}', "}");
+            // The engine's own reading of the text, so the example and the error are what a run gives.
+            let sample = cadcraft_engine::cmd::fill_tokens(
+                "the stamp",
+                &st.stamp.text,
+                &[("drawing", "Drawing1"), ("sheet", "Layout1"), ("n", "1"), ("date", "2026-10-15"), ("time", "09:30 UTC")],
+            );
             ui.label(RichText::new(crate::tl!("Example")).color(t.text_dim));
-            ui.label(RichText::new(sample).font(crate::theme::mono()).color(t.text));
+            match sample {
+                Ok(text) => ui.label(RichText::new(text).font(crate::theme::mono()).color(t.text)),
+                Err(e) => ui.label(RichText::new(e).color(t.warn)),
+            };
             ui.separator();
             // A row, so the buttons take their own height rather than the window's.
             ui.horizontal(|ui| {

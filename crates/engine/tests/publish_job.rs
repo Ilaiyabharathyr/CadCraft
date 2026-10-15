@@ -135,3 +135,21 @@ fn the_stamp_goes_in_the_corner_of_each_sheet() {
         assert!(s.execute("publish", &json!({"sheets": [{"layout": "Layout1"}], "stamp": stamp})).is_err(), "{stamp}");
     }
 }
+
+#[test]
+fn the_stamp_follows_a_margins_change_and_n_is_the_place_in_the_run() {
+    let mut s = session();
+    let at = |r: &Value, i: usize| plotted(&r["sheets"][i])["texts"][0].clone();
+    let plain = s.execute("publish", &json!({"sheets": [{"layout": "Layout1"}], "stamp": {"corner": "bottom-left"}})).unwrap();
+    let wide = s
+        .execute(
+            "publish",
+            &json!({"sheets": [{"layout": "Layout1", "pageSetup": {"margins": [30, 30, 30, 30]}}], "stamp": {"corner": "bottom-left"}}),
+        )
+        .unwrap();
+    let (x0, x1) = (at(&plain, 0)["x"].as_f64().unwrap(), at(&wide, 0)["x"].as_f64().unwrap());
+    assert!(x1 > x0 + 0.9, "30 mm margins move the stamp in by about an inch: {x0} → {x1}");
+    // {n} is the sheet's place in the run, whether or not an earlier sheet failed.
+    let r = s.execute("publish", &json!({"sheets": [{"layout": "Nope"}, {"layout": "Model"}], "stamp": {"text": "{n}"}})).unwrap();
+    assert_eq!(at(&r, 1)["text"], "2");
+}

@@ -173,9 +173,12 @@ fn open_path(path: &str, reveal: bool) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         c = std::process::Command::new("explorer");
         if reveal {
-            c.arg(format!("/select,{path}"));
+            // Explorer reads `/select,"path"` itself; Command::arg would quote the whole argument
+            // when the path has spaces, which Explorer doesn't understand.
+            c.raw_arg(format!("/select,\"{}\"", path.replace('"', "")));
         } else {
             c.arg(p);
         }
@@ -186,24 +189,27 @@ fn open_path(path: &str, reveal: bool) -> Result<(), String> {
         c = std::process::Command::new("xdg-open");
         c.arg(if reveal && p.is_file() { p.parent().unwrap_or(p) } else { p });
     }
-    c.spawn().map(|_| ()).map_err(|e| format!("{path}: {e}"))
+    let mut child = c.spawn().map_err(|e| format!("{path}: {e}"))?;
+    // `open`, `explorer` and `xdg-open` return at once; wait for them on a thread so none is left
+    // as a zombie process.
+    let _ = std::thread::Builder::new().name("cadcraft-open".into()).spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// File types for the Save dialog, the suggested name's type first: Windows adds the first
 /// filter's extension, and macOS accepts only listed extensions, replacing any other with the
 /// first one. DWG must be listed for a `.dwg` name to survive, and a drawing opened from DWG
 /// then defaults to DWG; other names keep DXF first.
-fn filters_for_save(name: &str) -> [(&'static str, &'static str); 7] {
-    let mut filters = [
-        ("Drawing (DXF)", "dxf"),
-        ("Drawing (DWG)", "dwg"),
-        ("Drawing Template (DWT)", "dwt"),
-        ("SVG", "svg"),
-        ("PNG", "png"),
-        ("PDF", "pdf"),
-        ("Publish list (CCPUB)", "ccpub"),
-    ];
+fn filters_for_save(name: &str) -> Vec<(&'static str, &'static str)> {
     let lower = name.to_ascii_lowercase();
+    // A publish list is saved as one; it isn't offered when saving a drawing or a plot.
+    if lower.ends_with(".ccpub") {
+        return vec![("Publish list (CCPUB)", "ccpub")];
+    }
+    let mut filters =
+        vec![("Drawing (DXF)", "dxf"), ("Drawing (DWG)", "dwg"), ("Drawing Template (DWT)", "dwt"), ("SVG", "svg"), ("PNG", "png"), ("PDF", "pdf")];
     filters.sort_by_key(|(_, ext)| !lower.ends_with(&format!(".{ext}")));
     filters
 }
@@ -450,7 +456,9 @@ mod tests {
         for name in ["a.dwg", "b.dxf", "c"] {
             let exts: Vec<_> = filters_for_save(name).iter().map(|(_, e)| *e).collect();
             assert!(exts.contains(&"dwg") && exts.contains(&"dxf"), "{name}");
+            assert!(!exts.contains(&"ccpub"), "a drawing's Save dialog doesn't offer publish lists");
         }
+        assert_eq!(filters_for_save("set.ccpub"), [("Publish list (CCPUB)", "ccpub")], "a list keeps its extension");
     }
 
     #[test]

@@ -247,6 +247,11 @@ fn bad_parameters_are_refused_before_anything_is_written() {
         json!({"sheets": [{"layout": "Layout1"}], "pdf": {"dpi": 600}}),
         json!({"sheets": [{"layout": "Layout1"}], "copies": 0}),
         json!({"sheets": [{"layout": "Layout1"}], "copies": 101}),
+        // More than one copy needs a printer, which publishing can't send to yet.
+        json!({"sheets": [{"layout": "Layout1"}], "copies": 3}),
+        // A `{` without its `}` (it used to be read as a token).
+        json!({"sheets": [{"layout": "Layout1"}], "name": "{drawing"}),
+        json!({"sheets": [{"layout": "Layout1"}], "stamp": {"text": "{sheet"}}),
         json!({"sheets": [{"layout": "Layout1"}], "stamp": "yes"}),
         json!({"sheets": [{"layout": "Layout1"}], "stamp": {"text": "{who}"}}),
         json!([1, 2]),
@@ -254,14 +259,14 @@ fn bad_parameters_are_refused_before_anything_is_written() {
     for p in cases {
         assert!(s.execute("publish", &p).is_err(), "refused: {p}");
     }
-    // Accepted: copies, PDF settings and an escaped brace.
+    // Accepted: one copy, PDF settings and an escaped brace.
     let r = s
         .execute(
             "publish",
-            &json!({"sheets": [{"layout": "Layout1"}], "copies": 3, "pdf": {"layers": false, "text": "geometry"}, "name": "{{{sheet}}}"}),
+            &json!({"sheets": [{"layout": "Layout1"}], "copies": 1, "pdf": {"layers": false, "text": "geometry"}, "name": "{{{sheet}}}"}),
         )
         .unwrap();
-    assert_eq!(r["copies"], 3);
+    assert_eq!(r["copies"], 1);
     assert_eq!(files(&r), ["{Layout1}.pdf"]);
     let opts = plotted(&r["sheets"][0]);
     assert!(opts.contains(r#""layers":false"#) && opts.contains(r#""text":"geometry""#), "{opts}");

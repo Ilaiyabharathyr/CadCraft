@@ -290,3 +290,20 @@ fn a_sheet_can_borrow_another_layouts_page_setup() {
     h.get(By::new().value("From Layout2"));
     h.get(By::new().value("Changed for this run"));
 }
+
+#[test]
+fn a_list_longer_than_one_run_is_checked_in_batches_without_noise() {
+    let mut app = app(None);
+    // 300 layouts, each with something on it: more sheets than one publish run takes.
+    for i in 0..300 {
+        let name = format!("S{i:03}");
+        app.run("layout.new", json!({ "name": name })).unwrap();
+    }
+    let before = app.session.log.len();
+    let mut h = harness_for(app, 1280.0, 820.0, 1.0);
+    settle(&mut h);
+    let unchecked = h.query_all(By::new().value("Checking...")).count();
+    assert_eq!(unchecked, 0, "every row has a status");
+    let log: Vec<String> = h.state().session.log.iter().skip(before).cloned().collect();
+    assert!(!log.iter().any(|l| l.contains("at most")), "nothing echoed to the command line: {log:?}");
+}

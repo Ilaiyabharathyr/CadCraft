@@ -200,3 +200,46 @@ fn a_drawing_file_is_listed_without_opening_it_and_read_once() {
     assert!(s.execute("publishlist", &json!({"action": "drawing", "path": junk.to_string_lossy()})).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// `target` relative to `base` (both absolute), the way a user would type it.
+fn relative_to(base: &std::path::Path, target: &std::path::Path) -> String {
+    let b: Vec<_> = base.components().collect();
+    let t: Vec<_> = target.components().collect();
+    let common = b.iter().zip(&t).take_while(|(x, y)| x == y).count();
+    let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), b.len() - common).collect();
+    parts.extend(t.iter().skip(common).map(|c| c.as_os_str().to_string_lossy().to_string()));
+    parts.join("/")
+}
+
+#[test]
+fn a_relative_drawing_path_is_relative_to_the_working_folder() {
+    let mut s = session();
+    let dir = temp("cwd");
+    let a = drawing(&dir.join("plans"), "a.sheets");
+    let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let typed = relative_to(&cwd, &std::path::Path::new(&a).canonicalize().unwrap());
+    let list = dir.join("lists").join("l.ccpub");
+    std::fs::create_dir_all(list.parent().unwrap()).unwrap();
+    let list = list.to_string_lossy().to_string();
+    s.execute("publishlist", &json!({"action": "write", "path": list, "sheets": [{"drawing": typed, "layout": "Model"}]})).unwrap();
+    let r = s.execute("publishlist", &json!({"action": "read", "path": list})).unwrap();
+    assert_eq!(r["sheets"][0]["found"], true, "the same file read back: {r}");
+    let back = std::path::Path::new(r["sheets"][0]["drawing"].as_str().unwrap()).canonicalize().unwrap();
+    assert_eq!(back, std::path::Path::new(&a).canonicalize().unwrap());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn five_drawing_files_are_each_read_once_across_status_checks() {
+    let mut s = session();
+    let dir = temp("five");
+    let files: Vec<String> = (0..5).map(|i| drawing(&dir, &format!("d{i}.sheets"))).collect();
+    let sheets: Vec<Value> = files.iter().map(|f| json!({"drawing": f, "layout": "Layout1"})).collect();
+    for _ in 0..3 {
+        s.execute("publish", &json!({"action": "status", "sheets": sheets})).unwrap();
+    }
+    for f in &files {
+        assert_eq!(reads(f), 1, "{f} read once");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

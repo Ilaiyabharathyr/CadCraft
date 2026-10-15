@@ -876,6 +876,7 @@ pub(crate) fn store_params(layout: &str, page: &cadcraft_doc::PageSetup) -> Valu
         "lineweights": page.lineweights,
         "plotTransparency": page.plot_transparency,
         "plotStyleTable": style_label(page),
+        "margins": page.margins_mm,
     });
     if let Some(o) = p.as_object_mut() {
         if device_label(page) != "None" || cadcraft_render::paper_size(&page.paper).is_some() {
@@ -1223,6 +1224,18 @@ mod plot_dialog_tests {
             center: true,
             offset_mm: [0.0, 0.0],
         }
+    }
+
+    #[test]
+    fn save_to_layout_keeps_every_setting_it_shows_margins_included() {
+        let mut s = Session::new();
+        let mut page = s.doc().unwrap().layout("Layout1").unwrap().page.clone();
+        page.margins_mm = [12.0, 13.0, 14.0, 15.0];
+        page.landscape = !page.landscape;
+        s.execute("pagesetup", &store_params("Layout1", &page)).unwrap();
+        let saved = &s.doc().unwrap().layout("Layout1").unwrap().page;
+        assert_eq!(saved.margins_mm, [12.0, 13.0, 14.0, 15.0]);
+        assert_eq!(saved.landscape, page.landscape);
     }
 
     #[test]

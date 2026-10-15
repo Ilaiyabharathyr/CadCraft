@@ -206,18 +206,21 @@ fn write(cmd: &str, path: &str, sheets: &Value, out: Option<&Value>) -> Result<V
         return Err(bad(cmd, format!("a publish list holds at most {MAX_LIST_SHEETS} sheets")));
     }
     let base = list_folder(path);
-    let base_abs = if base.is_absolute() { base.clone() } else { std::env::current_dir().map(|d| d.join(&base)).unwrap_or(base.clone()) };
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let base_abs = if base.is_absolute() { base } else { cwd.join(&base) };
     let mut written = Vec::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
         let (drawing, layout, include, setup) = sheet_entry(cmd, i + 1, e)?;
-        let mut r = json!({ "drawing": relative(&base_abs, Path::new(&drawing)), "layout": layout, "include": include });
+        // A relative path given here is relative to the working folder, like any other path.
+        let full = if Path::new(&drawing).is_absolute() { PathBuf::from(&drawing) } else { cwd.join(&drawing) };
+        let mut r = json!({ "drawing": relative(&base_abs, &full), "layout": layout, "include": include });
         if let Some(setup) = setup {
             r["pageSetup"] = Value::Object(setup);
         }
         written.push(r);
     }
     let mut output = output(cmd, out)?;
-    if let Some(folder) = output.get("folder").and_then(Value::as_str).map(|f| relative(&base_abs, Path::new(f))) {
+    if let Some(folder) = output.get("folder").and_then(Value::as_str).map(|f| relative(&base_abs, &cwd.join(f))) {
         output.insert("folder".into(), json!(folder));
     }
     let file = json!({ "cadcraft": KIND, "version": VERSION, "sheets": written, "output": output });

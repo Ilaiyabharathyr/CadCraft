@@ -299,6 +299,9 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     if st.editing_stamp {
         stamp_window(ctx, &mut st);
     }
+    if !*open {
+        cadcraft_engine::cmd::clear_publish_cache();
+    }
     ctx.data_mut(|d| d.insert_temp(id, st));
 }
 
@@ -331,7 +334,11 @@ fn run(app: &mut CadApp, groups: &[Group], st: &PublishState) -> Result<bool, St
             request["name"] = json!(stem.replace('{', "{{").replace('}', "}}"));
         }
     }
-    request["folder"] = json!(folder);
+    // Without a folder (the web build's picker gives only a name), the engine returns each file
+    // and the report hands it to the browser as a download.
+    if !folder.trim().is_empty() {
+        request["folder"] = json!(folder);
+    }
     let background = !st.foreground && !cfg!(target_arch = "wasm32");
     crate::publish_run::start(app, request, background, st.open_result)?;
     Ok(background)

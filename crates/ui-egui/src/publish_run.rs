@@ -123,8 +123,40 @@ fn result_target(r: &Value) -> Option<(String, bool)> {
     }
 }
 
+/// Hand the files a run returned as data (no folder: the web build) to the host, which starts a
+/// download for each. Returns why one couldn't be delivered.
+fn deliver_data(r: &Value) -> Option<String> {
+    use cadcraft_engine::cmd::file::{base64_decode, deliver};
+    let files: Vec<&Value> = match r.get("combined") {
+        Some(c) => vec![c],
+        None => r["sheets"].as_array().into_iter().flatten().collect(),
+    };
+    let files: Vec<(&str, &str)> = files.iter().filter_map(|x| Some((x["file"].as_str()?, x["data"].as_str()?))).collect();
+    if files.is_empty() {
+        return None;
+    }
+    let Some(deliver) = deliver() else { return Some(crate::tl!("Choose a folder to publish to.").to_string()) };
+    for (name, data) in files {
+        let mime = match name.rsplit('.').next() {
+            Some("svg") => "image/svg+xml",
+            Some("png") => "image/png",
+            _ => "application/pdf",
+        };
+        let Some(bytes) = base64_decode(data) else { return Some(format!("{name}: the file could not be read back")) };
+        if let Err(e) = deliver(name, mime, &bytes) {
+            return Some(format!("{name}: {e}"));
+        }
+    }
+    None
+}
+
 fn finish(app: &mut CadApp, request: Value, result: Result<Value, String>, open_result: bool) {
     app.set_status(summary(&result));
+    if let Ok(r) = &result
+        && let Some(e) = deliver_data(r)
+    {
+        app.set_status(e);
+    }
     if open_result
         && let Ok(r) = &result
         && let Some((target, _)) = result_target(r)

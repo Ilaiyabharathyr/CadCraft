@@ -9,6 +9,9 @@ use serde_json::{Value, json};
 use super::*;
 use crate::CadApp;
 
+/// Most sheets one status check asks about (the engine's limit for one run).
+const STATUS_BATCH: usize = 256;
+
 /// Seconds after the last change before the Status column is checked again.
 pub(super) const STATUS_DELAY: f64 = 0.25;
 
@@ -116,15 +119,28 @@ pub(super) fn refresh_status(app: &mut CadApp, ctx: &egui::Context, groups: &[Gr
         return;
     }
     let mut checked = Checked { key, ..Checked::default() };
-    if let Ok(r) = app.run("publish", requests.0) {
-        let listed = groups.iter().flat_map(|g| g.sheets.iter().map(move |s| (g.uid, s.name.clone())));
-        for (key, x) in listed.zip(r["sheets"].as_array().into_iter().flatten()) {
-            let status = x["status"].as_str().unwrap_or("error").to_string();
-            checked.sheets.insert(key, (status, x["reason"].as_str().unwrap_or_default().to_string()));
+    // Every listed sheet, in batches the engine takes in one call. These are questions, not
+    // commands: they go to the engine directly, so a refusal isn't echoed to the command line;
+    // a batch that can't be checked marks its sheets with the reason.
+    let listed: Vec<(u64, String)> = groups.iter().flat_map(|g| g.sheets.iter().map(move |s| (g.uid, s.name.clone()))).collect();
+    let entries = requests.0["sheets"].as_array().cloned().unwrap_or_default();
+    for (keys, batch) in listed.chunks(STATUS_BATCH).zip(entries.chunks(STATUS_BATCH)) {
+        match app.session.execute("publish", &json!({ "action": "status", "sheets": batch })) {
+            Ok(r) => {
+                for (key, x) in keys.iter().zip(r["sheets"].as_array().into_iter().flatten()) {
+                    let status = x["status"].as_str().unwrap_or("error").to_string();
+                    checked.sheets.insert(key.clone(), (status, x["reason"].as_str().unwrap_or_default().to_string()));
+                }
+            }
+            Err(e) => {
+                for key in keys {
+                    checked.sheets.insert(key.clone(), ("error".into(), e.to_string()));
+                }
+            }
         }
     }
     if !picked(groups, st).is_empty()
-        && let Ok(r) = app.run("publish", requests.1)
+        && let Ok(r) = app.session.execute("publish", &requests.1)
     {
         checked.files = match r["combined"]["file"].as_str() {
             Some(f) => vec![f.to_string()],
