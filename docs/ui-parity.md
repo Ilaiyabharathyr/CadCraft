@@ -202,6 +202,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Properties palette: Annotative scale row with the Annotation Object Scale dialog (also OBJECTSCALE with a selection), paper and model text height and defined width for annotative text and MText, annotative rows for hatches and multileaders, the no-selection Annotation scale row sets CANNOSCALE |
 | 2026-10-13 | minor | Properties Inspector shows the text, mtext and dimension rows `properties.describe` gives (dimension style settings as overrides, *VARIES* for several objects, fixed-height note) |
 | 2026-10-12 | minor | Selected and hovered objects redrawn in the selection colour (text and arrowheads included); Options ▸ Selection laid out as AutoCAD's: Object grouping, Show grips, grip object limit, selection preview, Visual Effect Settings (selection area, preview filter) |
 | 2026-10-12 | minor | Animation effects (dialog and menu fades, smoothed wheel scrolling and ⌘/Ctrl+wheel zoom) follow the operating system's setting; View ▸ Accessibility ▸ Animation Effects chooses System, On or Off |
