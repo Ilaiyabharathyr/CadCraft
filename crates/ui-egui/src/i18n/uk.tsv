@@ -1330,3 +1330,10 @@
 	Justify	За шириною
 	Text color	Колір тексту
 	Click the ruler to add a tab stop, right-click to remove one	Натисніть на лінійку, щоб додати табуляцію; права кнопка видаляє її
+	Automation	Автоматизація
+	Enable MCP server	Увімкнути сервер MCP
+	Port	Порт
+	Copy Config	Скопіювати конфіг
+	Copies the MCP client config for Claude Code / claude_desktop_config.json	Копіює конфіг MCP-клієнта для Claude Code / claude_desktop_config.json
+	Connect cadcraft-cli or other MCP clients to this port.	Підключіть cadcraft-cli або інші MCP-клієнти до цього порту.
+	Changes take effect on next launch.	Зміни набирають чинності після наступного запуску.

@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use cadcraft_ui_egui::ControlRequest;
@@ -20,18 +20,17 @@ const MAX_LINE: usize = 256 * 1024 * 1024;
 /// Connections served at once; further ones get an error line and are closed.
 const MAX_CONNECTIONS: usize = 16;
 
-pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
-    let (tx, rx) = channel::<ControlRequest>();
+/// Start the control server; calls are routed through `tx`.
+pub fn start(port: u16, tx: Sender<ControlRequest>, ctx: egui::Context) {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
             log::error!("control server failed to bind 127.0.0.1:{port}: {e}");
-            return rx;
+            return;
         }
     };
     log::info!("control server listening on 127.0.0.1:{port}");
     std::thread::spawn(move || accept_loop(listener, tx, ctx));
-    rx
 }
 
 /// A connection's place among [`MAX_CONNECTIONS`], given back when the connection ends (also when
@@ -134,6 +133,7 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::channel;
 
     #[test]
     fn lines_are_read_up_to_the_limit() {
