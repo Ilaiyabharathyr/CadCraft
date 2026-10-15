@@ -2,7 +2,7 @@
 //! draws a free-form lasso. Dragging to the right makes a window lasso, to the left a crossing
 //! lasso; Spacebar while dragging cycles crossing, window and fence.
 
-use cadcraft_engine::doc::Handle;
+use cadcraft_engine::doc::{Common, EntityKind, Handle, Solid, Space, entity_bounds};
 use cadcraft_engine::geom::Vec2;
 use cadcraft_engine::select::{Lasso, LassoKind};
 use cadcraft_engine::{Input, Session};
@@ -132,4 +132,33 @@ fn where_a_lasso_starts() {
     f.s.execute("setvar", &json!({"name": "PICKAUTO", "value": 1})).unwrap();
     assert!(!f.s.lasso_at(Vec2::new(-2.0, -3.0)));
     assert!(f.s.execute("setvar", &json!({"name": "PICKAUTO", "value": 8})).is_err());
+}
+
+/// A small diamond around `c`, drawn leftwards (a crossing lasso).
+fn small_crossing_lasso(c: Vec2, r: f64) -> Lasso {
+    let pts = [[c.x + r, c.y], [c.x, c.y + r], [c.x - r, c.y], [c.x, c.y - r]];
+    lasso(&pts)
+}
+
+#[test]
+fn a_crossing_lasso_inside_text_or_a_solid_selects_it() {
+    // As a crossing window wholly inside them does: text is hit anywhere in its box, a SOLID in its fill.
+    let mut s = Session::new();
+    let r = s.execute("mtext", &json!({"at": [0, 40], "text": "A LONG LINE OF TEXT", "height": 5})).unwrap();
+    let text = Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap();
+    let corners = [[0.0, 0.0], [30.0, 0.0], [0.0, 30.0], [30.0, 30.0]].map(|[x, y]| cadcraft_engine::geom::Vec3::new(x, y, 0.0));
+    let solid = s.doc_mut().unwrap().add(&Space::Model, Common::default(), EntityKind::Solid(Solid { corners })).unwrap();
+    s.set_selection(Vec::new());
+    let d = s.doc().unwrap();
+    let tb = entity_bounds(d, d.entity(text).unwrap(), 0);
+    for (h, c, r) in [(text, tb.center(), tb.height().min(tb.width()) / 4.0), (solid, Vec2::new(15.0, 15.0), 2.0)] {
+        let l = small_crossing_lasso(c, r);
+        assert_eq!(l.kind(), LassoKind::Crossing);
+        assert_eq!(cadcraft_engine::select::select_polygon(s.doc().unwrap(), &Space::Model, &l.pts, true), vec![h]);
+        // A window lasso there selects nothing.
+        assert!(cadcraft_engine::select::select_polygon(s.doc().unwrap(), &Space::Model, &l.pts, false).is_empty());
+        s.set_selection(Vec::new());
+        s.end_lasso(&l, false).unwrap();
+        assert_eq!(s.selection(), vec![h]);
+    }
 }
