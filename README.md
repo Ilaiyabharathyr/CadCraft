@@ -378,6 +378,17 @@ And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video stud
   <a href="https://getartcraft.com/apps/cadcraft">CADCraft</a>
 </p>
 
+## Linux window controls
+
+Linux desktop builds enable winit's Adwaita client-side frame on GNOME/Wayland,
+where the compositor does not provide server-side decorations. Its minimize,
+maximize/restore and close icons are drawn as vectors, so the close button does
+not depend on a font containing a particular character. The frame follows the
+desktop's button layout; X11 and compositors offering server-side decorations
+keep their window manager's frame. The frame renders controls without title text,
+so it embeds no Cantarell. Window titles remain available to desktop window
+switchers.
+
 ## License and credits
 
 CADCraft is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
@@ -402,12 +413,3 @@ Forks and modified versions must remove them.
 </p>
 
 Tool Sets, Layers, and Properties can be regrouped, split, floated within the app window, closed, and reopened. The drawing canvas stays visible and cannot be closed or turned into a tab. Drag a panel header to a target edge or another header. Its context menu offers Float panel, Move to group, and Close panel. Existing panel toggles reopen panels at their saved location; Reset Panel Layout restores the app layout. Floating panels remain inside the current app window.
-
-## Linux window controls
-
-Linux desktop builds enable winit's Adwaita client-side frame on GNOME/Wayland,
-where the compositor does not provide server-side decorations. Its minimize,
-maximize/restore and close icons are drawn as vectors, so the close button does
-not depend on a font containing a particular character. The frame follows the
-desktop's button layout; X11 and compositors offering server-side decorations
-keep their window manager's frame.
