@@ -1,7 +1,7 @@
 //! What AutoCAD reads from CADCraft's DWG and DXF as it is, without recomputing it: justified
 //! text's insertion point (#1050), DIMPOST (#1053), the current dimension style and its header
 //! variables (#1051), the colours of a dimension's `*D` block (#1052) and the stored measurement
-//! of a rotated linear dimension (#1054).
+//! of a rotated linear dimension (#1054) and of angular dimensions.
 
 use cadcraft_color::Color;
 use cadcraft_doc::{Common, DimKind, DimStyle, Dimension, Drawing, EntityKind, HAlign, Space, Text, VAlign};
@@ -159,6 +159,43 @@ fn a_rotated_linear_dimension_stores_its_projected_length() {
     let dim = t.iter().position(|(c, v)| *c == 0 && v == "DIMENSION").unwrap();
     let m: f64 = t[dim..].iter().find(|(c, _)| *c == 42).unwrap().1.parse().unwrap();
     assert!((m - 210.0).abs() < 1e-9, "group 42 = {m}");
+}
+
+/// Group 42 of a dimension in the DXF AutoCAD reads from `d`'s DWG.
+fn stored_measurement(d: &Drawing) -> f64 {
+    let dwg = write_with(d, "case.dwg", &SaveOptions { version: Some(Version::R2018), binary: false }).unwrap();
+    let dxf = String::from_utf8(cadcraft_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap();
+    let t = tags(&dxf);
+    let dim = t.iter().position(|(c, v)| *c == 0 && v == "DIMENSION").unwrap();
+    t[dim..].iter().find(|(c, _)| *c == 42).unwrap().1.parse().unwrap()
+}
+
+fn polar(deg: f64, r: f64) -> Vec3 {
+    let a = deg.to_radians();
+    Vec3::new(r * a.cos(), r * a.sin(), 0.0)
+}
+
+/// Angular dimensions store their angle too, in radians as AutoCAD does (0.0 in 0.6.2).
+#[test]
+fn an_angular_dimension_stores_its_angle_in_radians() {
+    // Three points: vertex (p15) at the origin, legs through p13 and p14, the arc through defpt.
+    for deg in [60.0, 174.0] {
+        let d = s25(DimKind::Angular3P, polar(0.0, 20.0), polar(deg, 20.0), polar(deg / 2.0, 15.0));
+        let m = stored_measurement(&d);
+        assert!((m - f64::to_radians(deg)).abs() < 1e-9, "{deg}°: group 42 = {m}");
+    }
+    // Two lines, 120° apart: p13-p14 and defpt-p15, the arc through p16.
+    let mut d = s25(DimKind::Angular, polar(0.0, 5.0), polar(0.0, 20.0), polar(120.0, 5.0));
+    let h = d.model.iter().find(|e| matches!(e.kind, EntityKind::Dimension(_))).unwrap().handle;
+    d.modify_entity(h, |e| {
+        if let EntityKind::Dimension(dm) = &mut e.kind {
+            dm.p15 = polar(120.0, 20.0);
+            dm.p16 = polar(60.0, 15.0);
+        }
+    })
+    .unwrap();
+    let m = stored_measurement(&d);
+    assert!((m - f64::to_radians(120.0)).abs() < 1e-9, "two lines: group 42 = {m}");
 }
 
 /// A justified text read from AutoCAD keeps AutoCAD's insertion point (exact for its own fonts)
