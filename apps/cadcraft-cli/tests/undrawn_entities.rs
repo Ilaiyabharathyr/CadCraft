@@ -34,7 +34,7 @@ fn convert_to_an_image_warns_about_entities_it_cannot_draw() {
         let err = String::from_utf8_lossy(&out.stderr);
         let warnings: Vec<&str> = err.lines().filter(|l| l.contains("not drawn")).collect();
         assert_eq!(warnings.len(), 1, "{ext}: {err}");
-        assert!(warnings[0].contains("3 entities") && warnings[0].contains("1 PDFUNDERLAY, 2 REGION"), "{ext}: {err}");
+        assert_eq!(warnings[0], format!("{input}: 3 entities not drawn (PDFUNDERLAY: 1, REGION: 2)"), "{ext}");
     }
 
     // A DXF copy keeps them, so there is nothing to warn about.

@@ -298,9 +298,9 @@ fn undrawn_message(d: &cadcraft_engine::doc::Drawing, path: &str) -> Option<Stri
     if n == 0 {
         return None;
     }
-    let list: Vec<String> = types.iter().map(|(t, n)| format!("{n} {t}")).collect();
+    let list: Vec<String> = types.iter().map(|(t, n)| format!("{t}: {n}")).collect();
     let entities = if n == 1 { "entity" } else { "entities" };
-    Some(format!("{path}: {n} {entities} not drawn (no drawing for these types yet): {}", list.join(", ")))
+    Some(format!("{path}: {n} {entities} not drawn ({})", list.join(", ")))
 }
 
 /// The warning for the records of `path` the reader could not place, or `None` when there are none.
