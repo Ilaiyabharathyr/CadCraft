@@ -47,7 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])
-            .params("{path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf per sheet; else returns base64 `data` per sheet), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order)} → {sheets: [{layout, bytes, path? | data}]}")
+            .params("{sheets?: [{drawing?: open drawing index | file path (default: the current drawing; files are read for this run only, never opened), layout: name | \"Model\", pageSetup?: {paper?, width?, height?, landscape?, fit?, scale?, margins?, plotStyleTable?, lineweights?, plotTransparency?} (this run only; the drawing doesn't change)}] (default: Model if it has objects, then every layout in tab order), to?: pdf|svg|png, folder? (else returns base64 `data` per sheet), name?: pattern with {drawing} {sheet} {n} (default \"{drawing}-{sheet}\"), pdf?: {layers?, offLayers?, text?: text|geometry}, copies?: 1-100, stamp?: not available yet; older form: path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf), layouts?: [name | \"Model\"]} → {sheets: [{drawing, layout, ok, file, bytes, path? | data} | {drawing, layout, ok: false, error}], published, failed, copies, message}: a sheet that fails is reported and the rest still publish; an error only when none did")
             .noundo(),
         CommandSpec::new("pdfbook", "Sheet Books to PDF...", run_pdfbook)
             .menu(&["File", "Sheet Books to PDF..."])
@@ -365,23 +365,177 @@ fn run_preview(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- PUBLISH ----------
 
+/// Most copies one PUBLISH asks for.
+const MAX_COPIES: u64 = 100;
+/// Longest file name pattern, in characters.
+const MAX_NAME: usize = 200;
+/// The file name pattern when none is given: the drawing's name, then the sheet's.
+const DEFAULT_NAME: &str = "{drawing}-{sheet}";
+/// Parameters PUBLISH takes (anything else is refused, so a misspelt name is never ignored).
+const PUBLISH_KEYS: &[&str] = &["sheets", "to", "folder", "name", "pdf", "copies", "stamp", "path", "layouts"];
+/// What a sheet's `pageSetup` may change for one run.
+const SETUP_KEYS: &[&str] =
+    &["paper", "width", "height", "landscape", "fit", "scale", "margins", "plotStyleTable", "lineweights", "plotTransparency"];
+/// What `pdf` may set.
+const PDF_KEYS: &[&str] = &["layers", "offLayers", "text"];
+/// Largest custom paper side and margin, in millimetres.
+const MAX_PAPER_MM: f64 = 10_000.0;
+const MAX_MARGIN_MM: f64 = 1_000.0;
+
 /// A layout name made safe for a file name.
 fn file_part(name: &str) -> String {
     name.chars().map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.') { c } else { '_' }).collect()
 }
 
-fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
+/// A drawing's name without its folder or extension.
+fn drawing_stem(name: &str) -> String {
+    std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Drawing".into())
+}
+
+/// Where a sheet's drawing comes from.
+#[derive(Clone, Debug, PartialEq)]
+enum Source {
+    /// An open drawing, by its index in the session.
+    Open(usize),
+    /// A drawing file, read for this run only.
+    File(String),
+}
+
+/// One sheet to publish, as asked for.
+#[derive(Clone, Debug)]
+struct SheetRequest {
+    source: Source,
+    layout: String,
+    /// Plot settings replacing the sheet's page setup for this run (already checked).
+    setup: Option<serde_json::Map<String, Value>>,
+}
+
+/// The settings every sheet of one run shares.
+#[derive(Clone, Debug)]
+struct PublishOutput {
+    /// `pdf`, `svg` or `png`.
+    to: &'static str,
+    /// Files go here; without one each sheet comes back as base64 `data`.
+    folder: Option<std::path::PathBuf>,
+    /// File name pattern: `{drawing}`, `{sheet}` and `{n}`, with `{{` and `}}` for braces.
+    name: String,
+    /// PDF settings (`layers`, `offLayers`, `text`).
+    pdf: serde_json::Map<String, Value>,
+    copies: u64,
+}
+
+fn unknown_key(cmd: &str, v: &serde_json::Map<String, Value>, allowed: &[&str], what: &str) -> Result<()> {
+    match v.keys().find(|k| !allowed.contains(&k.as_str())) {
+        Some(k) => Err(bad(cmd, format!("unknown {what} `{k}` (expected one of: {})", allowed.join(", ")))),
+        None => Ok(()),
+    }
+}
+
+/// A sheet's page setup override: checked here, so a bad value fails the run before any file is
+/// written, and returned as plot options.
+fn setup_override(cmd: &str, v: &Value) -> Result<serde_json::Map<String, Value>> {
+    let o = v.as_object().ok_or_else(|| bad(cmd, "`pageSetup` must be an object"))?;
+    unknown_key(cmd, o, SETUP_KEYS, "page setup setting")?;
+    let mut out = serde_json::Map::new();
+    for key in ["landscape", "fit", "lineweights", "plotTransparency"] {
+        if let Some(x) = o.get(key) {
+            let b = x.as_bool().ok_or_else(|| bad(cmd, format!("`pageSetup.{key}` must be true or false")))?;
+            out.insert(key.into(), json!(b));
+        }
+    }
+    if let Some(x) = o.get("paper") {
+        let name = x
+            .as_str()
+            .filter(|n| cadcraft_render::paper_size(n).is_some())
+            .ok_or_else(|| bad(cmd, "`pageSetup.paper` must be a paper name such as \"A3\" or \"Letter\""))?;
+        out.insert("paper".into(), json!(name));
+    }
+    let side = |key: &str| -> Result<Option<f64>> {
+        match o.get(key) {
+            None => Ok(None),
+            Some(x) => x
+                .as_f64()
+                .filter(|w| w.is_finite() && *w > 0.0 && *w <= MAX_PAPER_MM)
+                .map(Some)
+                .ok_or_else(|| bad(cmd, format!("`pageSetup.{key}` must be a paper size in millimetres up to {MAX_PAPER_MM}"))),
+        }
+    };
+    match (side("width")?, side("height")?) {
+        (Some(w), Some(h)) => {
+            out.insert("width".into(), json!(w));
+            out.insert("height".into(), json!(h));
+        }
+        (None, None) => {}
+        _ => return Err(bad(cmd, "`pageSetup.width` and `pageSetup.height` go together")),
+    }
+    if let Some(x) = o.get("scale") {
+        let k = super::layout::parse_scale(x)
+            .ok_or_else(|| bad(cmd, "`pageSetup.scale` must be positive: paper units per drawing unit, or a ratio such as \"1:50\""))?;
+        out.insert("scale".into(), json!(k));
+    }
+    if let Some(x) = o.get("margins") {
+        let m: Option<Vec<f64>> = x
+            .as_array()
+            .filter(|a| a.len() == 4)
+            .and_then(|a| a.iter().map(|m| m.as_f64().filter(|m| m.is_finite() && (0.0..=MAX_MARGIN_MM).contains(m))).collect());
+        let m = m.ok_or_else(|| {
+            bad(cmd, format!("`pageSetup.margins` must be four millimetre values from 0 to {MAX_MARGIN_MM}: left, bottom, right, top"))
+        })?;
+        out.insert("margins".into(), json!(m));
+    }
+    if let Some(x) = o.get("plotStyleTable") {
+        let t =
+            x.as_str().filter(|t| t.chars().count() <= 260).ok_or_else(|| bad(cmd, "`pageSetup.plotStyleTable` must be a plot style table name"))?;
+        out.insert("plotStyleTable".into(), json!(t));
+    }
+    Ok(out)
+}
+
+/// The `sheets` list: `[{drawing?: index | path, layout, pageSetup?}]`.
+fn sheet_list(cmd: &str, s: &Session, v: &Value) -> Result<Vec<SheetRequest>> {
+    let a = v.as_array().ok_or_else(|| bad(cmd, "`sheets` must be a list of {drawing?, layout, pageSetup?}"))?;
+    if a.len() > MAX_SHEETS {
+        return Err(bad(cmd, format!("at most {MAX_SHEETS} sheets can be published at once")));
+    }
+    a.iter()
+        .enumerate()
+        .map(|(i, x)| {
+            let at = i + 1;
+            let o = x.as_object().ok_or_else(|| bad(cmd, format!("sheet {at} must be an object: {{drawing?, layout, pageSetup?}}")))?;
+            unknown_key(cmd, o, &["drawing", "layout", "pageSetup"], "sheet setting")?;
+            let source = match o.get("drawing") {
+                None | Some(Value::Null) => Source::Open(s.active),
+                Some(Value::String(path)) if !path.trim().is_empty() => Source::File(path.clone()),
+                Some(d) => {
+                    let i = d.as_u64().and_then(|i| usize::try_from(i).ok());
+                    Source::Open(i.ok_or_else(|| bad(cmd, format!("sheet {at}: `drawing` must be an open drawing's index or a file path")))?)
+                }
+            };
+            let layout = o
+                .get("layout")
+                .and_then(Value::as_str)
+                .filter(|l| !l.trim().is_empty())
+                .ok_or_else(|| bad(cmd, format!("sheet {at}: `layout` (a layout name or \"Model\") is required")))?;
+            let setup = o.get("pageSetup").filter(|v| !v.is_null()).map(|v| setup_override(cmd, v)).transpose()?;
+            Ok(SheetRequest { source, layout: layout.to_string(), setup })
+        })
+        .collect()
+}
+
+/// The older form's sheets: `layouts` of the current drawing (checked up front, as before), or
+/// Model if it has objects and then every layout in tab order.
+fn legacy_sheets(cmd: &str, s: &Session, layouts: Option<&Value>) -> Result<Vec<SheetRequest>> {
     let d = s.doc()?;
-    let sheets: Vec<String> = match p.get("layouts") {
+    let names: Vec<String> = match layouts {
         Some(v) => {
-            let a = v.as_array().ok_or_else(|| bad("publish", "`layouts` must be a list of layout names"))?;
+            let a = v.as_array().ok_or_else(|| bad(cmd, "`layouts` must be a list of layout names"))?;
             a.iter()
                 .map(|n| {
-                    let n = n.as_str().ok_or_else(|| bad("publish", "`layouts` must be a list of layout names"))?;
+                    let n = n.as_str().ok_or_else(|| bad(cmd, "`layouts` must be a list of layout names"))?;
                     if n.eq_ignore_ascii_case("model") {
                         return Ok("Model".to_string());
                     }
-                    d.layout(n).map(|l| l.name.clone()).ok_or_else(|| bad("publish", format!("no layout `{n}`")))
+                    d.layout(n).map(|l| l.name.clone()).ok_or_else(|| bad(cmd, format!("no layout `{n}`")))
                 })
                 .collect::<Result<_>>()?
         }
@@ -392,34 +546,250 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
             model.into_iter().chain(layouts.iter().map(|l| l.name.clone())).collect()
         }
     };
+    Ok(names.into_iter().map(|layout| SheetRequest { source: Source::Open(s.active), layout, setup: None }).collect())
+}
+
+/// Check a file name pattern: known tokens only, and nothing that leaves the folder.
+fn check_name(cmd: &str, pattern: &str) -> Result<()> {
+    if pattern.trim().is_empty() || pattern.chars().count() > MAX_NAME {
+        return Err(bad(cmd, format!("`name` must be a file name pattern of 1 to {MAX_NAME} characters")));
+    }
+    if pattern.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')) {
+        return Err(bad(cmd, "`name` can't contain / \\ : * ? \" < > | or control characters"));
+    }
+    if pattern.trim() == "." || pattern.trim() == ".." {
+        return Err(bad(cmd, "`name` must be a file name"));
+    }
+    render_name(pattern, "", "", 1).map(|_| ()).map_err(|e| bad(cmd, e))
+}
+
+/// A file name from its pattern (without the extension). `{drawing}` and `{sheet}` are made safe
+/// for a file name; `{n}` is the sheet's place in the run, from 1.
+fn render_name(pattern: &str, drawing: &str, sheet: &str, n: usize) -> std::result::Result<String, String> {
+    let mut out = String::new();
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' if chars.peek() == Some(&'{') => {
+                chars.next();
+                out.push('{');
+            }
+            '}' if chars.peek() == Some(&'}') => {
+                chars.next();
+                out.push('}');
+            }
+            '{' => {
+                let token: String = chars.by_ref().take_while(|c| *c != '}').collect();
+                match token.as_str() {
+                    "drawing" => out.push_str(&file_part(drawing)),
+                    "sheet" => out.push_str(&file_part(sheet)),
+                    "n" => out.push_str(&n.to_string()),
+                    t => return Err(format!("`name` has an unknown token {{{t}}}: use {{drawing}}, {{sheet}} or {{n}}")),
+                }
+            }
+            '}' => return Err("`name` has a } without its {: write }} for a brace".into()),
+            c => out.push(c),
+        }
+    }
+    Ok(out)
+}
+
+/// Read PUBLISH's parameters, both forms. Everything is checked before any sheet is plotted.
+fn publish_request(s: &Session, p: &Value) -> Result<(Vec<SheetRequest>, PublishOutput)> {
+    let cmd = "publish";
+    let empty = serde_json::Map::new();
+    let o = match p {
+        Value::Null => &empty,
+        Value::Object(o) => o,
+        _ => return Err(bad(cmd, "parameters must be an object")),
+    };
+    unknown_key(cmd, o, PUBLISH_KEYS, "parameter")?;
+    let legacy = o.contains_key("path") || o.contains_key("layouts");
+    if legacy && ["sheets", "folder", "name"].iter().any(|k| o.contains_key(*k)) {
+        return Err(bad(cmd, "use `sheets`, `folder` and `name`, or the older `path` and `layouts`, not both"));
+    }
+    let sheets = match o.get("sheets") {
+        Some(v) => sheet_list(cmd, s, v)?,
+        None => legacy_sheets(cmd, s, o.get("layouts"))?,
+    };
     if sheets.is_empty() {
-        return Err(bad("publish", "there are no sheets to publish"));
+        return Err(bad(cmd, "there are no sheets to publish"));
     }
     if sheets.len() > MAX_SHEETS {
-        return Err(bad("publish", format!("at most {MAX_SHEETS} sheets can be published at once")));
+        return Err(bad(cmd, format!("at most {MAX_SHEETS} sheets can be published at once")));
     }
-    let base = str_param(p, "path").map(|path| {
-        let pb = std::path::Path::new(path);
-        let stem = pb.file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Drawing".into());
-        (pb.parent().map(std::path::Path::to_path_buf).unwrap_or_default(), stem)
-    });
-    let mut out = Vec::new();
-    for name in &sheets {
-        let mut q = json!({ "layout": name });
-        if let Some((dir, stem)) = &base {
-            q["path"] = json!(dir.join(format!("{stem}-{}.pdf", file_part(name))).to_string_lossy());
-        }
-        let mut r = s.execute("plot", &q).map_err(|e| bad("publish", format!("{name}: {e}")))?;
-        if let Some(o) = r.as_object_mut() {
-            o.insert("layout".into(), json!(name));
-        }
-        out.push(r);
-    }
-    let message = match &base {
-        Some(_) => format!("Published {} sheet(s): {}", out.len(), out.iter().filter_map(|r| r["path"].as_str()).collect::<Vec<_>>().join(", ")),
-        None => format!("Published {} sheet(s)", out.len()),
+    let to = match o.get("to") {
+        None | Some(Value::Null) => "pdf",
+        Some(Value::String(t)) if t.eq_ignore_ascii_case("pdf") => "pdf",
+        Some(Value::String(t)) if t.eq_ignore_ascii_case("svg") => "svg",
+        Some(Value::String(t)) if t.eq_ignore_ascii_case("png") => "png",
+        Some(_) => return Err(bad(cmd, "`to` must be \"pdf\", \"svg\" or \"png\"")),
     };
-    Ok(json!({ "sheets": out, "message": message }))
+    let (folder, name) = if legacy {
+        match str_param(p, "path") {
+            Some(path) => {
+                let pb = std::path::Path::new(path);
+                // The older form names files `NAME-<sheet>.pdf`; braces in NAME stay braces.
+                let stem = drawing_stem(path).replace('{', "{{").replace('}', "}}");
+                (Some(pb.parent().map(std::path::Path::to_path_buf).unwrap_or_default()), format!("{stem}-{{sheet}}"))
+            }
+            None if o.get("path").is_some_and(|v| !v.is_null()) => return Err(bad(cmd, "`path` must be a file path")),
+            None => (None, DEFAULT_NAME.to_string()),
+        }
+    } else {
+        let folder = match o.get("folder") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(f)) if !f.trim().is_empty() => Some(std::path::PathBuf::from(f)),
+            Some(_) => return Err(bad(cmd, "`folder` must be a folder path")),
+        };
+        let name = match o.get("name") {
+            None | Some(Value::Null) => DEFAULT_NAME.to_string(),
+            Some(Value::String(n)) => {
+                check_name(cmd, n)?;
+                n.clone()
+            }
+            Some(_) => return Err(bad(cmd, "`name` must be a file name pattern such as \"{drawing}-{sheet}\"")),
+        };
+        (folder, name)
+    };
+    let pdf = match o.get("pdf") {
+        None | Some(Value::Null) => serde_json::Map::new(),
+        Some(Value::Object(m)) => {
+            unknown_key(cmd, m, PDF_KEYS, "pdf setting")?;
+            for key in ["layers", "offLayers"] {
+                if m.get(key).is_some_and(|v| !v.is_boolean()) {
+                    return Err(bad(cmd, format!("`pdf.{key}` must be true or false")));
+                }
+            }
+            if m.get("text").is_some_and(|t| !t.as_str().is_some_and(|t| t.eq_ignore_ascii_case("text") || t.eq_ignore_ascii_case("geometry"))) {
+                return Err(bad(cmd, "`pdf.text` must be \"text\" or \"geometry\""));
+            }
+            m.clone()
+        }
+        Some(_) => return Err(bad(cmd, "`pdf` must be an object: {layers?, offLayers?, text?}")),
+    };
+    let copies = match o.get("copies") {
+        None | Some(Value::Null) => 1,
+        Some(c) => c
+            .as_u64()
+            .filter(|c| (1..=MAX_COPIES).contains(c))
+            .ok_or_else(|| bad(cmd, format!("`copies` must be a whole number from 1 to {MAX_COPIES}")))?,
+    };
+    match o.get("stamp") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => {}
+        Some(_) => return Err(bad(cmd, "sheet stamps are not available yet")),
+    }
+    Ok((sheets, PublishOutput { to, folder, name, pdf, copies }))
+}
+
+/// Plot one sheet and write or return it. `files` holds the drawings read from paths so far
+/// (each file is read once per run, or its error kept); `used` the file names written so far.
+fn publish_sheet(
+    s: &Session,
+    files: &mut BTreeMap<String, std::result::Result<Drawing, String>>,
+    out: &PublishOutput,
+    sheet: &SheetRequest,
+    n: usize,
+    used: &mut BTreeSet<String>,
+) -> Result<Value> {
+    let cmd = "publish";
+    let hook = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
+    if let Source::File(path) = &sheet.source
+        && !files.contains_key(path)
+    {
+        files.insert(path.clone(), super::file::read_detached(cmd, path).map_err(|e| e.to_string()));
+    }
+    let (d, title) = match &sheet.source {
+        Source::Open(i) => {
+            let ds = s.docs.get(*i).ok_or_else(|| bad(cmd, format!("there is no open drawing {i}")))?;
+            (&*ds.doc, ds.title.clone())
+        }
+        Source::File(path) => match files.get(path) {
+            Some(Ok(d)) => (d, path.clone()),
+            Some(Err(e)) => return Err(bad(cmd, e.clone())),
+            None => return Err(bad(cmd, format!("{path}: the file could not be read"))),
+        },
+    };
+    let (space, layout) = if sheet.layout.eq_ignore_ascii_case("model") {
+        (Space::Model, "Model".to_string())
+    } else {
+        let l = d.layout(&sheet.layout).ok_or_else(|| bad(cmd, format!("no layout `{}`", sheet.layout)))?;
+        (Space::Paper(l.name.clone()), l.name.clone())
+    };
+    let mut opts = sheet.setup.clone().unwrap_or_default();
+    for (k, v) in &out.pdf {
+        opts.insert(k.clone(), v.clone());
+    }
+    opts.insert("output".into(), json!(out.to));
+    opts.insert("title".into(), json!(format!("{} - {layout}", drawing_stem(&title))));
+    let mut opts = Value::Object(opts);
+    match super::plotters::plot_transparency(s, &opts) {
+        Some(t) => opts["plotTransparency"] = json!(t),
+        None => {
+            if let Some(o) = opts.as_object_mut() {
+                o.remove("plotTransparency");
+            }
+        }
+    }
+    let bytes = hook(d, &space, &opts).map_err(|e| bad(cmd, e))?;
+    let stem = render_name(&out.name, &drawing_stem(&title), &layout, n).map_err(|e| bad(cmd, e))?;
+    // Two sheets that would get one name (two drawings called Plan) get " (2)", " (3)"…
+    let mut file = format!("{stem}.{}", out.to);
+    let mut k = 2;
+    while used.contains(&file.to_lowercase()) {
+        file = format!("{stem} ({k}).{}", out.to);
+        k += 1;
+    }
+    let mut r = json!({ "drawing": title, "layout": layout, "ok": true, "file": file, "bytes": bytes.len(), "pages": 1 });
+    match &out.folder {
+        Some(folder) => {
+            let path = folder.join(&file).to_string_lossy().to_string();
+            super::layout::write_plot_file(cmd, &path, &bytes)?;
+            r["path"] = json!(path);
+        }
+        None => r["data"] = json!(base64_encode(&bytes)),
+    }
+    used.insert(file.to_lowercase());
+    Ok(r)
+}
+
+fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
+    let (sheets, out) = publish_request(s, p)?;
+    let mut files = BTreeMap::new();
+    let mut used = BTreeSet::new();
+    let mut results = Vec::with_capacity(sheets.len());
+    let mut failures = Vec::new();
+    for (i, sheet) in sheets.iter().enumerate() {
+        match publish_sheet(s, &mut files, &out, sheet, i + 1, &mut used) {
+            Ok(r) => results.push(r),
+            Err(e) => {
+                let drawing = match &sheet.source {
+                    Source::Open(i) => s.docs.get(*i).map_or_else(|| format!("drawing {i}"), |d| d.title.clone()),
+                    Source::File(path) => path.clone(),
+                };
+                let error = match e {
+                    EngineError::BadParams { msg, .. } => msg,
+                    e => e.to_string(),
+                };
+                failures.push(format!("{} ({drawing}): {error}", sheet.layout));
+                results.push(json!({ "drawing": drawing, "layout": sheet.layout, "ok": false, "error": error }));
+            }
+        }
+    }
+    let published = results.len() - failures.len();
+    if published == 0 {
+        let shown: Vec<&str> = failures.iter().take(3).map(String::as_str).collect();
+        let more = failures.len().saturating_sub(shown.len());
+        let tail = if more > 0 { format!("; and {more} more") } else { String::new() };
+        return Err(bad("publish", format!("no sheet was published: {}{tail}", shown.join("; "))));
+    }
+    let paths: Vec<&str> = results.iter().filter_map(|r| r["path"].as_str()).collect();
+    let mut message =
+        if paths.is_empty() { format!("Published {published} sheet(s)") } else { format!("Published {published} sheet(s): {}", paths.join(", ")) };
+    if !failures.is_empty() {
+        message.push_str(&format!("; {} failed: {}", failures.len(), failures.join("; ")));
+    }
+    Ok(json!({ "sheets": results, "published": published, "failed": failures.len(), "copies": out.copies, "message": message }))
 }
 
 // ---------- PDFBOOK ----------

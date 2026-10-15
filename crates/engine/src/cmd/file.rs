@@ -278,6 +278,12 @@ pub fn read_file(path: &str) -> std::result::Result<ReadFile, String> {
     }
 }
 
+/// Read a drawing that a command only looks at (PUBLISH's sheets from drawings that aren't
+/// open): decoded through the io hooks, never added to the session and never shown as a tab.
+pub(crate) fn read_detached(cmd: &str, path: &str) -> Result<Drawing> {
+    read_file(path).map(|f| f.drawing).map_err(|e| bad(cmd, e))
+}
+
 /// Add a [`read_file`] result to the session as the active drawing: the fast half of OPEN.
 pub fn finish_open(s: &mut Session, f: ReadFile) -> Result<Value> {
     let ReadFile { drawing, binary_dxf, name, path } = f;
