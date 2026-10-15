@@ -1,6 +1,9 @@
 package org.cadcraft.android
 
 import android.app.Activity
+import android.content.Intent
+import android.webkit.ValueCallback
+import android.net.Uri
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.util.Log
@@ -15,6 +18,27 @@ import androidx.webkit.WebViewClientCompat
 class MainActivity : Activity() {
 
     private lateinit var webView: WebView
+    private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private val fileRequestCode = 1907
+
+    @Deprecated("Handled for Android WebView file selection")
+    override fun onActivityResult(
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?
+    ) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode != fileRequestCode) return
+
+        val result = WebChromeClient.FileChooserParams.parseResult(
+            resultCode, data
+        )
+
+        fileCallback?.onReceiveValue(result)
+        fileCallback = null
+    }
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,10 +69,32 @@ class MainActivity : Activity() {
             settings.domStorageEnabled = true
 
             settings.allowFileAccess = false
-            settings.allowContentAccess = false
+            settings.allowContentAccess = true
             settings.javaScriptCanOpenWindowsAutomatically = false
 
             webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    webView: WebView,
+                    filePathCallback: ValueCallback<Array<Uri>>,
+                    fileChooserParams: FileChooserParams
+                ): Boolean {
+                    fileCallback?.onReceiveValue(null)
+                    fileCallback = filePathCallback
+
+                    return try {
+                        startActivityForResult(
+                            fileChooserParams.createIntent(),
+                            fileRequestCode
+                        )
+                        true
+                    } catch (e: Exception) {
+                        Log.e("CADCraftWeb", "File picker failed", e)
+                        fileCallback?.onReceiveValue(null)
+                        fileCallback = null
+                        false
+                    }
+                }
+
                 override fun onConsoleMessage(
                     message: ConsoleMessage
                 ): Boolean {
@@ -111,7 +157,7 @@ class MainActivity : Activity() {
         setContentView(webView)
 
         webView.loadUrl(
-            "https://appassets.androidplatform.net/assets/web/index.html?mobile=1&cpu"
+            "https://appassets.androidplatform.net/assets/web/index.html?mobile=1"
         )
     }
 

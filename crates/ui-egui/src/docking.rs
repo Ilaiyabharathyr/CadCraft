@@ -418,6 +418,18 @@ pub fn show_mobile(app: &mut crate::CadApp, ui: &mut egui::Ui) {
         if ui.button("Canvas").clicked() {
             active = 0;
         }
+
+        // CADCRAFT_MOBILE_PAN_MODE
+        let pan_id = egui::Id::new("cadcraft-mobile-pan-enabled");
+        let mut pan_enabled = ui.ctx().data(|d| {
+            d.get_temp::<bool>(pan_id).unwrap_or(false)
+        });
+
+        if ui.selectable_label(pan_enabled, "Pan").clicked() {
+            pan_enabled = !pan_enabled;
+        }
+
+        ui.ctx().data_mut(|d| d.insert_temp(pan_id, pan_enabled));
     });
 
     ui.ctx().data_mut(|d| d.insert_temp(panel_id, active));
