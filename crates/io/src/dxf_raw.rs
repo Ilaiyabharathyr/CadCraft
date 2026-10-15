@@ -13,7 +13,7 @@
 //! owner is gone go with it.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use cadcraft_doc::foreign::{Foreign, ForeignExtra, ForeignKey, ForeignObject};
@@ -79,10 +79,10 @@ fn tag(r: &RawTag) -> Tag {
         Kind::Real => v.parse::<f64>().ok().filter(|x| x.is_finite()).map(Value::Real),
         Kind::Int16 | Kind::Int32 | Kind::Int64 => v.parse::<i64>().ok().map(Value::Int),
         Kind::Bool => v.parse::<i64>().ok().map(|x| Value::Bool(x != 0)),
-        Kind::Hex => Some(Value::Hex(v.to_string())),
+        Kind::Hex => Some(Value::Hex(v.into())),
         Kind::Str => None,
     };
-    Tag::new(r.code, value.unwrap_or_else(|| Value::Str(r.value.clone())))
+    Tag::new(r.code, value.unwrap_or_else(|| Value::Str(r.value.clone().into_boxed_str())))
 }
 
 /// A handle value we believe: hexadecimal, not null, not absurdly large.
@@ -864,16 +864,20 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
     };
     let added = f.objects.iter().map(|o| o.tags.len() + 1).sum::<usize>()
         + f.classes.iter().map(|c| c.len() + 1).sum::<usize>()
+        + 2 * f.dictionary.len()
         + f.entities.values().chain(f.records.values()).map(extra).sum::<usize>()
         + xd.values().map(|x| x.len()).sum::<usize>()
         + planned.values().flatten().map(|(_, t)| t.len()).sum::<usize>();
-    let mut out: Vec<Tag> = Vec::with_capacity(tags.len() + added);
-    // Move unchanged records, including their strings, instead of cloning the whole file.
-    let mut input = std::mem::take(tags).into_iter().skip(recs.first().map_or(0, |r| r.start));
+    // Reuse the input allocation as a ring: unread records stay at the front, finished
+    // records go to the back. Only the current record needs a separate scratch buffer.
+    let mut queue = VecDeque::from(std::mem::take(tags));
+    queue.drain(..recs.first().map_or(queue.len(), |r| r.start));
+    queue.reserve_exact(added);
+    let mut out = Vec::new();
     let mut current = Vec::new();
     let mut block = String::new();
     for r in &recs {
-        current.extend(input.by_ref().take(r.end - r.start));
+        current.extend(queue.drain(..(r.end - r.start).min(queue.len())));
         let b = current.get(1..).unwrap_or_default();
         if r.kind == "BLOCK" {
             block = up(&val(b, 2).unwrap_or_default());
@@ -882,11 +886,13 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
             for c in f.classes.iter().filter(|c| c.iter().find(|t| t.code == 1).is_some_and(|n| !class_names.contains(&up(&n.value)))) {
                 out.push(Tag::s(0, "CLASS"));
                 out.extend(c.iter().map(tag));
+                queue.extend(out.drain(..));
             }
         }
         if r.kind == "ENDSEC" && r.sec == "OBJECTS" {
             for o in f.objects.iter().filter(|o| map.alive.contains_key(&o.handle.hex())) {
                 map.object(o, &mut out);
+                queue.extend(out.drain(..));
             }
         }
         for (sec, t) in planned.get(&r.start).into_iter().flatten() {
@@ -895,17 +901,22 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
             let x = head(ub).handle.and_then(|h| handle(&h)).and_then(|h| entity_extra(f, &xd, h));
             out.push(zero.clone());
             record(&map, &ur, ub, x.as_deref(), true, false, &mut out);
+            queue.extend(out.drain(..));
         }
         let x = extra_for(f, &xd, r, b, &block);
         if x.is_none() && Some(r.start) != root {
-            out.append(&mut current);
-            continue;
+            queue.extend(current.drain(..));
+        } else {
+            out.extend(current.first().cloned());
+            record(&map, r, b, x.as_deref(), false, Some(r.start) == root, &mut out);
+            current.clear();
         }
-        out.extend(current.first().cloned());
-        record(&map, r, b, x.as_deref(), false, Some(r.start) == root, &mut out);
-        current.clear();
+        queue.extend(out.drain(..));
     }
-    drop(input);
+    let mut out = Vec::from(queue);
+    if out.capacity() > out.len() + out.len() / 10 {
+        out.shrink_to_fit();
+    }
     add_appids(&mut out);
     let top = max_handle(&out).saturating_add(1);
     if let Some(t) = seed_index(&out).and_then(|i| out.get_mut(i))
@@ -1168,12 +1179,12 @@ mod tests {
     fn sparse_xdata_does_not_double_the_whole_drawing_buffer() {
         let mut d = Drawing::new_metric();
         let mut last = Handle(0);
-        for _ in 0..4096 {
+        for i in 0..4096 {
             last = d
                 .add(
                     &cadcraft_doc::Space::Model,
                     Default::default(),
-                    EntityKind::Point(cadcraft_doc::Point { p: cadcraft_geom::Vec3::ZERO, angle: 0.0 }),
+                    EntityKind::Point(cadcraft_doc::Point { p: cadcraft_geom::Vec3::new(f64::from(i), 0.0, 0.0), angle: 0.0 }),
                 )
                 .unwrap();
         }
@@ -1181,8 +1192,13 @@ mod tests {
         d.modify_entity(last, |e| e.common.xdata = xdata.clone()).unwrap();
         let tags = crate::dxf_write::tags(&d, cadcraft_dxf::Version::R2018);
         assert!(tags.capacity() <= tags.len() + tags.len() / 10, "spare tags: {}", tags.capacity() - tags.len());
+        let mut tags = tags;
+        tags.reserve_exact(64);
+        let allocation = tags.as_ptr();
+        finish(&mut tags, &d);
+        assert_eq!(tags.as_ptr(), allocation, "foreign-data merge must reuse the full-file buffer");
         let back = crate::read_dxf(cadcraft_dxf::write_ascii(&tags).as_bytes()).unwrap();
-        assert_eq!(back.model.len(), d.model.len());
+        assert_eq!(back.model, d.model);
         assert_eq!(back.entity(last).unwrap().common.xdata, xdata);
     }
 }

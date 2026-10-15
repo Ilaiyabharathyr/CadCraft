@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (bounded import allocations and large-drawing save costs) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (compact tags and reused foreign-data merge buffer) · **Target:** Autodesk AutoCAD 2027
 
 Every format AutoCAD 2027 reads or writes, with CADCraft's support, fidelity and tests. Work
 items are in [gaps.md](gaps.md#file-formats); the weighted score feeds
@@ -197,10 +197,21 @@ Synthetic two-layout round trips and PDF/PNG coordinate checks cover distinct ma
 positive/negative offsets. A local two-layout drawing resaved by AutoCAD reproduces the
 previous displacement; no reference drawing is committed.
 
+DXF tag values use immutable owned text: the tag stream occupies 32 rather than 40 bytes
+per pair on 64-bit targets, and ordinary ASCII strings are allocated once during parsing.
+Foreign-data merging consumes records from the front of a reused ring buffer and appends
+finished records at the back, avoiding simultaneous full input/output tag arrays when the
+existing allocation has room for retained groups. Scratch buffers hold individual records;
+large spare capacity is released after merging. Unicode/code-page handling, binary chunks,
+entity order, xdata, classes and handle remapping retain their existing semantics. Synthetic
+regressions check the tag-size budget, allocation reuse and every entity in a sparse-xdata
+round trip. This is not full streaming; the DWG document and DXF bridge still materialize.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Compact immutable tag text and one-allocation foreign-data merge with bounded record scratch space; size/allocation/order regressions. File-format semantics and import limits unchanged |
 | 2026-10-14 | minor | Large imports reuse shared entity allocations and bound spare tag capacity; foreign-data saves move unchanged records, reserve retained groups and avoid whole-file APPID metadata. Public heavy-drawing equivalence/round-trip checks and allocation regressions; streaming/progress remain open |
 | 2026-10-14 | minor | Layout paper and printable origins agree with rotated device margins; per-layout plot offsets survive DXF/DWG, with shared screen/plot placement and synthetic two-layout/PDF/PNG regressions |
 | 2026-10-14 | minor | Source-version DWG bridge preserves foreign class semantics; native sheet units are millimetres and layouts reference their overall viewport. Synthetic regressions and zero-error AutoCAD opening/audit of a local topographic copy |

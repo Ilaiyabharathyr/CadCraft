@@ -28,21 +28,22 @@ pub enum DxfError {
 
 pub type Result<T> = std::result::Result<T, DxfError>;
 
-/// A typed group value.
+/// A typed group value. Text is immutable and has no spare capacity, keeping the tag
+/// stream compact while it coexists with the drawing during import and export.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    Str(String),
+    Str(Box<str>),
     Real(f64),
     Int(i64),
     Bool(bool),
     /// Binary chunk (310–319, 1004) as hex text.
-    Hex(String),
+    Hex(Box<str>),
 }
 
 impl Value {
     pub fn as_str(&self) -> String {
         match self {
-            Value::Str(s) | Value::Hex(s) => s.clone(),
+            Value::Str(s) | Value::Hex(s) => s.to_string(),
             Value::Real(r) => format_real(*r),
             Value::Int(i) => i.to_string(),
             Value::Bool(b) => i64::from(*b).to_string(),
@@ -79,7 +80,7 @@ impl Tag {
         Tag { code, value }
     }
     pub fn s(code: i32, v: impl Into<String>) -> Self {
-        Tag { code, value: Value::Str(v.into()) }
+        Tag { code, value: Value::Str(v.into().into_boxed_str()) }
     }
     pub fn f(code: i32, v: f64) -> Self {
         Tag { code, value: Value::Real(if v.is_finite() { v } else { 0.0 }) }
@@ -156,13 +157,13 @@ fn typed(code: i32, text: &str) -> Value {
             t.parse::<i64>().map(Value::Int).unwrap_or_else(|_| Value::Int(t.parse::<f64>().map(|f| f as i64).unwrap_or(0)))
         }
         Kind::Bool => Value::Bool(t.parse::<i64>().unwrap_or(0) != 0),
-        Kind::Hex => Value::Hex(t.to_string()),
-        Kind::Str => Value::Str(text.trim_end_matches(['\r', '\n']).to_string()),
+        Kind::Hex => Value::Hex(t.into()),
+        Kind::Str => Value::Str(unescape_unicode(text.trim_end_matches(['\r', '\n']))),
     }
 }
 
 const BINARY_SENTINEL: &[u8] = b"AutoCAD Binary DXF\r\n\x1a\0";
-/// Most group codes read from one file. A `Tag` takes 40 bytes plus its text, so this bounds the
+/// Most group codes read from one file. A `Tag` takes 32 bytes on 64-bit targets plus its text, so this bounds the
 /// tag list to a few GB; real drawings stay far below (a 10 MB DWG is typically a few million).
 pub const MAX_TAGS: usize = 50_000_000;
 
@@ -223,9 +224,9 @@ fn mif_escape_at(chars: &[char], i: usize) -> Option<char> {
 /// page (four hex digits, one UTF-16 code unit; characters above U+FFFF are a surrogate pair of
 /// escapes), and the `\M+nXXXX` sequences for double-byte East Asian characters. Malformed
 /// escapes, unpaired surrogates and unknown `\M+` code pages are kept as literal text.
-fn unescape_unicode(s: &str) -> String {
+fn unescape_unicode(s: &str) -> Box<str> {
     if !s.contains("\\U+") && !s.contains("\\M+") {
-        return s.to_string();
+        return s.into();
     }
     let mut out = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
@@ -254,7 +255,7 @@ fn unescape_unicode(s: &str) -> String {
         out.push(c);
         i += 1;
     }
-    out
+    out.into_boxed_str()
 }
 
 pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
@@ -289,10 +290,6 @@ fn parse_ascii_with_limit(text: &str, max_tags: usize) -> Result<Vec<Tag>> {
         let code: i32 = ct.parse().map_err(|_| DxfError::BadCode { line: ln + 1, text: ct.chars().take(40).collect() })?;
         let Some((_, val)) = lines.next() else { return Err(DxfError::Eof) };
         let v = typed(code, val);
-        let v = match v {
-            Value::Str(s) => Value::Str(unescape_unicode(&s)),
-            o => o,
-        };
         tags.push(Tag { code, value: v });
         if tags.len() > max_tags {
             return Err(DxfError::TooLarge { tags: tags.len(), limit: max_tags });
@@ -385,10 +382,10 @@ fn parse_binary_with_limit(b: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
                 for x in bytes {
                     let _ = write!(s, "{x:02X}");
                 }
-                Value::Hex(s)
+                Value::Hex(s.into_boxed_str())
             }
         };
-        let eof = code == 0 && matches!(&v, Value::Str(s) if s == "EOF");
+        let eof = code == 0 && matches!(&v, Value::Str(s) if s.as_ref() == "EOF");
         tags.push(Tag { code, value: v });
         if tags.len() > max_tags {
             return Err(DxfError::TooLarge { tags: tags.len(), limit: max_tags });
@@ -457,8 +454,8 @@ pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
             Kind::Str => {
                 out.extend_from_slice(&code_bytes);
                 let s = match &t.value {
-                    Value::Str(s) => s.clone(),
-                    v => v.as_str(),
+                    Value::Str(s) => std::borrow::Cow::Borrowed(s.as_ref()),
+                    v => std::borrow::Cow::Owned(v.as_str()),
                 };
                 let mut text = String::with_capacity(s.len());
                 if utf8 {
@@ -599,6 +596,12 @@ pub fn record_slices(tags: &[Tag]) -> Vec<(String, &[Tag])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tag_memory_budget() {
+        // A million group pairs must fit in 32 MB before their text allocations.
+        assert!(std::mem::size_of::<Tag>() <= 32);
+    }
 
     #[test]
     fn large_ascii_input_bounds_spare_tag_memory() {
