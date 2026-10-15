@@ -791,13 +791,16 @@ fn stamp_window(ctx: &egui::Context, st: &mut PublishState) {
             ui.label(RichText::new(crate::tl!("Example")).color(t.text_dim));
             ui.label(RichText::new(sample).font(crate::theme::mono()).color(t.text));
             ui.separator();
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button(crate::tl!("Done")).clicked() {
-                    done = true;
-                }
-                if ui.button(crate::tl!("Reset")).clicked() {
-                    st.stamp = StampSettings::default();
-                }
+            // A row, so the buttons take their own height rather than the window's.
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button(crate::tl!("Done")).clicked() {
+                        done = true;
+                    }
+                    if ui.button(crate::tl!("Reset")).clicked() {
+                        st.stamp = StampSettings::default();
+                    }
+                });
             });
         });
     if !open || done {
