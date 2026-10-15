@@ -2,14 +2,16 @@
 //! and publish them. A typed or menu-invoked PUBLISH opens this window; JSON calls (scripts, the
 //! control channel, MCP) never get here and run the engine's `publish` directly.
 //!
-//! Each sheet is written with the engine's `plot` command (one PDF per sheet, or one PDF with a
-//! page per sheet when the sheets come from one drawing), so the window and scripts produce the
-//! same files. Options the engine can't honour yet are shown disabled with "Not available yet".
+//! Publishing is one call to the engine's `publish` with the ticked sheets, so the window and
+//! scripts produce the same files and names. The Status column and the file names come from
+//! `publish {"action": "status"}`, refreshed a moment after the list or the options change.
+//! Options the engine can't honour yet are shown disabled with "Not available yet".
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 
 use egui::{Align, Align2, Color32, FontId, Layout, Painter, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::CadApp;
 use crate::theme::Tokens;
@@ -22,12 +24,55 @@ const PAPER_COL: f32 = 96.0;
 const STATUS_COL: f32 = 110.0;
 const GAP: f32 = 8.0;
 const NOT_YET: &str = "Not available yet";
+/// Seconds after the last change before the Status column is checked again.
+const STATUS_DELAY: f64 = 0.25;
+/// Papers offered for a one-run page setup change.
+const PAPERS: &[&str] = &["A4", "A3", "A2", "A1", "A0", "Letter", "Legal", "Tabloid", "ANSI C", "ANSI D", "ANSI E"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Tab {
     #[default]
     Sheet,
     Output,
+}
+
+/// What the files are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum To {
+    #[default]
+    Pdf,
+    Svg,
+    Png,
+}
+
+impl To {
+    fn id(self) -> &'static str {
+        match self {
+            To::Pdf => "pdf",
+            To::Svg => "svg",
+            To::Png => "png",
+        }
+    }
+}
+
+/// A sheet's page setup changed for one run (the drawing keeps its own).
+#[derive(Clone, Debug, PartialEq)]
+struct SetupChange {
+    /// A short paper name (`A3`, `Letter`…).
+    paper: String,
+    landscape: bool,
+    fit: bool,
+}
+
+/// What `publish {"action": "status"}` said, for the request it was asked about.
+#[derive(Clone, Debug, Default)]
+struct Checked {
+    /// The request's fingerprint (see [`fingerprint`]).
+    key: u64,
+    /// Every listed sheet: (status, reason).
+    sheets: BTreeMap<(u64, String), (String, String)>,
+    /// The ticked sheets' file names, in order (one name when combining).
+    files: Vec<String>,
 }
 
 /// The window's state between frames (egui temp data, not saved with the workspace).
@@ -47,6 +92,12 @@ pub struct PublishState {
     ask_name: bool,
     folder: Option<String>,
     report: Option<String>,
+    to: To,
+    /// Page setups changed for this run, by (drawing uid, sheet name).
+    changes: BTreeMap<(u64, String), SetupChange>,
+    checked: Option<Checked>,
+    /// A change waiting to be checked: (fingerprint, when it was seen).
+    pending: Option<(u64, f64)>,
 }
 
 /// One sheet as the list shows it.
@@ -67,6 +118,8 @@ struct Sheet {
 struct Group {
     index: usize,
     uid: u64,
+    /// The drawing's revision: the Status column is checked again when it changes.
+    revision: u64,
     title: String,
     stem: String,
     folder: String,
@@ -81,11 +134,6 @@ struct Actions {
     choose: bool,
     help: bool,
     close: bool,
-}
-
-/// The file name part used for a sheet; matches the engine's PUBLISH naming.
-fn file_part(name: &str) -> String {
-    name.chars().map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.') { c } else { '_' }).collect()
 }
 
 fn ratio(k: f64) -> String {
@@ -158,7 +206,7 @@ fn gather(app: &CadApp, st: &PublishState) -> Vec<Group> {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "Drawing".into());
         let folder = ds.path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-        groups.push(Group { index, uid: ds.uid, title: ds.title.clone(), stem, folder, current: index == active, sheets });
+        groups.push(Group { index, uid: ds.uid, revision: ds.revision, title: ds.title.clone(), stem, folder, current: index == active, sheets });
     }
     groups
 }
@@ -170,6 +218,98 @@ fn picked<'a>(groups: &'a [Group], st: &PublishState) -> Vec<(&'a Group, &'a She
 
 fn default_folder(groups: &[Group], st: &PublishState) -> String {
     st.folder.clone().filter(|f| !f.trim().is_empty()).or_else(|| groups.iter().map(|g| g.folder.clone()).find(|f| !f.is_empty())).unwrap_or_default()
+}
+
+/// A `sheets` entry for the engine: the drawing by its index, the sheet, and a page setup
+/// changed for this run.
+fn sheet_json(g: &Group, s: &Sheet, st: &PublishState) -> Value {
+    let mut v = json!({ "drawing": g.index, "layout": s.name });
+    if let Some(c) = st.changes.get(&(g.uid, s.name.clone())) {
+        v["pageSetup"] = json!({ "paper": c.paper, "landscape": c.landscape, "fit": c.fit });
+    }
+    v
+}
+
+/// Combining is for PDFs.
+fn combining(st: &PublishState) -> bool {
+    st.combine && st.to == To::Pdf
+}
+
+/// The publish request for the ticked sheets (without a folder: the caller adds it).
+fn publish_request(groups: &[Group], st: &PublishState) -> Value {
+    let sheets: Vec<Value> = picked(groups, st).into_iter().map(|(g, s)| sheet_json(g, s, st)).collect();
+    let mut r = json!({ "sheets": sheets, "to": st.to.id(), "combine": combining(st) });
+    if st.to == To::Pdf {
+        r["pdf"] = json!({ "layers": !st.drop_layers });
+    }
+    r
+}
+
+/// The two status requests: every listed sheet (for the Status column), and the ticked ones as
+/// they will be published (for the file names).
+fn status_requests(groups: &[Group], st: &PublishState) -> (Value, Value) {
+    let all: Vec<Value> = groups.iter().flat_map(|g| g.sheets.iter().map(move |s| (g, s))).map(|(g, s)| sheet_json(g, s, st)).collect();
+    let mut names = publish_request(groups, st);
+    names["action"] = json!("status");
+    (json!({ "action": "status", "sheets": all }), names)
+}
+
+/// A fingerprint of what the status depends on: the requests and the drawings' revisions.
+fn fingerprint(groups: &[Group], requests: &(Value, Value)) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    requests.0.to_string().hash(&mut h);
+    requests.1.to_string().hash(&mut h);
+    for g in groups {
+        (g.uid, g.revision).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Ask the engine about the listed sheets: a moment after the last change, so typing a folder or
+/// ticking several sheets checks once. The first check runs at once.
+fn refresh_status(app: &mut CadApp, ctx: &egui::Context, groups: &[Group], st: &mut PublishState) {
+    let requests = status_requests(groups, st);
+    let key = fingerprint(groups, &requests);
+    if st.checked.as_ref().is_some_and(|c| c.key == key) {
+        st.pending = None;
+        return;
+    }
+    let now = ctx.input(|i| i.time);
+    let since = match st.pending {
+        Some((k, t)) if k == key => now - t,
+        _ => {
+            st.pending = Some((key, now));
+            0.0
+        }
+    };
+    if st.checked.is_some() && since < STATUS_DELAY {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64((STATUS_DELAY - since).max(0.01)));
+        return;
+    }
+    let mut checked = Checked { key, ..Checked::default() };
+    if let Ok(r) = app.run("publish", requests.0) {
+        let listed = groups.iter().flat_map(|g| g.sheets.iter().map(move |s| (g.uid, s.name.clone())));
+        for (key, x) in listed.zip(r["sheets"].as_array().into_iter().flatten()) {
+            let status = x["status"].as_str().unwrap_or("error").to_string();
+            checked.sheets.insert(key, (status, x["reason"].as_str().unwrap_or_default().to_string()));
+        }
+    }
+    if !picked(groups, st).is_empty()
+        && let Ok(r) = app.run("publish", requests.1)
+    {
+        checked.files = match r["combined"]["file"].as_str() {
+            Some(f) => vec![f.to_string()],
+            None => r["sheets"].as_array().into_iter().flatten().filter_map(|x| x["file"].as_str().map(str::to_string)).collect(),
+        };
+    }
+    st.checked = Some(checked);
+    st.pending = None;
+}
+
+/// How many ticked sheets the last check says will fail.
+fn will_fail(groups: &[Group], st: &PublishState) -> usize {
+    let Some(c) = &st.checked else { return 0 };
+    picked(groups, st).iter().filter(|(g, s)| c.sheets.get(&(g.uid, s.name.clone())).is_some_and(|(k, _)| k == "error")).count()
 }
 
 /// Show the window (dialog name `"publish"`).
@@ -185,6 +325,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
             .or_else(|| groups.first().and_then(|g| g.sheets.first().map(|s| (g, s))))
             .map(|(g, s)| (g.uid, s.name.clone()));
     }
+    refresh_status(app, ctx, &groups, &mut st);
     let mut act = Actions::default();
     let screen = ctx.content_rect();
     let center = screen.center();
@@ -218,7 +359,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     if act.choose {
         let stem = groups.first().map_or_else(|| "Drawing".to_string(), |g| g.stem.clone());
         if let Some(pick) = app.services.pick_save.as_ref()
-            && let Some(path) = pick(&format!("{stem}.pdf"))
+            && let Some(path) = pick(&format!("{stem}.{}", st.to.id()))
             && let Some(dir) = std::path::Path::new(&path).parent()
         {
             st.folder = Some(dir.to_string_lossy().to_string());
@@ -228,62 +369,55 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         let report = run(app, &groups, &st);
         app.set_status(report.clone());
         st.report = Some(report);
+        // The files exist now; check again so the names and statuses are current.
+        st.checked = None;
     }
     ctx.data_mut(|d| d.insert_temp(id, st));
 }
 
-/// Publish the ticked sheets with the engine's PLOT; returns the report line.
+/// Publish the ticked sheets with one engine `publish` call; returns the report line.
 fn run(app: &mut CadApp, groups: &[Group], st: &PublishState) -> String {
     let sheets = picked(groups, st);
-    if sheets.is_empty() {
+    let Some((first, first_sheet)) = sheets.first() else {
         return crate::tl!("Nothing selected").to_string();
-    }
-    let layers = !st.drop_layers;
-    let one_drawing = sheets.iter().all(|(g, _)| g.uid == sheets[0].0.uid);
-    let combine = st.combine && one_drawing;
+    };
+    let mut request = publish_request(groups, st);
     let mut folder = default_folder(groups, st);
-    let mut combined_name: Option<String> = None;
     if st.ask_name || folder.is_empty() {
-        let first = sheets[0].0;
-        let suggested = if combine { format!("{}.pdf", first.stem) } else { format!("{}-{}.pdf", first.stem, file_part(&sheets[0].1.name)) };
+        let suggested = st
+            .checked
+            .as_ref()
+            .and_then(|c| c.files.first().cloned())
+            .unwrap_or_else(|| format!("{}-{}.{}", first.stem, first_sheet.name, st.to.id()));
         let Some(pick) = app.services.pick_save.as_ref() else {
             return crate::tl!("Choose a folder to publish to.").to_string();
         };
         let Some(path) = pick(&suggested) else { return crate::tl!("Publishing cancelled.").to_string() };
         let p = std::path::Path::new(&path);
         folder = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
-        if combine {
-            combined_name = p.file_name().map(|n| n.to_string_lossy().to_string());
+        // A combined file takes the name given; braces in it stay braces.
+        if combining(st)
+            && let Some(stem) = p.file_stem().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty())
+        {
+            request["name"] = json!(stem.replace('{', "{{").replace('}', "}}"));
         }
     }
-    let dir = std::path::PathBuf::from(&folder);
-    let previous = app.session.active;
-    let (mut ok, mut failed) = (0usize, Vec::new());
-    if combine {
-        let g = sheets[0].0;
-        let names: Vec<&str> = sheets.iter().map(|(_, s)| s.name.as_str()).collect();
-        let file = combined_name.unwrap_or_else(|| format!("{}.pdf", g.stem));
-        app.session.active = g.index;
-        match app.run("plot", json!({ "layouts": names, "path": dir.join(&file).to_string_lossy(), "layers": layers })) {
-            Ok(_) => ok = names.len(),
-            Err(e) => failed.push(format!("{file}: {e}")),
-        }
-    } else {
-        for (g, s) in &sheets {
-            app.session.active = g.index;
-            let file = format!("{}-{}.pdf", g.stem, file_part(&s.name));
-            match app.run("plot", json!({ "layout": s.name, "path": dir.join(&file).to_string_lossy(), "layers": layers })) {
-                Ok(_) => ok += 1,
-                Err(e) => failed.push(format!("{}: {e}", s.name)),
-            }
-        }
-    }
-    app.session.active = previous.min(app.session.docs.len().saturating_sub(1));
+    request["folder"] = json!(folder);
     let total = sheets.len();
-    if failed.is_empty() {
-        crate::tf!("Published {ok} of {total} sheets to {folder}", ok = ok, total = total, folder = folder)
-    } else {
-        format!("{} — {}", crate::tf!("Published {ok} of {total} sheets to {folder}", ok = ok, total = total, folder = folder), failed.join("; "))
+    match app.run("publish", request) {
+        Ok(r) => {
+            let ok = r["published"].as_u64().unwrap_or(0);
+            let done = crate::tf!("Published {ok} of {total} sheets to {folder}", ok = ok, total = total, folder = folder);
+            let failed: Vec<String> = r["sheets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|x| x["ok"] == false)
+                .map(|x| format!("{}: {}", x["layout"].as_str().unwrap_or(""), x["error"].as_str().unwrap_or("")))
+                .collect();
+            if failed.is_empty() { done } else { format!("{done} — {}", failed.join("; ")) }
+        }
+        Err(e) => e,
     }
 }
 
@@ -291,7 +425,10 @@ fn body(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Actions)
     let size = ui.available_size();
     let footer = 34.0;
     let main_h = (size.y - footer - 14.0).max(240.0);
-    let list_w = (size.x - INSPECTOR - 14.0).max(320.0);
+    // The separator between the columns takes its own width plus the item spacing on each side;
+    // counting it keeps the content inside the window, which would otherwise grow every frame.
+    let gap = 2.0 * ui.spacing().item_spacing.x + 8.0;
+    let list_w = (size.x - INSPECTOR - gap).max(320.0);
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(vec2(list_w, main_h), Layout::top_down(Align::Min), |ui| {
             ui.set_min_size(vec2(list_w, main_h));
@@ -429,7 +566,7 @@ fn paint_check(p: &Painter, r: Rect, state: Option<bool>) {
     let t = Tokens::get();
     let on = state != Some(false);
     p.rect(r, 2.0, if on { t.accent } else { t.field }, Stroke::new(1.0, if on { t.accent } else { t.text_faint }), StrokeKind::Inside);
-    let w = Stroke::new(1.6, Color32::WHITE);
+    let w = Stroke::new(1.6, t.paper);
     match state {
         Some(true) => {
             let (x, y, s) = (r.left(), r.top(), r.width());
@@ -522,6 +659,15 @@ fn sheet_row(ui: &mut Ui, g: &Group, s: &Sheet, st: &mut PublishState) {
         }
     }
     crate::icons::describe_control(ui, &resp, &s.name, Some(on), false);
+    // The status is painted, so screen readers get it as the row's value and the reason as its
+    // description.
+    let (label, color, reason) = sheet_status(g, s, st);
+    ui.ctx().accesskit_node_builder(resp.id, |node| {
+        node.set_value(label.clone());
+        if !reason.is_empty() {
+            node.set_description(reason.clone());
+        }
+    });
     let p = ui.painter();
     if inspected {
         p.rect(rect.shrink2(vec2(1.0, 0.5)), 0.0, t.tab_active, Stroke::new(1.0, t.accent), StrokeKind::Inside);
@@ -546,8 +692,26 @@ fn sheet_row(ui: &mut Ui, g: &Group, s: &Sheet, st: &mut PublishState) {
     cell_text(p, name_text, &s.name, fg, font.clone());
     cell_text(p, setup, crate::i18n::t(&s.setup), if on { t.text_dim } else { t.text_faint }, font.clone());
     cell_text(p, paper, &paper_text(s), if on { t.text_dim } else { t.text_faint }, font.clone());
-    let (label, color) = if s.default_setup { (crate::tl!("Uses default"), t.text_dim) } else { (crate::tl!("Ready"), t.text_faint) };
-    cell_text(p, status, label, if on { color } else { t.text_faint }, font);
+    cell_text(p, status, &label, if on { color } else { t.text_faint }, font);
+    if !reason.is_empty() && resp.hovered() {
+        resp.on_hover_text(reason);
+    }
+}
+
+/// The Status column: the last check's answer, or "Checking..." until it comes.
+fn sheet_status(g: &Group, s: &Sheet, st: &PublishState) -> (String, Color32, String) {
+    let t = Tokens::get();
+    let key = (g.uid, s.name.clone());
+    let Some((status, reason)) = st.checked.as_ref().and_then(|c| c.sheets.get(&key)) else {
+        return (crate::tl!("Checking...").to_string(), t.text_faint, String::new());
+    };
+    let changed = st.changes.contains_key(&key);
+    match status.as_str() {
+        "error" => (crate::tl!("Will fail").to_string(), t.warn, reason.clone()),
+        "default" => (crate::tl!("Uses default").to_string(), t.text_faint, reason.clone()),
+        _ if changed => (crate::tl!("Changed for this run").to_string(), t.text_dim, reason.clone()),
+        _ => (crate::tl!("Ready").to_string(), t.text_dim, reason.clone()),
+    }
 }
 
 fn paper_text(s: &Sheet) -> String {
@@ -624,10 +788,10 @@ fn inspector(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Act
     let _ = t;
 }
 
-fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &PublishState) {
+fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState) {
     let t = Tokens::get();
-    let found = st
-        .inspected
+    let inspected = st.inspected.clone();
+    let found = inspected
         .as_ref()
         .and_then(|(uid, name)| groups.iter().find(|g| g.uid == *uid).and_then(|g| g.sheets.iter().find(|s| s.name == *name).map(|s| (g, s))));
     let Some((g, s)) = found else {
@@ -641,9 +805,9 @@ fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &PublishState) {
     p.rect(rect, 4.0, t.canvas, Stroke::new(1.0, t.border), StrokeKind::Inside);
     let paper = if s.landscape || s.model { vec2(176.0, 124.0) } else { vec2(88.0, 124.0) };
     let sheet = Rect::from_center_size(rect.center(), paper);
-    p.rect_filled(sheet.translate(vec2(0.0, 2.0)), 1.0, Color32::from_black_alpha(90));
-    p.rect_filled(sheet, 1.0, Color32::from_rgb(0xe9, 0xec, 0xef));
-    let ink = Stroke::new(1.5, Color32::from_rgb(0x8d, 0x93, 0x9b));
+    p.rect_filled(sheet.translate(vec2(0.0, 2.0)), 1.0, t.chrome_dark);
+    p.rect_filled(sheet, 1.0, t.paper);
+    let ink = Stroke::new(1.5, t.canvas_ink.gamma_multiply(0.6));
     let frame = Rect::from_min_size(sheet.min + vec2(sheet.width() * 0.12, sheet.height() * 0.16), vec2(sheet.width() * 0.54, sheet.height() * 0.6));
     p.rect_stroke(frame, 0.0, ink, StrokeKind::Inside);
     if !s.model {
@@ -656,22 +820,55 @@ fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &PublishState) {
     p.text(rect.right_bottom() - vec2(8.0, 6.0), Align2::RIGHT_BOTTOM, crate::tl!("Preview"), crate::theme::small(), t.text_faint);
 
     section(ui, "Page setup");
-    ui.add_enabled_ui(false, |ui| {
-        egui::ComboBox::from_id_salt("cc_publish_setup").width(ui.available_width()).selected_text(crate::i18n::t(&s.setup)).show_ui(ui, |_| {});
-    })
-    .response
-    .on_disabled_hover_text(crate::tl!("Changing a sheet's page setup for one run is not available yet. Use Page Setup Manager..."));
+    let key = (g.uid, s.name.clone());
+    let mut change = st.changes.get(&key).cloned();
+    let saved = crate::tf!("As saved ({setup})", setup = crate::i18n::t(&s.setup));
+    let shown = change.as_ref().map_or_else(|| saved.clone(), |c| c.paper.clone());
+    egui::ComboBox::from_id_salt("cc_publish_setup")
+        .width(ui.available_width())
+        .selected_text(shown)
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(change.is_none(), &saved).clicked() {
+                change = None;
+            }
+            for paper in PAPERS {
+                let on = change.as_ref().is_some_and(|c| c.paper == *paper);
+                if ui.selectable_label(on, *paper).clicked() {
+                    let (landscape, fit) = change.as_ref().map_or((true, s.model || s.scale == "Fit"), |c| (c.landscape, c.fit));
+                    change = Some(SetupChange { paper: (*paper).to_string(), landscape, fit });
+                }
+            }
+        })
+        .response
+        .on_hover_text(crate::tl!("Change the paper for this run only. The drawing keeps its page setup."));
+    if let Some(c) = change.as_mut() {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut c.landscape, false, crate::tl!("Portrait"));
+            ui.radio_value(&mut c.landscape, true, crate::tl!("Landscape"));
+            ui.checkbox(&mut c.fit, crate::tl!("Fit to paper"));
+        });
+        ui.label(RichText::new(crate::tl!("For this run only. The drawing keeps its page setup.")).font(crate::theme::small()).color(t.text_faint));
+    }
+    match change {
+        Some(c) => st.changes.insert(key, c),
+        None => st.changes.remove(&key),
+    };
 
     section(ui, "Details");
     egui::Grid::new("cc_publish_details").num_columns(2).spacing([10.0, 5.0]).show(ui, |ui| {
         let kind = if s.model { crate::tl!("Model space") } else { crate::tl!("Layout") };
         let folder = if g.folder.is_empty() { crate::tl!("Not saved yet").to_string() } else { g.folder.clone() };
-        let paper = if s.model {
-            crate::tl!("Fit to paper").to_string()
-        } else {
-            format!("{}, {}", s.size, if s.landscape { crate::tl!("landscape") } else { crate::tl!("portrait") })
+        let change = st.changes.get(&(g.uid, s.name.clone()));
+        let paper = match change {
+            Some(c) => format!("{}, {}", c.paper, if c.landscape { crate::tl!("landscape") } else { crate::tl!("portrait") }),
+            None if s.model => crate::tl!("Fit to paper").to_string(),
+            None => format!("{}, {}", s.size, if s.landscape { crate::tl!("landscape") } else { crate::tl!("portrait") }),
         };
-        let setup = if s.default_setup { crate::tl!("Drawing default").to_string() } else { s.setup.clone() };
+        let setup = match st.changes.get(&(g.uid, s.name.clone())) {
+            Some(c) => crate::tf!("{paper}, for this run", paper = c.paper),
+            None if s.default_setup => crate::tl!("Drawing default").to_string(),
+            None => s.setup.clone(),
+        };
         let rows: [(&str, String); 7] = [
             ("Drawing", g.title.clone()),
             ("Folder", folder),
@@ -691,21 +888,39 @@ fn sheet_tab(ui: &mut Ui, groups: &[Group], st: &PublishState) {
 
 fn output_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Actions) {
     let t = Tokens::get();
-    let sheets = picked(groups, st);
-    let one_drawing = sheets.first().is_some_and(|(g0, _)| sheets.iter().all(|(g, _)| g.uid == g0.uid));
+    let n = picked(groups, st).len();
     section(ui, "Send to");
-    segmented(ui, "cc_publish_to", &["Page setup", "PDF", "SVG", "PNG"], 1, &[false, true, false, false]);
-    ui.label(RichText::new(crate::tl!("Vector PDF. Text stays selectable.")).font(crate::theme::small()).color(t.text_faint));
+    let selected = match st.to {
+        To::Pdf => 1,
+        To::Svg => 2,
+        To::Png => 3,
+    };
+    // Sending to the page setup's plotter isn't available yet; files are.
+    if let Some(i) = segmented(ui, "cc_publish_to", &["Page setup", "PDF", "SVG", "PNG"], selected, &[false, true, true, true]) {
+        st.to = match i {
+            2 => To::Svg,
+            3 => To::Png,
+            _ => To::Pdf,
+        };
+    }
+    let about = match st.to {
+        To::Pdf => crate::tl!("Vector PDF. Text stays selectable."),
+        To::Svg => crate::tl!("Vector SVG, one file per sheet."),
+        To::Png => crate::tl!("PNG image, one file per sheet."),
+    };
+    ui.label(RichText::new(about).font(crate::theme::small()).color(t.text_faint));
 
     ui.add_space(6.0);
     egui::Grid::new("cc_publish_pdf").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-        ui.label(RichText::new(crate::tl!("Quality")).color(t.text_dim));
-        ui.add_enabled_ui(false, |ui| {
-            egui::ComboBox::from_id_salt("cc_publish_quality").width(200.0).selected_text(crate::tl!("Standard — 600 dpi")).show_ui(ui, |_| {})
-        })
-        .response
-        .on_disabled_hover_text(crate::tl!("Not available yet"));
-        ui.end_row();
+        if st.to == To::Png {
+            ui.label(RichText::new(crate::tl!("Quality")).color(t.text_dim));
+            ui.add_enabled_ui(false, |ui| {
+                egui::ComboBox::from_id_salt("cc_publish_quality").width(200.0).selected_text(crate::tl!("Standard — 300 dpi")).show_ui(ui, |_| {})
+            })
+            .response
+            .on_disabled_hover_text(crate::tl!("Not available yet"));
+            ui.end_row();
+        }
         ui.label(RichText::new(crate::tl!("Overlaps")).color(t.text_dim));
         ui.add_enabled_ui(false, |ui| {
             egui::ComboBox::from_id_salt("cc_publish_overlap").width(200.0).selected_text(crate::tl!("Last drawn on top")).show_ui(ui, |_| {})
@@ -714,20 +929,20 @@ fn output_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Ac
         .on_disabled_hover_text(crate::tl!("Not available yet"));
         ui.end_row();
     });
-    let mut layers = !st.drop_layers;
-    if ui.checkbox(&mut layers, crate::tl!("Keep layers (viewers can switch them on and off)")).changed() {
-        st.drop_layers = !layers;
+    if st.to == To::Pdf {
+        let mut layers = !st.drop_layers;
+        if ui.checkbox(&mut layers, crate::tl!("Keep layers (viewers can switch them on and off)")).changed() {
+            st.drop_layers = !layers;
+        }
     }
 
     section(ui, "Files");
-    let combine_ok = one_drawing;
-    if let Some(i) =
-        segmented(ui, "cc_publish_files", &["One per sheet", "Combine into one"], usize::from(st.combine && combine_ok), &[true, combine_ok])
-    {
+    let pdf = st.to == To::Pdf;
+    if let Some(i) = segmented(ui, "cc_publish_files", &["One per sheet", "Combine into one"], usize::from(combining(st)), &[true, pdf]) {
         st.combine = i == 1;
     }
-    if !combine_ok && st.combine {
-        ui.label(RichText::new(crate::tl!("Combining works with sheets from one drawing.")).font(crate::theme::small()).color(t.text_faint));
+    if !pdf {
+        ui.label(RichText::new(crate::tl!("Only PDFs can be combined.")).font(crate::theme::small()).color(t.text_faint));
     }
 
     section(ui, "Save to");
@@ -747,18 +962,25 @@ fn output_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Ac
 
     section(ui, "Names");
     ui.checkbox(&mut st.ask_name, crate::tl!("Ask for a name when publishing"));
-    let files: Vec<String> = if st.combine && combine_ok {
-        sheets.first().map(|(g, _)| vec![crate::tf!("{name} ({n} pages)", name = format!("{}.pdf", g.stem), n = sheets.len())]).unwrap_or_default()
-    } else {
-        sheets.iter().map(|(g, s)| format!("{}-{}.pdf", g.stem, file_part(&s.name))).collect()
+    // The engine's names (from the last check), so the list shows exactly the files a run writes.
+    let files: Vec<String> = match &st.checked {
+        _ if n == 0 => Vec::new(),
+        Some(c) if combining(st) => {
+            let pages = n.saturating_sub(will_fail(groups, st));
+            c.files.iter().map(|f| crate::tf!("{name} ({n} pages)", name = f, n = pages)).collect()
+        }
+        Some(c) => c.files.clone(),
+        None => Vec::new(),
     };
     egui::Frame::NONE.fill(t.list_bg).stroke(Stroke::new(1.0, t.border)).corner_radius(4.0).inner_margin(egui::Margin::symmetric(8, 6)).show(
         ui,
         |ui| {
             ui.set_width(ui.available_width());
             egui::ScrollArea::vertical().id_salt("cc_publish_names").max_height(96.0).show(ui, |ui| {
-                if files.is_empty() {
+                if n == 0 {
                     ui.label(RichText::new(crate::tl!("Select at least one sheet.")).color(t.text_faint));
+                } else if files.is_empty() {
+                    ui.label(RichText::new(crate::tl!("Checking...")).color(t.text_faint));
                 }
                 for f in files {
                     ui.add(egui::Label::new(RichText::new(f).font(crate::theme::mono()).color(t.text_dim)).truncate());
@@ -770,28 +992,31 @@ fn output_tab(ui: &mut Ui, groups: &[Group], st: &mut PublishState, act: &mut Ac
 
 fn footer_row(ui: &mut Ui, groups: &[Group], st: &PublishState, act: &mut Actions) {
     let t = Tokens::get();
-    let sheets = picked(groups, st);
-    let n = sheets.len();
-    let one_drawing = sheets.first().is_some_and(|(g0, _)| sheets.iter().all(|(g, _)| g.uid == g0.uid));
-    let summary = if n == 0 {
+    let n = picked(groups, st).len();
+    let mut summary = if n == 0 {
         crate::tl!("Nothing selected").to_string()
-    } else if st.combine && one_drawing {
-        crate::tf!("1 PDF with {n} pages", n = n)
+    } else if combining(st) {
+        // Sheets that will fail aren't pages.
+        crate::tf!("1 PDF with {n} pages", n = n.saturating_sub(will_fail(groups, st)))
     } else {
         crate::i18n::count(n as u64, "{n} file", "{n} files")
     };
+    let failing = will_fail(groups, st);
     ui.horizontal(|ui| {
         if ui.button(" ? ").on_hover_text(crate::tl!("Help")).clicked() {
             act.help = true;
         }
-        ui.label(RichText::new(summary).color(t.text_dim));
+        if failing > 0 {
+            summary = format!("{summary} · {}", crate::tf!("{n} will fail", n = failing));
+        }
+        ui.label(RichText::new(summary).color(if failing > 0 { t.warn } else { t.text_dim }));
         if let Some(r) = &st.report {
             ui.add(egui::Label::new(RichText::new(r).font(crate::theme::small()).color(t.text_faint)).truncate());
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let label =
                 if n == 0 { crate::tl!("Publish").to_string() } else { crate::i18n::count(n as u64, "Publish {n} Sheet", "Publish {n} Sheets") };
-            let button = egui::Button::new(RichText::new(label).color(if n == 0 { t.text_faint } else { Color32::WHITE }).strong())
+            let button = egui::Button::new(RichText::new(label).color(if n == 0 { t.text_faint } else { t.paper }).strong())
                 .fill(if n == 0 { t.control } else { t.accent })
                 .min_size(vec2(120.0, 26.0));
             if ui.add_enabled(n > 0, button).clicked() {
@@ -807,12 +1032,6 @@ fn footer_row(ui: &mut Ui, groups: &[Group], st: &PublishState, act: &mut Action
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn names_match_the_engine() {
-        assert_eq!(file_part("A1 Plan"), "A1 Plan");
-        assert_eq!(file_part("PV/03:SLD"), "PV_03_SLD");
-    }
 
     #[test]
     fn ratios_read_like_drawing_scales() {

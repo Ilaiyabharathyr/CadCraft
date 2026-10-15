@@ -1,20 +1,52 @@
 //! Publish Sheets: PUBLISH typed or chosen from the menu opens the window; its list, tabs and
-//! summary follow the open drawings.
+//! summary follow the open drawings, the Status column and file names come from the engine's
+//! `publish {"action": "status"}`, and Publish is one `publish` call.
 
 use cadcraft_engine::Session;
+use cadcraft_engine::cmd::file::{IoHooks, set_io, set_plot_book};
 use cadcraft_ui_egui::{CadApp, Services};
 use egui::vec2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
-use serde_json::json;
+use egui_kittest::kittest::{By, NodeT, Queryable};
+use serde_json::{Value, json};
 
-fn harness(width: f32, height: f32, scale: f32) -> Harness<'static, CadApp> {
-    // One drawing (Session::default opens Drawing1) with something in model space, so it has
-    // three sheets: Model, Layout1 and Layout2.
-    let mut app = CadApp::new(Session::default(), Services::default());
+/// A plotter that writes what it was asked to plot.
+fn echo_plot(_: &cadcraft_doc::Drawing, space: &cadcraft_doc::Space, opts: &Value) -> Result<Vec<u8>, String> {
+    Ok(format!("%PDF-1.4 {space:?} {opts}").into_bytes())
+}
+
+fn echo_book(parts: &[(&cadcraft_doc::Drawing, cadcraft_doc::Space, Value)], _: &Value) -> Result<Vec<u8>, String> {
+    Ok(format!("%PDF-1.4 book {}", parts.len()).into_bytes())
+}
+
+fn temp(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("cadcraft-publish-dialog-{}-{name}", std::process::id()))
+}
+
+/// A drawing with something in model space and on both layouts, so its three sheets publish.
+fn app(save_to: Option<std::path::PathBuf>) -> CadApp {
+    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Err("no writer in this test".into()), plot: Some(echo_plot) });
+    set_plot_book(echo_book);
+    let services = Services {
+        pick_save: save_to.map(|dir| {
+            let pick: Box<dyn Fn(&str) -> Option<String>> = Box::new(move |name: &str| Some(dir.join(name).to_string_lossy().to_string()));
+            pick
+        }),
+        ..Services::default()
+    };
+    let mut app = CadApp::new(Session::default(), services);
+    for layout in ["Layout1", "Layout2"] {
+        app.run("layout.set", json!({ "name": layout })).unwrap();
+        app.run("line", json!({ "points": [[0, 0], [10, 10]] })).unwrap();
+    }
+    app.run("layout.set", json!({ "name": "Model" })).unwrap();
     app.run("line", json!({ "points": [[0, 0], [100, 0]] })).unwrap();
     app.ui.start_tab = false;
     app.ui.in_window_menu = false;
+    app
+}
+
+fn harness_for(mut app: CadApp, width: f32, height: f32, scale: f32) -> Harness<'static, CadApp> {
     app.cmdline("PUBLISH");
     assert_eq!(app.ui.dialog.as_deref(), Some("publish"));
     let mut h = Harness::builder().with_size(vec2(width, height)).with_pixels_per_point(scale).build_ui_state(
@@ -28,11 +60,24 @@ fn harness(width: f32, height: f32, scale: f32) -> Harness<'static, CadApp> {
     h
 }
 
+fn harness(width: f32, height: f32, scale: f32) -> Harness<'static, CadApp> {
+    harness_for(app(None), width, height, scale)
+}
+
 fn save(h: &mut Harness<'static, CadApp>, name: &str) {
     if let Ok(directory) = std::env::var("CRAFT_UI_VISUAL_DIR") {
         std::fs::create_dir_all(&directory).unwrap();
         h.render().unwrap().save(format!("{directory}/{name}.png")).unwrap();
     }
+}
+
+/// Let a change be checked (the Status column waits a moment after the last change).
+fn settle(h: &mut Harness<'static, CadApp>) {
+    h.run_steps(4);
+}
+
+fn window_width(h: &Harness<'static, CadApp>) -> f32 {
+    h.ctx.memory(|m| m.area_rect(egui::Id::new("cc_publish"))).map_or(0.0, |r| r.width())
 }
 
 #[test]
@@ -43,6 +88,8 @@ fn publish_lists_every_sheet_of_the_open_drawing() {
     for sheet in ["Model", "Layout1", "Layout2"] {
         assert!(h.get_all_by_label(sheet).count() >= 2, "{sheet} is listed");
     }
+    // The engine's status: model space has no page setup, the layouts use the default one.
+    assert_eq!(h.get_all(By::new().value("Uses default")).count(), 3);
     h.get_by_label("3 files");
     h.get_by_label("Publish 3 Sheets");
 }
@@ -60,14 +107,107 @@ fn none_clears_the_selection_and_disables_publish() {
 }
 
 #[test]
-fn output_tab_offers_combining_sheets_of_one_drawing() {
-    let mut h = harness(1280.0, 820.0, 1.0);
+fn an_empty_layout_will_fail_and_the_footer_says_so() {
+    let mut app = app(None);
+    // A new drawing's layouts have nothing on them.
+    app.run("new", json!({})).unwrap();
+    app.run("line", json!({ "points": [[0, 0], [5, 5]] })).unwrap();
+    let mut h = harness_for(app, 1280.0, 820.0, 1.0);
+    settle(&mut h);
+    save(&mut h, "publish-will-fail");
+    let failing: Vec<String> = h.get_all(By::new().value("Will fail")).map(|n| n.accesskit_node().label().unwrap_or_default()).collect();
+    assert_eq!(failing, ["Layout1", "Layout2"], "Drawing2's empty layouts");
+    let reason = h.get_all(By::new().value("Will fail")).next().and_then(|n| n.accesskit_node().description());
+    assert!(reason.is_some_and(|r| r.contains("is empty")), "the reason is the row's description");
+    h.get_by_label("6 files · 2 will fail");
+}
+
+#[test]
+fn combining_works_across_drawings_and_names_come_from_the_engine() {
+    let mut app = app(None);
+    app.run("new", json!({})).unwrap();
+    app.run("line", json!({ "points": [[0, 0], [5, 5]] })).unwrap();
+    let mut h = harness_for(app, 1280.0, 820.0, 1.0);
     h.get_by_label("Output").click();
     h.run_steps(3);
     h.get_by_label("Combine into one").click();
-    h.run_steps(3);
+    settle(&mut h);
     save(&mut h, "publish-output-tab");
-    h.get_by_label("1 PDF with 3 pages");
+    // Six sheets from two drawings; Drawing2's two layouts are empty, so the PDF has four pages.
+    h.get_by_label("1 PDF with 4 pages · 2 will fail");
+    h.get_by_label("Drawing1.pdf (4 pages)");
+}
+
+#[test]
+fn svg_and_png_are_files_per_sheet() {
+    let mut h = harness(1280.0, 820.0, 1.0);
+    h.get_by_label("Output").click();
+    h.run_steps(3);
+    h.get_by_label("SVG").click();
+    settle(&mut h);
+    h.get_by_label("Vector SVG, one file per sheet.");
+    h.get_by_label("Only PDFs can be combined.");
+    h.get_by_label("Drawing1-Model.svg");
+    h.get_by_label("PNG").click();
+    settle(&mut h);
+    h.get_by_label("Drawing1-Layout2.png");
+}
+
+#[test]
+fn publish_is_one_engine_call_and_writes_every_sheet() {
+    let dir = temp("run");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut h = harness_for(app(Some(dir.clone())), 1280.0, 820.0, 1.0);
+    let previous = h.state().session.active;
+    h.get_by_label("Publish 3 Sheets").click();
+    h.run_steps(3);
+    // The unsaved drawing has no folder: the save picker gave one, and the engine made it.
+    let mut files: Vec<String> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    files.sort();
+    assert_eq!(files, ["Drawing1-Layout1.pdf", "Drawing1-Layout2.pdf", "Drawing1-Model.pdf"]);
+    assert_eq!(h.state().session.active, previous, "the current drawing stays current");
+    let report = format!("Published 3 of 3 sheets to {}", dir.to_string_lossy());
+    let status = h.state().status.as_ref().map(|(s, _)| s.clone());
+    assert!(status.as_deref().is_some_and(|s| s.starts_with(&report)), "{status:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_page_setup_change_is_for_this_run_only() {
+    let dir = temp("change");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut h = harness_for(app(Some(dir.clone())), 1280.0, 820.0, 1.0);
+    let before = h.state().session.doc().unwrap().layout("Layout1").unwrap().page.clone();
+    // Inspect Layout1 and pick A3 for this run.
+    // The list's row, not the status bar's layout tab of the same name.
+    h.get(By::new().label("Layout1").predicate(|n| n.value().is_some())).click();
+    h.run_steps(3);
+    h.get(By::new().value("As saved (Default)")).click();
+    h.run_steps(3);
+    h.get_by_label("A3").click();
+    settle(&mut h);
+    save(&mut h, "publish-change-for-run");
+    h.get(By::new().value("Changed for this run"));
+    h.get_by_label("A3, landscape");
+    h.get_by_label("Publish 3 Sheets").click();
+    h.run_steps(3);
+    let plotted = std::fs::read_to_string(dir.join("Drawing1-Layout1.pdf")).unwrap();
+    assert!(plotted.contains(r#""paper":"A3""#), "the plotter got A3: {plotted}");
+    assert_eq!(h.state().session.doc().unwrap().layout("Layout1").unwrap().page, before, "the drawing keeps its page setup");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_window_keeps_its_width() {
+    let mut h = harness(1280.0, 820.0, 1.0);
+    let width = window_width(&h);
+    assert!(width > 0.0);
+    for tab in ["Output", "Sheet", "Output", "Sheet"] {
+        h.get_by_label(tab).click();
+        h.run_steps(3);
+        assert!((window_width(&h) - width).abs() < 1.0, "{tab}: {} then {width}", window_width(&h));
+    }
 }
 
 #[test]

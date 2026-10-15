@@ -47,7 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])
-            .params("{sheets?: [{drawing?: open drawing index | file path (default: the current drawing; files are read for this run only, never opened), layout: name | \"Model\", pageSetup?: {paper?, width?, height?, landscape?, fit?, scale?, margins?, plotStyleTable?, lineweights?, plotTransparency?} (this run only; the drawing doesn't change)}] (default: Model if it has objects, then every layout in tab order), to?: pdf|svg|png, folder? (else returns base64 `data` per sheet), name?: pattern with {drawing} {sheet} {n} (default \"{drawing}-{sheet}\", or \"{drawing}\" when combining), combine?: one PDF with a page per sheet, from any drawings, pdf?: {layers?, offLayers?, text?: text|geometry}, copies?: 1-100, stamp?: not available yet, action?: \"status\" (check the sheets and name the files; writes nothing → {sheets: [{drawing, layout, status: ready|default|error, reason?, file?, page?}], ready, default, errors, combined?: {file, pages}}); older form: path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf), layouts?: [name | \"Model\"]} → {sheets: [{drawing, layout, ok, file, bytes, path? | data} (combining: {drawing, layout, ok, page, file}) | {drawing, layout, ok: false, error}], combined?: {file, bytes, pages, path? | data}, published, failed, copies, message}: a sheet that fails is reported and the rest still publish; an error only when none did")
+            .params("{sheets?: [{drawing?: open drawing index | file path (default: the current drawing; files are read for this run only, never opened), layout: name | \"Model\", pageSetup?: {paper?, width?, height?, landscape?, fit?, scale?, margins?, plotStyleTable?, lineweights?, plotTransparency?} (this run only; the drawing doesn't change)}] (default: Model if it has objects, then every layout in tab order), to?: pdf|svg|png, folder? (made if missing; else returns base64 `data` per sheet), name?: pattern with {drawing} {sheet} {n} (default \"{drawing}-{sheet}\", or \"{drawing}\" when combining), combine?: one PDF with a page per sheet, from any drawings, pdf?: {layers?, offLayers?, text?: text|geometry}, copies?: 1-100, stamp?: not available yet, action?: \"status\" (check the sheets and name the files; writes nothing → {sheets: [{drawing, layout, status: ready|default|error, reason?, file?, page?}], ready, default, errors, combined?: {file, pages}}); older form: path?: \"NAME.pdf\" (writes NAME-<sheet>.pdf), layouts?: [name | \"Model\"]} → {sheets: [{drawing, layout, ok, file, bytes, path? | data} (combining: {drawing, layout, ok, page, file}) | {drawing, layout, ok: false, error}], combined?: {file, bytes, pages, path? | data}, published, failed, copies, message}: a sheet that fails is reported and the rest still publish; an error only when none did")
             .noundo(),
         CommandSpec::new("pdfbook", "Sheet Books to PDF...", run_pdfbook)
             .menu(&["File", "Sheet Books to PDF..."])
@@ -757,6 +757,9 @@ fn prepare<'a>(
         (Space::Model, "Model".to_string())
     } else {
         let l = d.layout(&sheet.layout).ok_or_else(|| bad(cmd, format!("no layout `{}`", sheet.layout)))?;
+        if l.entities.is_empty() {
+            return Err(bad(cmd, format!("layout `{}` is empty: there is nothing to plot", l.name)));
+        }
         (Space::Paper(l.name.clone()), l.name.clone())
     };
     let mut opts = sheet.setup.clone().unwrap_or_default();
@@ -904,6 +907,11 @@ fn run_publish(s: &mut Session, p: &Value) -> Result<Value> {
     let plot = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
     let book =
         if out.combine { Some(plot_book().ok_or_else(|| bad(cmd, "combining sheets into one PDF is not available in this build"))?) } else { None };
+    // The folder is made if it doesn't exist yet, as a save dialog's new folder would be.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(folder) = &out.folder {
+        std::fs::create_dir_all(folder).map_err(|e| bad(cmd, format!("{}: {e}", folder.display())))?;
+    }
     let files = read_sheet_files(&sheets);
     let label = |sheet: &SheetRequest| match &sheet.source {
         Source::Open(i) => s.docs.get(*i).map_or_else(|| format!("drawing {i}"), |d| d.title.clone()),
@@ -1304,6 +1312,12 @@ mod tests {
     fn publish_plots_every_sheet() {
         our_hooks();
         let mut s = session();
+        // Each layout has something on it (an empty layout has nothing to plot).
+        for layout in ["Layout1", "Layout2"] {
+            s.execute("layout.set", &json!({ "name": layout })).unwrap();
+            s.execute("line", &json!({ "points": [[0, 0], [10, 10]] })).unwrap();
+        }
+        s.execute("layout.set", &json!({ "name": "Model" })).unwrap();
         if io().and_then(|h| h.plot).is_none() {
             return;
         }

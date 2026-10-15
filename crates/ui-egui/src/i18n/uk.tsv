@@ -1352,13 +1352,26 @@
 	Remove from the list	Прибрати зі списку
 	Uses default	За замовчуванням
 	Ready	Готово
+	Checking...	Перевірка...
+	Will fail	Не вдасться
+	Changed for this run	Змінено для цього запуску
+	{n} will fail	не вдасться: {n}
+	As saved ({setup})	Як збережено ({setup})
+	Change the paper for this run only. The drawing keeps its page setup.	Змінити папір лише для цього запуску. Креслення зберігає свої параметри сторінки.
+	Portrait	Книжкова
+	Landscape	Альбомна
+	For this run only. The drawing keeps its page setup.	Лише для цього запуску. Креслення зберігає свої параметри сторінки.
+	{paper}, for this run	{paper}, для цього запуску
+	Vector SVG, one file per sheet.	Векторний SVG, один файл на аркуш.
+	PNG image, one file per sheet.	Зображення PNG, один файл на аркуш.
+	Standard — 300 dpi	Стандартна — 300 dpi
+	Only PDFs can be combined.	Об’єднувати можна лише PDF.
 	Fit to paper	Вписати в аркуш
 	Output	Вивід
 	Add a sheet stamp	Додати штамп аркуша
 	Run in the background	Виконувати у фоні
 	Open the result when done	Відкрити результат після завершення
 	Click a sheet to see it here.	Клацніть аркуш, щоб побачити його тут.
-	Changing a sheet's page setup for one run is not available yet. Use Page Setup Manager...	Зміна параметрів сторінки аркуша лише для одного запуску поки що недоступна. Скористайтеся Диспетчером параметрів сторінки...
 	Details	Подробиці
 	Model space	Простір моделі
 	Not saved yet	Ще не збережено
@@ -1375,14 +1388,12 @@
 	PNG	PNG
 	Vector PDF. Text stays selectable.	Векторний PDF. Текст можна виділяти.
 	Quality	Якість
-	Standard — 600 dpi	Стандартна — 600 dpi
 	Overlaps	Перекриття
 	Last drawn on top	Останнє намальоване зверху
 	Keep layers (viewers can switch them on and off)	Зберегти шари (їх можна вмикати й вимикати під час перегляду)
 	Files	Файли
 	One per sheet	По одному на аркуш
 	Combine into one	Об'єднати в один
-	Combining works with sheets from one drawing.	Об'єднання працює з аркушами одного креслення.
 	Save to	Зберегти в
 	Choose a folder	Виберіть папку
 	Choose...	Вибрати...

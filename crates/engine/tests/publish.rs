@@ -34,7 +34,7 @@ fn echo_book(parts: &[(&cadcraft_doc::Drawing, cadcraft_doc::Space, Value)], opt
 /// file Layout1's page setup names a plotter that isn't set up); anything else is unreadable.
 fn read(bytes: &[u8], name: &str) -> Result<cadcraft_doc::Drawing, String> {
     if name.ends_with(".gone.sheets") && bytes == b"sheets" {
-        let mut d = cadcraft_doc::Drawing::new_metric();
+        let mut d = sheets_drawing();
         if let Some(l) = d.layouts.iter_mut().find(|l| l.name == "Layout1") {
             l.page.device = "Gone Plotter".into();
         }
@@ -43,10 +43,20 @@ fn read(bytes: &[u8], name: &str) -> Result<cadcraft_doc::Drawing, String> {
         if let Ok(mut r) = READS.lock() {
             *r.entry(name.to_string()).or_default() += 1;
         }
-        Ok(cadcraft_doc::Drawing::new_metric())
+        Ok(sheets_drawing())
     } else {
         Err("not a drawing".into())
     }
+}
+
+/// A metric drawing with a line on each layout (an empty layout has nothing to plot).
+fn sheets_drawing() -> cadcraft_doc::Drawing {
+    let mut d = cadcraft_doc::Drawing::new_metric();
+    for layout in ["Layout1", "Layout2"] {
+        let line = cadcraft_doc::EntityKind::Line(cadcraft_doc::Line { a: cadcraft_geom::Vec3::ZERO, b: cadcraft_geom::Vec3::new(10.0, 10.0, 0.0) });
+        let _ = d.add(&cadcraft_doc::Space::Paper(layout.into()), cadcraft_doc::Common::default(), line);
+    }
+    d
 }
 
 fn session() -> Session {
@@ -54,6 +64,11 @@ fn session() -> Session {
     set_plot_book(echo_book);
     set_plotter_store(PlotterStore::memory());
     let mut s = Session::new();
+    for layout in ["Layout1", "Layout2"] {
+        s.execute("layout.set", &json!({"name": layout})).unwrap();
+        s.execute("line", &json!({"points": [[0, 0], [10, 10]]})).unwrap();
+    }
+    s.execute("layout.set", &json!({"name": "Model"})).unwrap();
     s.execute("line", &json!({"points": [[0, 0], [100, 0]]})).unwrap();
     s
 }
@@ -380,4 +395,23 @@ fn status_says_what_each_sheet_will_do_and_writes_nothing() {
     // A bad action is refused.
     assert!(s.execute("publish", &json!({"action": "check", "sheets": [{"layout": "Layout1"}]})).is_err());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_empty_layout_fails_and_a_missing_folder_is_made() {
+    let mut s = session();
+    s.execute("new", &json!({})).unwrap();
+    // The new drawing's layouts have nothing on them: status says so and publishing fails them.
+    let r = s.execute("publish", &json!({"action": "status", "sheets": [{"layout": "Layout1"}, {"drawing": 0, "layout": "Layout1"}]})).unwrap();
+    let status: Vec<&str> = r["sheets"].as_array().unwrap().iter().map(|x| x["status"].as_str().unwrap()).collect();
+    assert_eq!(status, ["error", "default"]);
+    assert!(r["sheets"][0]["reason"].as_str().unwrap().contains("layout `Layout1` is empty"));
+    let dir = temp("made").join("not").join("there yet");
+    let _ = std::fs::remove_dir_all(&dir);
+    let r = s
+        .execute("publish", &json!({"folder": dir.to_string_lossy(), "sheets": [{"layout": "Layout1"}, {"drawing": 0, "layout": "Layout1"}]}))
+        .unwrap();
+    assert_eq!((r["published"].as_u64(), r["failed"].as_u64()), (Some(1), Some(1)));
+    assert!(std::path::Path::new(r["sheets"][1]["path"].as_str().unwrap()).exists(), "the folder was made and the file written");
+    let _ = std::fs::remove_dir_all(temp("made"));
 }
