@@ -541,6 +541,10 @@ pub struct LastUsed {
     pub mleader: MLeaderOptions,
     /// MLEADER's block content name (Options > Content type > Block).
     pub mleader_block: String,
+    /// REPORT's report definition file.
+    pub report_file: String,
+    /// TABLETEMPLATE's table template file.
+    pub template_file: String,
 }
 
 impl Default for LastUsed {
@@ -553,6 +557,8 @@ impl Default for LastUsed {
             matchprop: cmd::MatchProps::default(),
             mleader: MLeaderOptions::default(),
             mleader_block: String::new(),
+            report_file: String::new(),
+            template_file: String::new(),
         }
     }
 }
@@ -651,6 +657,8 @@ pub struct Session {
     pub viewport_px: (f64, f64),
     pub clipboard: Vec<Entity>,
     pub clipboard_base: Vec2,
+    /// Table cells copied (`table.copycells`): the first cell's row and column, then the cells.
+    pub cell_clipboard: Option<(usize, usize, Vec<Vec<cadcraft_doc::TableCell>>)>,
     pub pending_window: Option<PendingWindow>,
     /// A selection mode typed at "Select objects" (W, C, F, WP, CP) collecting its points.
     pub select_mode: Option<select::SelectMode>,
@@ -708,6 +716,7 @@ impl Session {
             viewport_px: (1200.0, 800.0),
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
+            cell_clipboard: None,
             pending_window: None,
             select_mode: None,
             select_single: false,
