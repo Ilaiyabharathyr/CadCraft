@@ -27,6 +27,71 @@ mod web {
             std::cell::RefCell::new(Vec::new());
     }
 
+    thread_local! {
+        static MOBILE_LIVE_INPUT:
+            std::cell::RefCell<Option<String>> =
+            std::cell::RefCell::new(None);
+    }
+
+
+    thread_local! {
+        static MOBILE_CONTROL_KEYS:
+            std::cell::RefCell<Vec<(String, bool, bool, bool)>> =
+            std::cell::RefCell::new(Vec::new());
+    }
+
+    fn register_mobile_control_keys(ctx: &egui::Context) {
+        let Some(document) =
+            web_sys::window().and_then(|w| w.document())
+        else {
+            return;
+        };
+
+        let ctx = ctx.clone();
+        let callback =
+            wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>
+                ::wrap(Box::new(move |event: web_sys::Event| {
+                    let Some(event) =
+                        event.dyn_ref::<web_sys::CustomEvent>()
+                    else {
+                        return;
+                    };
+
+                    let detail = event.detail();
+
+                    let get = |name: &str| {
+                        js_sys::Reflect::get(
+                            &detail,
+                            &wasm_bindgen::JsValue::from_str(name)
+                        ).ok()
+                    };
+
+                    let Some(key) = get("key").and_then(|v| v.as_string())
+                    else {
+                        return;
+                    };
+
+                    let flag = |name: &str| {
+                        get(name).and_then(|v| v.as_bool()).unwrap_or(false)
+                    };
+
+                    MOBILE_CONTROL_KEYS.with(|queue| {
+                        queue.borrow_mut().push((
+                            key, flag("ctrl"), flag("alt"), flag("shift")
+                        ));
+                    });
+
+                    ctx.request_repaint();
+                }));
+
+        if document.add_event_listener_with_callback(
+            "cadcraft-mobile-control-key",
+            callback.as_ref().unchecked_ref(),
+        ).is_ok() {
+            callback.forget();
+        }
+    }
+
     /// Listen for commands submitted by the mobile HTML input.
     fn register_mobile_commands(ctx: &egui::Context) {
         let Some(document) =
@@ -72,6 +137,48 @@ mod web {
         }
     }
 
+    fn register_mobile_live_input(ctx: &egui::Context) {
+        let Some(document) =
+            web_sys::window().and_then(|w| w.document())
+        else {
+            return;
+        };
+
+        let ctx = ctx.clone();
+
+        let callback =
+            wasm_bindgen::closure::Closure::<
+                dyn FnMut(web_sys::Event)
+            >::wrap(Box::new(move |event: web_sys::Event| {
+                let Some(event) =
+                    event.dyn_ref::<web_sys::CustomEvent>()
+                else {
+                    return;
+                };
+
+                let Some(text) = event.detail().as_string()
+                else {
+                    return;
+                };
+
+                MOBILE_LIVE_INPUT.with(|pending| {
+                    *pending.borrow_mut() = Some(text);
+                });
+
+                ctx.request_repaint();
+            }));
+
+        if document
+            .add_event_listener_with_callback(
+                "cadcraft-mobile-live-input",
+                callback.as_ref().unchecked_ref(),
+            )
+            .is_ok()
+        {
+            callback.forget();
+        }
+    }
+
     const CANVAS_ID: &str = "cadcraft_canvas";
     const LOADING_ID: &str = "cadcraft_loading";
 
@@ -97,12 +204,60 @@ mod web {
                 log::info!("Mobile command submission completed");
             }
 
+            let live_text = MOBILE_LIVE_INPUT.with(|pending| {
+                pending.borrow_mut().take()
+            });
+
+            if let Some(text) = live_text {
+                if !self.0.session.prompting() {
+                    self.0.cmd.buffer = text;
+                    self.0.cmd.suggestion_index = 0;
+                }
+            }
+
             self.0.logic(ctx);
             if let Some((bridge, reported)) = &self.2 {
                 bridge.report_dirty(&self.0, reported);
             }
         }
         fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+
+            let control_keys = MOBILE_CONTROL_KEYS.with(|queue| {
+                std::mem::take(&mut *queue.borrow_mut())
+            });
+
+            for (name, ctrl, alt, shift) in control_keys {
+                let key = match name.as_str() {
+                    "Tab" => egui::Key::Tab,
+                    "Enter" => egui::Key::Enter,
+                    "ArrowUp" => egui::Key::ArrowUp,
+                    "ArrowDown" => egui::Key::ArrowDown,
+                    "ArrowLeft" => egui::Key::ArrowLeft,
+                    "ArrowRight" => egui::Key::ArrowRight,
+                    // CADCRAFT_STAGE_D2_SHORTCUTS
+                    _ => match egui::Key::from_name(&name) {
+                        Some(key) => key,
+                        None => continue,
+                    },
+                };
+
+                let modifiers = egui::Modifiers {
+                    ctrl,
+                    alt,
+                    shift,
+                    command: ctrl,
+                    mac_cmd: false,
+                };
+
+                raw.events.push(egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                });
+            }
+
             // Translate mobile Esc into a real egui key event.
             // Normal command submissions remain queued for logic().
             let mut escape_count = 0usize;
@@ -144,6 +299,32 @@ mod web {
         }
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
             self.0.ui(ui);
+
+            // CADCRAFT_STAGE_D1_NATIVE_SYNC
+            // Publish the command buffer after native keyboard handling.
+            if let Some(document) =
+                web_sys::window().and_then(|w| w.document())
+            {
+                let detail = js_sys::Object::new();
+
+                let _ = js_sys::Reflect::set(
+                    &detail,
+                    &wasm_bindgen::JsValue::from_str("buffer"),
+                    &wasm_bindgen::JsValue::from_str(
+                        &self.0.cmd.buffer
+                    ),
+                );
+
+                if let Ok(event) =
+                    web_sys::CustomEvent::new_with_event_init_dict(
+                        "cadcraft-mobile-native-state",
+                        web_sys::CustomEventInit::new().detail(&detail),
+                    )
+                {
+                    let _ = document.dispatch_event(&event);
+                }
+            }
+
             if let Some((bridge, reported)) = &self.2 {
                 bridge.report_dirty(&self.0, reported);
             }
@@ -218,6 +399,8 @@ mod web {
                         });
                         let mut app = CadApp::new(session, services());
                         register_mobile_commands(&cc.egui_ctx);
+                        register_mobile_live_input(&cc.egui_ctx);
+                        register_mobile_control_keys(&cc.egui_ctx);
                         app.system_languages =
                             web_sys::window().map(|w| w.navigator().languages().iter().filter_map(|v| v.as_string()).collect()).unwrap_or_default();
                         if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::options::PROFILE_KEY)) {
@@ -278,6 +461,7 @@ fn wants_cpu(query: &str) -> bool {
 
 #[cfg(target_arch = "wasm32")]
 mod upload;
+#[cfg(target_arch = "wasm32")]
 
 #[cfg(target_arch = "wasm32")]
 fn main() {

@@ -69,7 +69,7 @@ class MainActivity : Activity() {
             settings.domStorageEnabled = true
 
             settings.allowFileAccess = false
-            settings.allowContentAccess = true
+            settings.allowContentAccess = false
             settings.javaScriptCanOpenWindowsAutomatically = false
 
             webChromeClient = object : WebChromeClient() {
@@ -156,8 +156,14 @@ class MainActivity : Activity() {
 
         setContentView(webView)
 
+        // CADCRAFT_INITIAL_WEBVIEW_FOCUS
+        // Establish WebView focus without automatically showing the IME.
+        webView.isFocusable = true
+        webView.isFocusableInTouchMode = true
+        webView.requestFocus()
+
         webView.loadUrl(
-            "https://appassets.androidplatform.net/assets/web/index.html?mobile=1"
+            "https://appassets.androidplatform.net/assets/web/index.html?mobile=1&cpu"
         )
     }
 
