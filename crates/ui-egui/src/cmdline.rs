@@ -97,6 +97,63 @@ fn tab(app: &mut CadApp) {
     }
 }
 
+/// The most lines of prompt keywords the command bar draws above itself.
+pub const MAX_KEYWORD_LINES: usize = 6;
+
+/// How a prompt's keywords are laid out: the ones that fit after `open` on the bar's own line,
+/// and the rest, one line each, above it.
+pub struct KeywordLayout {
+    /// The keywords drawn after the prompt.
+    pub inline: usize,
+    /// The keywords drawn one per line above the bar (at most [`MAX_KEYWORD_LINES`] lines).
+    pub above: Vec<Vec<String>>,
+    /// Keywords that fit nowhere (drawn as "+N more" at the end of the last line).
+    pub hidden: usize,
+}
+
+/// Fit a prompt's keywords into `width` points after `open` points of prompt text: as many as
+/// fit on the bar's own line, then the rest, one line per `line_width`, above it, up to
+/// `MAX_KEYWORD_LINES` lines. `open` is the room left for the first keyword, so the caller keeps
+/// its own margins; `sep_width` is the width of the "/" between keywords and `bracket` the room
+/// the closing "]" needs. The first keyword is always inline (the bar clips it, as it did before
+/// this layout existed). Pure, so the layout is testable without a UI frame.
+pub fn keyword_layout(keywords: &[String], widths: &[f32], sep_width: f32, bracket: f32, open: f32, line_width: f32) -> KeywordLayout {
+    let wid = |i: usize| widths.get(i).copied().unwrap_or(0.0);
+    // The bar's own line: `open` counts the space the first keyword starts at, so a keyword only
+    // has to fit from the second one on.
+    let mut inline = 0;
+    let mut used = 0.0f32;
+    while inline < keywords.len() {
+        let need = if inline == 0 { wid(0) - sep_width } else { wid(inline) + sep_width };
+        if inline > 0 && used + need > open - bracket {
+            break;
+        }
+        used += need;
+        inline += 1;
+    }
+    // The lines above: filled left to right, one budget each.
+    let mut above: Vec<Vec<String>> = Vec::new();
+    let mut line: Vec<String> = Vec::new();
+    let mut room = line_width;
+    for (i, k) in keywords.iter().enumerate().skip(inline) {
+        let need = if line.is_empty() { wid(i) } else { wid(i) + sep_width };
+        if need > room && !line.is_empty() {
+            above.push(std::mem::take(&mut line));
+            room = line_width;
+            if above.len() == MAX_KEYWORD_LINES {
+                break;
+            }
+        }
+        room = if room > need { room - need } else { 0.0 };
+        line.push(k.clone());
+    }
+    if !line.is_empty() && above.len() < MAX_KEYWORD_LINES {
+        above.push(line);
+    }
+    let shown: usize = above.iter().map(Vec::len).sum();
+    KeywordLayout { inline, above, hidden: keywords.len() - inline - shown }
+}
+
 /// An AutoComplete suggestion for the command line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Suggestion {
@@ -402,15 +459,59 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     let bar = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.bottom() - h - 10.0), vec2(w, h));
     let p = ui.painter_at(canvas);
     history(app, ui, canvas, bar);
-    // History lines above the bar (the expanded window replaces them).
-    let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar) };
+    // A prompt with more keywords than fit on the bar (PURGE, for one) draws the rest one line
+    // each above it, like the history lines they sit over: no keyword runs off the bar, and the
+    // ones on those lines are the same set read left to right.
+    let font = crate::theme::body();
+    let kws: Vec<String> = app.session.current_prompt().filter(|pr| !pr.raw).map(|pr| pr.keywords.clone()).unwrap_or_default();
+    let sep = p.layout_no_wrap("/".into(), font.clone(), t.text).size().x;
+    let bracket = p.layout_no_wrap("]".into(), font.clone(), t.text).size().x;
+    let open = 30.0
+        + if app.session.running.as_ref().is_some_and(|r| r.id != "grip") { 40.0 } else { 0.0 }
+        + p.layout_no_wrap(
+            if app.session.current_prompt().is_some_and(|pr| pr.message.is_empty()) { " [".to_string() } else { crate::tl!(" or [").into() },
+            font.clone(),
+            t.text,
+        )
+        .size()
+        .x;
+    let (kw_inline, kw_lines): (Option<usize>, Vec<String>) = if kws.is_empty() {
+        (None, Vec::new())
+    } else {
+        let widths: Vec<f32> = kws.iter().map(|k| p.layout_no_wrap(k.clone(), font.clone(), t.cmd_keyword).size().x).collect();
+        let l = keyword_layout(&kws, &widths, sep, bracket, w - open, w - 56.0);
+        let mut rows: Vec<String> = Vec::with_capacity(l.above.len());
+        for (n, row) in l.above.iter().enumerate() {
+            // The marker goes on the last line that shows keywords, never in a row of its own:
+            // `above` never runs past MAX_KEYWORD_LINES.
+            if n + 1 == l.above.len() && l.hidden > 0 {
+                rows.push(format!("{}/+{} more", row.join("/"), l.hidden));
+            } else {
+                rows.push(row.join("/"));
+            }
+        }
+        (Some(l.inline), rows)
+    };
+    let lh = LINE_H;
+    let room = ((bar.top() - canvas.top() - 8.0).max(0.0) / lh) as usize;
+    let kw_shown = kw_lines.len().min(room);
+    let kw_start = bar.top() - lh * kw_shown as f32 - 2.0;
+    // History lines above the bar (the expanded window replaces them); the keyword lines sit
+    // directly on the bar and the history above them.
+    let n = if app.cmd.expanded { 0 } else { visible_lines(app, canvas, bar).saturating_sub(kw_shown) };
     let lines: Vec<String> = app.session.log.iter().rev().take(n).rev().cloned().collect();
     if !lines.is_empty() {
-        let lh = 16.0;
-        let hr = Rect::from_min_size(pos2(bar.left(), bar.top() - lh * lines.len() as f32 - 4.0), vec2(w, lh * lines.len() as f32 + 2.0));
+        let hr = Rect::from_min_size(pos2(bar.left(), kw_start - lh * lines.len() as f32 - 4.0), vec2(w, lh * lines.len() as f32 + 2.0));
         p.rect_filled(hr, 3.0, t.cmd_history);
         for (i, l) in lines.iter().enumerate() {
             p.text(pos2(hr.left() + 8.0, hr.top() + 1.0 + lh * i as f32), egui::Align2::LEFT_TOP, l, crate::theme::small(), t.text_dim);
+        }
+    }
+    if kw_shown > 0 {
+        let kr = Rect::from_min_size(pos2(bar.left(), kw_start), vec2(w, lh * kw_shown as f32 + 2.0));
+        p.rect_filled(kr, 3.0, t.cmd_history);
+        for (i, row) in kw_lines.iter().take(kw_shown).enumerate() {
+            p.text(pos2(kr.left() + 8.0, kr.top() + 1.0 + lh * i as f32), egui::Align2::LEFT_TOP, row, font.clone(), t.cmd_keyword);
         }
     }
     p.rect_filled(bar, 3.0, t.cmd_bg);
@@ -419,7 +520,6 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
     p.text(pos2(bar.left() + 8.0, bar.center().y), egui::Align2::LEFT_CENTER, ">_", crate::theme::mono(), t.text_dim);
     let mut x = bar.left() + 30.0;
     let prompt = app.session.current_prompt();
-    let font = crate::theme::body();
     match &prompt {
         Some(pr) => {
             // The grip modes name themselves ("** STRETCH **…").
@@ -439,7 +539,9 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
                 let gw = g.size().x;
                 p.galley(pos2(x, bar.center().y - g.size().y / 2.0), g, t.text);
                 x += gw;
-                let kws = pr.keywords.clone();
+                // Only the keywords that fit: the rest are on the lines above ([`kw_inline`]).
+                let upto = kw_inline.unwrap_or(0).min(pr.keywords.len());
+                let kws = pr.keywords[..upto].to_vec();
                 for (i, k) in kws.iter().enumerate() {
                     let g = p.layout_no_wrap(k.clone(), font.clone(), t.cmd_keyword);
                     let r = Rect::from_min_size(pos2(x, bar.top() + 3.0), vec2(g.size().x, h - 6.0));
@@ -821,5 +923,113 @@ mod autocomplete_tests {
         app.cmd.buffer = "rec".to_string();
         tab(&mut app);
         assert_eq!(app.cmd.buffer, "RECTANG");
+    }
+}
+
+#[cfg(test)]
+mod keyword_layout_tests {
+    use super::*;
+
+    /// PURGE's own list, as it reaches the bar.
+    fn purge() -> Vec<String> {
+        [
+            "Blocks",
+            "DEtailviewstyles",
+            "Dimstyles",
+            "Groups",
+            "LAyers",
+            "LTypes",
+            "MAterials",
+            "MUltileaderstyles",
+            "Plotstyles",
+            "SHapes",
+            "textSTyles",
+            "Mlinestyles",
+            "SEctionviewstyles",
+            "Tablestyles",
+            "Visualstyles",
+            "Regapps",
+            "Zero-length geometry",
+            "Empty text objects",
+            "Orphaned data",
+            "All",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+    }
+
+    /// Every keyword is 40 pt, the separator 8: 110 pt fits two per line.
+    fn widths(n: usize) -> Vec<f32> {
+        vec![40.0; n]
+    }
+
+    #[test]
+    fn a_short_prompt_stays_on_the_bar() {
+        let kws: Vec<String> = ["Close", "Undo"].iter().map(|s| (*s).to_string()).collect();
+        let l = keyword_layout(&kws, &widths(2), 8.0, 8.0, 400.0, 300.0);
+        assert_eq!(l.inline, 2);
+        assert!(l.above.is_empty());
+        assert_eq!(l.hidden, 0);
+    }
+
+    #[test]
+    fn purge_puts_the_rest_on_the_lines_above_and_hides_nothing() {
+        let kws = purge();
+        // The bar has 110 pt for keywords, so two 40 pt ones fit; 110 pt per line above fits
+        // two each.
+        let l = keyword_layout(&kws, &widths(kws.len()), 8.0, 8.0, 110.0, 110.0);
+        assert_eq!(l.inline, 2, "Blocks / DEtailviewstyles");
+        assert_eq!(l.above.len(), MAX_KEYWORD_LINES);
+        let shown: usize = l.above.iter().map(Vec::len).sum();
+        assert_eq!(shown, MAX_KEYWORD_LINES * 2, "two per line");
+        assert_eq!(l.hidden, kws.len() - l.inline - shown);
+        // The order is the prompt's own, left to right and top to bottom.
+        let flat: Vec<&String> = l.above.iter().flatten().collect();
+        assert_eq!(flat.first().map(|s| s.as_str()), Some("Dimstyles"));
+        assert_eq!(flat.last().map(|s| s.as_str()), Some("Tablestyles"));
+    }
+
+    #[test]
+    fn nothing_is_hidden_when_every_keyword_fits_above() {
+        let kws = purge();
+        // Roomy: the whole list fits on the bar and nothing needs the lines above.
+        let l = keyword_layout(&kws, &widths(kws.len()), 8.0, 8.0, 2000.0, 2000.0);
+        assert_eq!(l.inline, kws.len());
+        assert!(l.above.is_empty());
+        assert_eq!(l.hidden, 0);
+    }
+
+    #[test]
+    fn hidden_counts_what_no_line_can_hold() {
+        let kws = purge();
+        // Two per line and six lines at most: 2 inline + 12 above = 14 of 20.
+        let l = keyword_layout(&kws, &widths(kws.len()), 8.0, 8.0, 110.0, 110.0);
+        assert_eq!(l.inline + l.above.iter().map(Vec::len).sum::<usize>() + l.hidden, kws.len());
+        assert!(l.hidden > 0);
+        // A line too narrow for two keywords still takes one (it is clipped, as on the bar).
+        let l = keyword_layout(&kws, &widths(kws.len()), 8.0, 8.0, 110.0, 10.0);
+        assert_eq!(l.inline, 2);
+        assert_eq!(l.above.iter().map(Vec::len).sum::<usize>(), MAX_KEYWORD_LINES, "one per line");
+        assert_eq!(l.hidden, kws.len() - 2 - MAX_KEYWORD_LINES);
+    }
+
+    #[test]
+    fn an_empty_keyword_list_lays_out_nothing() {
+        let l = keyword_layout(&[], &[], 8.0, 8.0, 200.0, 110.0);
+        assert_eq!(l.inline, 0);
+        assert!(l.above.is_empty());
+        assert_eq!(l.hidden, 0);
+    }
+
+    #[test]
+    fn a_keyword_wider_than_the_bar_still_draws_inline() {
+        let kws: Vec<String> = ["VeryLongKeywordIndeed", "Short"].iter().map(|s| (*s).to_string()).collect();
+        let widths = vec![900.0, 40.0];
+        // No room at all: the first is drawn inline anyway (the bar clips it), the rest above.
+        let l = keyword_layout(&kws, &widths, 8.0, 8.0, 100.0, 500.0);
+        assert_eq!(l.inline, 1);
+        assert_eq!(l.above, vec![vec!["Short".to_string()]]);
+        assert_eq!(l.hidden, 0);
     }
 }
