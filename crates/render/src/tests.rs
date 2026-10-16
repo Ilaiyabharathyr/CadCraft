@@ -924,3 +924,47 @@ fn cancelled_build_stops_early() {
     assert!(!crate::hatch::pattern_lines_until(&drawing, &h, &loops, 0.0, None, None).is_empty());
     assert!(crate::hatch::pattern_lines_until(&drawing, &h, &loops, 0.0, None, set.as_deref()).is_empty());
 }
+
+fn handle_prims(l: &DisplayList, h: cadcraft_doc::Handle) -> Vec<Vec<Vec2>> {
+    l.prims.iter().filter(|p| p.handle == h).map(|p| l.verts[p.start as usize..(p.start + p.len) as usize].to_vec()).collect()
+}
+
+fn add_line(d: &mut Drawing, space: &Space, a: (f64, f64), b: (f64, f64)) -> cadcraft_doc::Handle {
+    d.add(space, Common::default(), EntityKind::Line(cadcraft_doc::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) })).unwrap()
+}
+
+#[test]
+fn window_plot_builds_only_what_reaches_the_window() {
+    let mut d = Drawing::new_imperial();
+    let m = Space::Model;
+    let inside = add_line(&mut d, &m, (1.0, 1.0), (9.0, 2.0));
+    let far = add_line(&mut d, &m, (1000.0, 1000.0), (1010.0, 1003.0));
+    let straddling = add_line(&mut d, &m, (5.0, 5.0), (50.0, 7.0));
+    let xline = d
+        .add(&m, Common::default(), EntityKind::XLine(cadcraft_doc::RayLine { base: Vec3::new(500.0, 500.0, 0.0), dir: Vec3::new(1.0, 0.0, 0.0) }))
+        .unwrap();
+    let window = Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0));
+    let all = build_plot(&d, &m, &Options::default());
+    let windowed = build_plot(&d, &m, &Options { view: Some(window), ..Default::default() });
+    assert!(!handle_prims(&all, far).is_empty());
+    assert!(handle_prims(&windowed, far).is_empty(), "far line left out");
+    assert_eq!(handle_prims(&windowed, inside), handle_prims(&all, inside));
+    assert_eq!(handle_prims(&windowed, straddling), handle_prims(&all, straddling));
+    assert!(!handle_prims(&windowed, straddling).is_empty());
+    assert_eq!(handle_prims(&windowed, xline).is_empty(), handle_prims(&all, xline).is_empty(), "unbounded object kept");
+}
+
+#[test]
+fn window_cull_is_only_for_model_space_plots() {
+    let mut d = sample();
+    let far = add_line(&mut d, &Space::Model, (1000.0, 1000.0), (1010.0, 1003.0));
+    let window = Bounds2::new(Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0));
+    // A screen build with a view still builds every object.
+    assert!(!handle_prims(&build(&d, &Space::Model, &Options { view: Some(window), ..Default::default() }), far).is_empty());
+    // A layout plot ignores the view for culling.
+    let paper = Space::Paper("Layout1".into());
+    d.add(&paper, Common::default(), EntityKind::Viewport(vp(Vec2::new(5.0, 4.0), 4.0, 4.0, Vec2::new(5.0, 5.0), 8.0, 2))).unwrap();
+    let paper_far = add_line(&mut d, &paper, (300.0, 300.0), (310.0, 300.0));
+    let l = build_plot(&d, &paper, &Options { view: Some(window), ..Default::default() });
+    assert!(!handle_prims(&l, paper_far).is_empty());
+}

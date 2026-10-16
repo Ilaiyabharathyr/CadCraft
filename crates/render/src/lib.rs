@@ -213,8 +213,10 @@ pub struct Options {
     /// Plot style table to draw with. When `None`, [`build`] of a layout whose page setup has
     /// "Display plot styles" on uses the layout's table; [`build_plot`] uses none.
     pub plot_style_table: Option<std::sync::Arc<cadcraft_doc::PlotStyleTable>>,
-    /// The area being looked at (world units of the space being built), for on-screen builds:
-    /// hatch patterns are only generated inside it. `None` = everywhere (plots, exports, picks).
+    /// The area being looked at (world units of the space being built): hatch patterns are only
+    /// generated inside it. A model-space [`build_plot`] also leaves out the top-level objects
+    /// whose bounds are wholly outside it (with a small margin for lineweights); objects without
+    /// measurable bounds are always built. `None` = everywhere.
     pub view: Option<Bounds2>,
     /// Draw objects with their transparency ([`DPrim::transparency`]). Off by default: the screen
     /// follows TRANSPARENCYDISPLAY, plots the page setup's "Plot transparency".
@@ -516,7 +518,15 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
             return b.list;
         }
         let mut viewports = 0usize;
+        // A model-space plot of a window builds only what reaches the window.
+        let window = opts.view.filter(|w| plotting && !paper && !w.is_empty()).map(|w| w.expand(PLOT_CULL_MARGIN * w.width().max(w.height())));
         for e in store.iter() {
+            if let Some(w) = &window {
+                let eb = cadcraft_doc::entity_bounds(d, e, 0);
+                if !eb.is_empty() && !eb.intersects(w) {
+                    continue;
+                }
+            }
             if paper && let EntityKind::Viewport(vp) = &e.kind {
                 if viewports < MAX_VIEWPORTS {
                     viewports += 1;
@@ -536,6 +546,10 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
     }
     b.list
 }
+
+/// Margin around a plot window, as a fraction of its larger side, within which objects are
+/// still built (lineweights and rounding reach a little past an object's bounds).
+const PLOT_CULL_MARGIN: f64 = 0.02;
 
 /// Top-level entities per task when a display list is built on all cores.
 #[cfg(not(target_arch = "wasm32"))]
