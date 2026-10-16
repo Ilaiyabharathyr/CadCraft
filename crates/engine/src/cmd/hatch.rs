@@ -26,6 +26,31 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("boundary", "Boundary...", run_boundary).menu(&["Draw", "Boundary..."]).alias(&["bo", "bpoly"]).params("{points: [[x,y]]}").interactive(|_| Ok(Box::new(BoundaryM { region: false }))),
         CommandSpec::new("region", "Region", run_region).menu(&["Draw", "Region"]).alias(&["reg"]).params("{handles?}"),
         CommandSpec::new("hatchedit", "Hatch Edit", edit::run_hatchedit).menu(&["Modify", "Object", "Hatch..."]).alias(&["he", "-hatchedit"]).params("{handles?, pattern?, scale?, angle?, gradient?: {name?, color1?, color2?, angle? (degrees), centered?} (makes or changes a gradient fill; `pattern` turns it back), associative?: bool (false unlinks; true links each loop to a closed object of the same shape, or to `boundary` objects), boundary?: [hex], addPoints?: [[x,y]], addBoundary?: [hex], removeLoops?: [zero-based index] (geometry edits require one hatch), style?, origin? | originMode?, separate?: true, recreate?: \"polyline\"|\"region\", associate?: bool (link to the recreated boundary)}").interactive(|s| Ok(Box::new(edit::HatchEditM::new(s)))),
+        // The Hatch Editor tab's buttons (contextual tab of a selected hatch).
+        CommandSpec::new("hatchedit.points", "Pick Points", edit::run_hatchedit)
+            .params("{handles, addPoints: [[x,y]]}: interactively, pick internal points until Enter; each adds the boundary around it")
+            .interactive(|s| Ok(Box::new(edit::editor_button(s, "hatchedit.points")))),
+        CommandSpec::new("hatchedit.select", "Select Boundary Objects", edit::run_hatchedit)
+            .params("{handles, addBoundary: [hex]}: interactively, select closed objects to add as boundaries")
+            .interactive(|s| Ok(Box::new(edit::editor_button(s, "hatchedit.select")))),
+        CommandSpec::new("hatchedit.remove", "Remove Boundaries", edit::run_hatchedit)
+            .params("{handles, removeAt: [[x,y]] | removeLoops: [index]}: interactively, click the boundaries to remove")
+            .interactive(|s| Ok(Box::new(edit::editor_button(s, "hatchedit.remove")))),
+        CommandSpec::new("hatchedit.recreate", "Recreate Boundary", edit::run_hatchedit)
+            .params("{handles, recreate: \"polyline\"|\"region\", associate?}")
+            .interactive(|s| Ok(Box::new(edit::editor_button(s, "hatchedit.recreate")))),
+        CommandSpec::new("hatchedit.origin", "Set Origin", edit::run_hatchedit)
+            .params("{handles, origin: [x,y] | originMode, storeOrigin?: bool (HPORIGIN)}: interactively, pick the new origin")
+            .interactive(|s| Ok(Box::new(edit::editor_button(s, "hatchedit.origin")))),
+        CommandSpec::new("hatchedit.match", "Match Properties", edit::run_hatchedit)
+            .params("{handles, inherit: hex (source hatch), inheritOrigin?: bool (HPINHERIT)}: interactively, select the source hatch")
+            .interactive(|s| Ok(Box::new(edit::editor_button(s, "hatchedit.match")))),
+        CommandSpec::new("hatchedit.showboundary", "Display Boundary Objects", edit::run_show_boundary)
+            .params("{handles?}: selects the hatches' boundary objects too, so their grips show"),
+        CommandSpec::new("hatchboundaryset", "Boundary Set", run_boundary_set)
+            .params("{handles?: [hex] (the new boundary set), clear?: true (use the current viewport)}")
+            .noundo()
+            .interactive(|_| Ok(Box::new(BoundarySetM))),
         CommandSpec::new("hatchpick", "Hatch Pick", pick::run_hatchpick)
             .params("{points?: [[x,y]] (internal points), handles?: [hex] (closed objects)} (typed: Points, Objects, oRigin or Hatch, then the picks): the Hatch and Gradient dialog's picks, kept in the session; changes nothing")
             .enabled(has_doc)
@@ -192,7 +217,8 @@ pub(crate) fn island_style(t: &str) -> Option<u8> {
     match t.trim().to_ascii_lowercase().as_str() {
         "normal" | "n" | "0" => Some(0),
         "outer" | "o" | "1" => Some(1),
-        "ignore" | "i" | "2" => Some(2),
+        // No Island Detection (the hatch fills its outer boundary as Ignore does).
+        "ignore" | "i" | "2" | "none" => Some(2),
         _ => None,
     }
 }
@@ -203,7 +229,14 @@ pub(crate) fn loops_at(s: &Session, p: Vec2) -> Result<Vec<HatchLoop>> {
     let space = s.space();
     let ext = d.extents(&space);
     let tol = ((ext.width() + ext.height()) * 1e-9).max(1e-9);
-    let (polys, owners) = outlines(d, &space, None);
+    let (mut polys, mut owners) = outlines(d, &space, None);
+    // The Hatch Editor's boundary set: only its objects bound the hatch.
+    if let Some(set) = &s.hatch_boundary_set {
+        let keep: Vec<bool> = owners.iter().map(|h| set.contains(h)).collect();
+        let mut k = keep.iter();
+        polys.retain(|_| k.next().copied().unwrap_or(false));
+        owners.retain(|h| set.contains(h));
+    }
     let found = cadcraft_geom::region::boundary_at_gap(&polys, p, tol, gap_tolerance(d))
         .ok_or_else(|| EngineError::Other("Valid hatch boundary not found.".into()))?;
     let outer = found.outer;
@@ -519,6 +552,43 @@ fn run_region(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     Ok(json!({ "message": format!("{n} Region(s) created.") }))
+}
+
+/// HATCHBOUNDARYSET: the objects pick points look at (Hatch Editor > Boundaries > Select New
+/// Boundary Set), or everything again with `clear`.
+fn run_boundary_set(s: &mut Session, p: &Value) -> Result<Value> {
+    if bool_or(p, "clear", false) {
+        s.hatch_boundary_set = None;
+        return Ok(json!({ "objects": Value::Null, "message": "Pick points use the current viewport." }));
+    }
+    let hs = targets(s, p)?;
+    let n = hs.len();
+    s.hatch_boundary_set = Some(hs);
+    Ok(json!({ "objects": n, "message": format!("Boundary set: {n} object(s).") }))
+}
+
+/// HATCHBOUNDARYSET typed: select the objects of the new boundary set.
+struct BoundarySetM;
+
+impl Interactive for BoundarySetM {
+    fn name(&self) -> &'static str {
+        "HATCHBOUNDARYSET"
+    }
+    fn prompt(&self, _: &Session) -> Prompt {
+        Prompt::new("Select objects for the new boundary set", Accept::SELECT)
+    }
+    fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
+        match i {
+            Input::Pick(hs) if !hs.is_empty() => {
+                let n = hs.len();
+                s.hatch_boundary_set = Some(hs);
+                s.echo(format!("Boundary set: {n} object(s)."));
+                Ok(Step::Done)
+            }
+            Input::Enter | Input::Cancel => Ok(Step::Done),
+            _ => Ok(Step::Continue),
+        }
+    }
 }
 
 /// The origin sub-prompt's keywords (a point sets a new origin).

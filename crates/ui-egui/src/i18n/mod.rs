@@ -243,6 +243,11 @@ pub fn tr<'a>(language: &str, source: &'a str) -> &'a str {
     catalog(language).and_then(|c| c.get(&("", source))).copied().unwrap_or(source)
 }
 
+/// A label's row in a context of its own (`hatchribbon`…), if the catalog has one.
+pub fn in_context(context: &str, source: &str) -> Option<&'static str> {
+    CURRENT.with(|l| catalog(l.get()).and_then(|c| c.get(&(context, source))).copied())
+}
+
 /// A Ribbon label: the catalog's `ribbon` row (the wording AutoCAD for Windows uses on its
 /// Ribbon in that language), else the ordinary translation.
 pub fn ribbon(source: &str) -> &str {

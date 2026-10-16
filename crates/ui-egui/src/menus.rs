@@ -37,6 +37,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.toggle.ribbon", "Ribbon", &["Window", "Ribbon"], None),
     ("ui.layout.pc", "AutoCAD for Windows Layout", &["Window", "AutoCAD for Windows Layout"], None),
     ("ui.layout.mac", "AutoCAD for Mac Layout", &["Window", "AutoCAD for Mac Layout"], None),
+    ("ui.hatcheditor.close", "Close Hatch Editor", &[], None),
     ("ui.toggle.filetabs", "File Tab", &["Window", "File Tab"], None),
     ("ui.toggle.statusbar", "Status Bar", &["Window", "Status Bar"], None),
     ("ui.toggle.cmdline", "Command Line", &["Window", "Command Line"], Some("Cmd+9")),
@@ -227,6 +228,11 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
         }
         "ui.layout.mac" => {
             crate::ribbon::apply_mac_layout(app);
+            Ok(Value::Null)
+        }
+        // Hatch Editor > Close: the hatches are deselected and the contextual tab goes away.
+        "ui.hatcheditor.close" => {
+            app.session.set_selection(Vec::new());
             Ok(Value::Null)
         }
         "ui.toggle.filetabs" => {
