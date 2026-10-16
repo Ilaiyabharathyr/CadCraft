@@ -16,6 +16,7 @@
 
 mod control_server;
 mod desktop_theme;
+mod extensions;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
@@ -26,7 +27,7 @@ mod system_animations;
 mod workspace;
 
 use cadcraft_engine::Session;
-use cadcraft_ui_egui::{CadApp, Services, i18n};
+use cadcraft_ui_egui::{CadApp, LoadedTextTable, Services, i18n};
 
 struct App {
     cad: CadApp,
@@ -127,7 +128,7 @@ pub fn install_io() {
 }
 
 fn services() -> Services {
-    Services {
+    let mut services = Services {
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter(i18n::t("Drawings (DWG, DXF)"), &["dwg", "dxf", "dwt"])
@@ -143,7 +144,37 @@ fn services() -> Services {
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        pick_extension_table: Some(Box::new(|| {
+            const MAX_TABLE_BYTES: u64 = 8 * 1024 * 1024;
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Point tables (CSV, COO, TXT, XYZ)", &["csv", "coo", "txt", "xyz"])
+                .add_filter("All files", &["*"])
+                .pick_file()
+            else {
+                return Ok(None);
+            };
+            let size = std::fs::metadata(&path).map_err(|error| format!("Cannot inspect {}: {error}", path.display()))?.len();
+            if size > MAX_TABLE_BYTES {
+                return Err(format!("{} is larger than the 8 MB table limit", path.display()));
+            }
+            let text = std::fs::read_to_string(&path).map_err(|error| format!("Cannot read {} as UTF-8 text: {error}", path.display()))?;
+            let name = path.file_name().map_or_else(|| path.to_string_lossy().to_string(), |name| name.to_string_lossy().to_string());
+            Ok(Some(LoadedTextTable { name, text }))
+        })),
+        save_extension_text: Some(Box::new(|name: &str, text: &str| {
+            let Some(path) = rfd::FileDialog::new().set_file_name(name).add_filter("CSV text", &["csv"]).add_filter("Text", &["txt"]).save_file()
+            else {
+                return Ok(None);
+            };
+            std::fs::write(&path, text.as_bytes()).map_err(|error| format!("Cannot write {}: {error}", path.display()))?;
+            Ok(Some(path.to_string_lossy().to_string()))
+        })),
+        ..Default::default()
+    };
+    if let Some(dir) = config_dir() {
+        extensions::install_services(&mut services, dir.join("extensions"));
     }
+    services
 }
 
 /// File types for the Save dialog, the suggested name's type first: Windows adds the first
@@ -309,6 +340,12 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut app = CadApp::new(Session::empty(), services());
+            if let Err(error) = app.reload_extensions()
+                && app.services.extension_snapshot.is_some()
+            {
+                log::warn!("extensions: {error}");
+                app.set_status(format!("Extensions: {error}"));
+            }
             let (workspace, restored, workspace_error) = workspace::Workspace::load();
             if let Some(ui) = restored {
                 app.ui = ui;

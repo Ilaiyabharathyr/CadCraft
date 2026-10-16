@@ -48,6 +48,8 @@ pub mod viewcube;
 pub mod vpscale;
 
 pub mod exchange;
+pub mod extension_manager;
+pub mod extension_table;
 
 use std::sync::mpsc::Receiver;
 
@@ -56,6 +58,36 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub use control::{ControlRequest, ControlResponse, PendingReply};
+
+/// User-visible metadata for one installed extension. The desktop host owns its files; the
+/// portable UI only displays and changes this state through [`Services`].
+#[derive(Clone, Debug)]
+pub struct InstalledExtension {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub license: String,
+    pub permissions: Vec<String>,
+    pub commands: usize,
+    pub enabled: bool,
+    pub compatible: bool,
+}
+
+/// A host snapshot contains display metadata and the validated sources the engine may execute.
+#[derive(Clone, Debug, Default)]
+pub struct ExtensionSnapshot {
+    pub installed: Vec<InstalledExtension>,
+    pub runtime: Vec<cadcraft_engine::Extension>,
+}
+
+/// User-selected UTF-8 table contents. The native shell owns file access; the extension receives
+/// only validated cell values after the user submits the dialog.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedTextTable {
+    pub name: String,
+    pub text: String,
+}
 
 /// The host storage key for [`CadApp::prefs_json`].
 pub const PREFS_KEY: &str = "cadcraft.prefs";
@@ -188,6 +220,15 @@ impl Default for UiState {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    pub pick_extension: Option<Box<dyn Fn() -> Option<String>>>,
+    pub pick_extension_table: Option<Box<dyn Fn() -> Result<Option<LoadedTextTable>, String>>>,
+    /// Save bounded UTF-8 text produced explicitly by an extension command. The shell owns the
+    /// picker and filesystem; cancellation returns `Ok(None)`.
+    pub save_extension_text: Option<Box<dyn Fn(&str, &str) -> Result<Option<String>, String>>>,
+    pub extension_snapshot: Option<Box<dyn Fn() -> Result<ExtensionSnapshot, String>>>,
+    pub install_extension: Option<Box<dyn Fn(&str) -> Result<ExtensionSnapshot, String>>>,
+    pub enable_extension: Option<Box<dyn Fn(&str, bool) -> Result<ExtensionSnapshot, String>>>,
+    pub uninstall_extension: Option<Box<dyn Fn(&str) -> Result<ExtensionSnapshot, String>>>,
 }
 
 pub struct CadApp {
@@ -243,6 +284,9 @@ pub struct CadApp {
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
     /// The Edit Block Definition dialog ([`bedit`]).
     pub bedit: bedit::State,
+    /// Host-rendered declarative table supplied by an extension manifest.
+    pub extension_table: extension_table::State,
+    pub extension_manager: extension_manager::State,
 }
 
 impl CadApp {
@@ -281,7 +325,17 @@ impl CadApp {
             gpu_notice: None,
             hatch_dlg: None,
             bedit: bedit::State::default(),
+            extension_table: extension_table::State::default(),
+            extension_manager: extension_manager::State::default(),
         }
+    }
+
+    /// Reload the host's installed extensions into the engine. A broken store never crashes the
+    /// app or discards the currently working catalog.
+    pub fn reload_extensions(&mut self) -> Result<Vec<InstalledExtension>, String> {
+        let snapshot = self.services.extension_snapshot.as_ref().ok_or("extension management is unavailable on this platform")?()?;
+        self.session.set_extensions(snapshot.runtime).map_err(|error| error.to_string())?;
+        Ok(snapshot.installed)
     }
 
     /// The interface language shown: the chosen one, or English when this computer has no font
@@ -329,6 +383,12 @@ impl CadApp {
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
             return;
         }
+        if extension_table::open(self, name) {
+            return;
+        }
+        if extension_manager::open(self, name) {
+            return;
+        }
         if let Err(e) = self.session.start(name) {
             self.session.echo(e.to_string());
         }
@@ -342,6 +402,12 @@ impl CadApp {
             // `cmd {json}` is a programmatic call: the engine runs it with those parameters.
             let json_form = text.trim_start().get(first.len()..).is_some_and(|rest| rest.trim_start().starts_with('{'));
             if !first.is_empty() && !json_form && menus::run_ui_command(self, &first.to_ascii_lowercase(), &Value::Null).is_some() {
+                return None;
+            }
+            if !first.is_empty() && !json_form && extension_table::open(self, &first.to_ascii_lowercase()) {
+                return None;
+            }
+            if !first.is_empty() && !json_form && extension_manager::open(self, &first.to_ascii_lowercase()) {
                 return None;
             }
         }

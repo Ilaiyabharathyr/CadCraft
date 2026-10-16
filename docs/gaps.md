@@ -130,7 +130,7 @@ Detail: [localization-parity.md](localization-parity.md).
 |---|---|---|
 | E1 | AutoLISP beyond the core (#758 landed the language, `command`, entity lists, selection sets, `get…` input, APPLOAD, `(load)`, `c:` commands and `acad.lsp`/`acaddoc.lsp` at startup): Visual LISP ActiveX (`vlax-`, `vla-`), DCL dialogs, reactors, an APPLOAD dialog with a Startup Suite, UCS-aware `trans` | 30–50 |
 | E3 | Express Tools equivalents (TXT2MTXT, BREAKLINE, BURST, NCOPY exists, SUPERHATCH, Move/Copy/Rotate) | 30–50 |
-| E4 | Plug-in API (owner decision: Rust/WASM plug-ins rather than ObjectARX/.NET) | 30–50 |
+| E4 | Schema 1/2 extension system landed: validated packages, management UI/CLI, AutoLISP, native capability-based WASM components with bounded transactional line/arc/circle/point/text/solid-fill writes and entity color/lineweight appearance, host-rendered declarative data-entry tables, virtualized add/preview/edit record managers with host-owned selection/export and native Tool Sets command groups. Left: browser WASM host/store, event/reactor hooks, arbitrary docked extension panels and signing/trust metadata | 8–14 |
 | E5 | CUI customisation and alias (`.pgp`) editor | 15–25 |
 
 ## AI features
@@ -145,6 +145,13 @@ Detail: [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | E4 narrowed: schema 2 adds bounded entity appearance and native polygonal solid-fill operations |
+| 2026-10-16 | minor | E4 narrowed: extensions can declare bounded native record managers with filtering, validation, drawing selection/location and host-owned text export |
+| 2026-10-16 | minor | E4 narrowed: schema 2 adds native arc/circle creation and reusable manager add/preview modes for editable extension rule sets |
+| 2026-10-16 | minor | E4 narrowed: extensions can contribute bounded native command groups to the Drafting or Modeling Tool Sets tab |
+| 2026-10-16 | minor | E4 narrowed: schema 2 commands can declare bounded host-rendered CSV/manual-entry tables, and transactions can create native points and text |
+| 2026-10-16 | minor | E4 narrowed: native schema 2 WASM components now run with explicit permissions and atomic undoable drawing transactions |
+| 2026-10-16 | minor | E4 narrowed: the schema-1 portable extension package, runtime, desktop manager and CLI landed; WASM modules, richer hooks/UI and trust distribution remain |
 | 2026-10-12 | minor | Object transparency (entity, ByLayer, ByBlock) is drawn: on screen (TRANSPARENCYDISPLAY, on by default), in PNG/SVG exports, and in plots when the page setup's "Plot transparency" is on (PDF alpha, PNG blending, SVG opacity; PLOTTRANSPARENCYOVERRIDE): F14 narrowed |
 | 2026-10-12 | minor | Hatch and Gradient dialog (HATCH, GRADIENT; HPDLGMODE) and Hatch Edit dialog (HATCHEDIT, right-click, double-click a hatch): F13 narrowed to Preview, Inherit Properties and boundary add/remove in edit mode |
 | 2026-10-12 | minor | A bare system variable name typed at the command line (ORTHOMODE, GRIDMODE…) runs SETVAR on that variable, as in AutoCAD; U10 narrowed |

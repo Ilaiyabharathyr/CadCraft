@@ -1,0 +1,110 @@
+package cadcraft:extension@0.1.0;
+
+interface geometry {
+  record point3 {
+    x: f64,
+    y: f64,
+    z: f64,
+  }
+
+  record line-request {
+    start: point3,
+    end: point3,
+    layer: string,
+  }
+
+  record arc-request {
+    center: point3,
+    radius: f64,
+    start-degrees: f64,
+    end-degrees: f64,
+    layer: string,
+  }
+
+  record circle-request {
+    center: point3,
+    radius: f64,
+    layer: string,
+  }
+
+  record entity-appearance {
+    color: option<string>,
+    lineweight-mm: option<f64>,
+  }
+
+  record solid-fill-request {
+    boundary: list<point3>,
+    layer: string,
+    color: option<string>,
+  }
+
+  record point-request {
+    position: point3,
+    layer: string,
+  }
+
+  record text-request {
+    position: point3,
+    value: string,
+    height: f64,
+    rotation-degrees: f64,
+    layer: string,
+  }
+
+  enum entity-kind {
+    line,
+    arc,
+    circle,
+    point,
+    text,
+    other,
+  }
+
+  record entity-view {
+    id: u64,
+    kind: entity-kind,
+    layer: string,
+    position: option<point3>,
+    value: option<string>,
+  }
+}
+
+interface drawing {
+  use geometry.{arc-request, circle-request, entity-appearance, entity-view, line-request, point-request, solid-fill-request, text-request};
+
+  type transaction-id = u64;
+  type entity-id = u64;
+
+  variant host-error {
+    invalid-input(string),
+    permission-denied(string),
+    drawing-failure(string),
+  }
+
+  begin-transaction: func(label: string) -> result<transaction-id, host-error>;
+  create-line: func(transaction: transaction-id, request: line-request) -> result<entity-id, host-error>;
+  create-arc: func(transaction: transaction-id, request: arc-request) -> result<entity-id, host-error>;
+  create-circle: func(transaction: transaction-id, request: circle-request) -> result<entity-id, host-error>;
+  create-solid-fill: func(transaction: transaction-id, request: solid-fill-request) -> result<entity-id, host-error>;
+  set-entity-appearance: func(transaction: transaction-id, entity: entity-id, appearance: entity-appearance) -> result<_, host-error>;
+  create-point: func(transaction: transaction-id, request: point-request) -> result<entity-id, host-error>;
+  create-text: func(transaction: transaction-id, request: text-request) -> result<entity-id, host-error>;
+  get-drawing-metadata: func(key: string) -> result<option<string>, host-error>;
+  set-drawing-metadata: func(transaction: transaction-id, key: string, value: string) -> result<_, host-error>;
+  remove-drawing-metadata: func(transaction: transaction-id, key: string) -> result<_, host-error>;
+  get-entity: func(entity: entity-id) -> result<option<entity-view>, host-error>;
+  get-entity-metadata: func(entity: entity-id, key: string) -> result<option<string>, host-error>;
+  find-entities-by-metadata: func(key: string, value: string) -> result<list<entity-view>, host-error>;
+  set-entity-metadata: func(transaction: transaction-id, entity: entity-id, key: string, value: string) -> result<_, host-error>;
+  remove-entity-metadata: func(transaction: transaction-id, entity: entity-id, key: string) -> result<_, host-error>;
+  update-point: func(transaction: transaction-id, entity: entity-id, request: point-request) -> result<_, host-error>;
+  update-text: func(transaction: transaction-id, entity: entity-id, request: text-request) -> result<_, host-error>;
+  delete-entity: func(transaction: transaction-id, entity: entity-id) -> result<_, host-error>;
+  commit-transaction: func(transaction: transaction-id) -> result<_, host-error>;
+  rollback-transaction: func(transaction: transaction-id) -> result<_, host-error>;
+}
+
+world cadcraft-extension {
+  import drawing;
+  export run-command: func(command: string, parameters-json: string) -> result<string, string>;
+}
