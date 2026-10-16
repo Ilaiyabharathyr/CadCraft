@@ -63,6 +63,55 @@ pub struct DataLink {
     pub start_row: usize,
 }
 
+/// Longest report definition a table keeps (bytes).
+pub const MAX_REPORT_BYTES: usize = 64 << 10;
+/// Most objects a table's report names.
+pub const MAX_REPORT_HANDLES: usize = 100_000;
+
+/// The report a table's data rows come from (REPORT): what it reads and how, so that
+/// REPORTUPDATE can make the rows again from the drawing as it is now.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TableReport {
+    /// The report file it was made from, read again on update; empty: none.
+    pub file: String,
+    /// The report definition (JSON), used when there is no file or it can't be read.
+    pub definition: String,
+    /// The first data row: the rows above it (title, header) stay as they are on update.
+    pub start_row: usize,
+    /// The objects it reads; empty: every object of the drawing.
+    pub handles: Vec<crate::Handle>,
+}
+
+/// The table template a table was laid out by (TABLETEMPLATE): its file and a copy of it, so
+/// that it can be laid out again and a report keeps its look.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TableTemplateLink {
+    /// The template file; empty: none.
+    pub file: String,
+    /// The template (JSON).
+    pub definition: String,
+}
+
+impl TableTemplateLink {
+    /// Within the limits a hostile file could break: none when it is larger.
+    pub fn sanitized(self) -> Option<TableTemplateLink> {
+        (self.file.len() <= 4096 && self.definition.len() <= MAX_REPORT_BYTES)
+            .then_some(self)
+            .filter(|r| !r.file.trim().is_empty() || !r.definition.trim().is_empty())
+    }
+}
+
+impl TableReport {
+    /// Within the limits a hostile file could break: no report when it is larger.
+    pub fn sanitized(self) -> Option<TableReport> {
+        (self.file.len() <= 4096 && self.definition.len() <= MAX_REPORT_BYTES && self.handles.len() <= MAX_REPORT_HANDLES)
+            .then_some(self)
+            .filter(|r| !r.file.trim().is_empty() || !r.definition.trim().is_empty())
+    }
+}
+
 /// One part of a (broken) table: the rows it shows, top to bottom, and its insertion point.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TablePart {
@@ -188,6 +237,28 @@ impl Table {
             }
         }
         None
+    }
+
+    /// Where cell (`row`, `col`) is drawn: one rectangle per part showing its row (a repeated
+    /// label row is in several parts). Empty for a cell outside the table.
+    pub fn cell_rects(&self, row: usize, col: usize) -> Vec<Bounds2> {
+        if col >= self.col_widths.len() {
+            return Vec::new();
+        }
+        let x0: f64 = self.col_widths.iter().take(col).map(|w| size(*w)).sum();
+        let x1 = x0 + size(self.col_widths.get(col).copied().unwrap_or(0.0));
+        let mut out = Vec::new();
+        for part in self.parts() {
+            let mut y = 0.0;
+            for r in &part.rows {
+                let h = size(self.row_heights.get(*r).copied().unwrap_or(0.0));
+                if *r == row {
+                    out.push(Bounds2::from_points([part.origin + Vec2::new(x0, -y), part.origin + Vec2::new(x1, -y - h)]));
+                }
+                y += h;
+            }
+        }
+        out
     }
 
     /// Grip points: the insertion point, then the origin of every further part.

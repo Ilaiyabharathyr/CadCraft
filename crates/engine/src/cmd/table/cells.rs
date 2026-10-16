@@ -48,7 +48,7 @@ fn color_value(v: &Value) -> Option<Color> {
 }
 
 /// An alignment parameter: `TL` … `BR`, `MiddleLeft`, or the MTEXT attachment 1..9.
-fn align_value(v: &Value) -> Option<u8> {
+pub(super) fn align_value(v: &Value) -> Option<u8> {
     if let Some(n) = v.as_u64() {
         return u8::try_from(n).ok().filter(|n| (1..=9).contains(n));
     }
@@ -86,7 +86,7 @@ fn lineweight_value(v: &Value) -> Option<Lineweight> {
     }
 }
 
-fn apply_border(b: &mut CellBorder, v: &Value) -> std::result::Result<(), String> {
+pub(super) fn apply_border(b: &mut CellBorder, v: &Value) -> std::result::Result<(), String> {
     if let Some(on) = v.as_bool() {
         b.visible = on;
         return Ok(());
@@ -195,11 +195,11 @@ fn recalc_tables_of(d: &mut Drawing, style: &str) {
         .collect();
     let st = d.table_styles.iter().find(|s| s.name.eq_ignore_ascii_case(style)).cloned().unwrap_or_default();
     for h in hs {
-        let _ = d.modify_entity(h, |e| {
-            if let EntityKind::Table(t) = &mut e.kind {
-                formula::recalc(t, &st);
-            }
-        });
+        let Some(EntityKind::Table(mut t)) = d.entity(h).map(|e| e.kind.clone()) else { continue };
+        formula::recalc(&mut t, &st);
+        // The style's text heights and margins changed: so do the heights the rows need.
+        super::fit_rows(d, &mut t);
+        let _ = d.modify_entity(h, |e| e.kind = EntityKind::Table(t));
     }
 }
 
@@ -398,7 +398,7 @@ fn run_recalc(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------------------------------------------------------------- TABLEDIT
 
 /// The table and cell (row, col) under `p` in the current space.
-fn cell_under(s: &Session, p: Vec2) -> Option<(Handle, usize, usize)> {
+pub(super) fn cell_under(s: &Session, p: Vec2) -> Option<(Handle, usize, usize)> {
     let d = s.doc().ok()?;
     let space = d.space(&s.space())?;
     for e in space.iter() {
@@ -426,15 +426,84 @@ fn run_tabledit(s: &mut Session, p: &Value) -> Result<Value> {
     super::run_set(s, &q)
 }
 
-/// TABLEDIT at the command line: pick a cell, type its text (or `=formula`).
+/// TABLEDIT at the command line: pick a cell (or double-click it), type its text (or
+/// `=formula`); each entry moves on to the next cell, left to right then down, as Tab does in
+/// AutoCAD's table editor. An empty entry leaves the cell as it is and moves on; Esc (or the end
+/// of the table) finishes, keeping what was typed.
 #[derive(Default)]
 struct TableEditM {
     cell: Option<(Handle, usize, usize)>,
+    /// The cell as multiline text for the in-place editor: its place, width, text height and
+    /// style, and its contents (a formula as typed).
+    text: Option<cadcraft_doc::MText>,
+}
+
+impl TableEditM {
+    /// Edit cell `cell` next (`None`: pick one).
+    fn go(&mut self, s: &Session, cell: Option<(Handle, usize, usize)>) {
+        self.cell = cell;
+        self.text = cell.and_then(|(h, r, c)| cell_mtext(s, h, r, c));
+    }
+}
+
+/// Cell (`r`, `c`) of table `h` as multiline text: at its top left corner, inside its margins,
+/// with its text height and style and its contents.
+fn cell_mtext(s: &Session, h: Handle, r: usize, c: usize) -> Option<cadcraft_doc::MText> {
+    let d = s.doc().ok()?;
+    let EntityKind::Table(t) = &d.entity(h)?.kind else { return None };
+    let cell = t.cells.get(r)?.get(c)?;
+    let b = *t.cell_rects(r, c).first()?;
+    let st = cadcraft_render::table_style_of(d, t);
+    let name = t
+        .row_styles
+        .get(r)
+        .filter(|n| !n.is_empty())
+        .cloned()
+        .unwrap_or_else(|| cadcraft_doc::positional_cell_style(r, t.title, t.header).to_string());
+    let cs = st.cell_style(if cell.style.is_empty() { &name } else { &cell.style });
+    let k = if st.text_height > 0.0 { t.text_height / st.text_height } else { 1.0 };
+    let height = cell.text_height.unwrap_or(cs.text_height) * k;
+    let m = cs.margin_h * k;
+    Some(cadcraft_doc::MText {
+        insert: cadcraft_geom::Vec3::new(b.min.x + m, b.max.y - cs.margin_v * k, 0.0),
+        height: if height.is_finite() && height > 0.0 { height } else { 0.2 },
+        width: (b.width() - 2.0 * m).max(0.0),
+        attach: 1,
+        rotation: 0.0,
+        style: cs.text_style.clone(),
+        contents: cell.formula.clone().unwrap_or_else(|| cell.text.clone()),
+        line_spacing: 1.0,
+        line_spacing_exact: false,
+        columns: None,
+    })
+}
+
+/// The cell after (`r`, `c`) of table `h`, left to right then down, skipping cells a merge
+/// covers; `None` after the last one.
+fn next_cell(s: &Session, h: Handle, r: usize, c: usize) -> Option<(usize, usize)> {
+    let d = s.doc().ok()?;
+    let EntityKind::Table(t) = &d.entity(h)?.kind else { return None };
+    let (rows, cols) = (t.row_heights.len(), t.col_widths.len());
+    let covered = cadcraft_render::table_covered(t);
+    let mut i = r.checked_mul(cols)?.checked_add(c)?;
+    loop {
+        i += 1;
+        let (nr, nc) = (i / cols.max(1), i % cols.max(1));
+        if nr >= rows || cols == 0 {
+            return None;
+        }
+        if !covered.get(nr).and_then(|row| row.get(nc)).copied().unwrap_or(false) {
+            return Some((nr, nc));
+        }
+    }
 }
 
 impl Interactive for TableEditM {
     fn name(&self) -> &'static str {
         "TABLEDIT"
+    }
+    fn editing_mtext(&self) -> Option<cadcraft_doc::MText> {
+        self.text.clone()
     }
     fn prompt(&self, s: &Session) -> Prompt {
         match self.cell {
@@ -447,32 +516,51 @@ impl Interactive for TableEditM {
                     .and_then(|e| if let EntityKind::Table(t) = &e.kind { t.cells.get(r).and_then(|row| row.get(c)).cloned() } else { None })
                     .map(|c| c.formula.unwrap_or(c.text))
                     .unwrap_or_default();
-                let p = Prompt::new(format!("Enter text for cell {} (=formula)", cell_name(r, c)), Accept::TEXT);
+                let p = Prompt::new(format!("Enter text for cell {} (=formula; Enter: next cell, Esc: done)", cell_name(r, c)), Accept::TEXT);
                 if cur.is_empty() { p } else { p.default(cur) }
             }
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
-        match (&self.cell, i) {
-            (_, Input::Cancel) => Ok(Step::Cancel),
+        match (self.cell, i) {
+            // Esc ends the editing; what was typed stays (one undo step).
+            (Some(_), Input::Cancel) => Ok(Step::Done),
+            (None, Input::Cancel) | (None, Input::Enter) => Ok(Step::Cancel),
             (None, Input::Point(p)) => {
                 match cell_under(s, p) {
-                    Some(c) => self.cell = Some(c),
+                    Some(c) => self.go(s, Some(c)),
                     None => s.echo("No table cell there."),
                 }
                 Ok(Step::Continue)
             }
-            (None, Input::Enter) => Ok(Step::Cancel),
-            (Some(_), Input::Enter) => Ok(Step::Done),
+            (Some((h, r, c)), Input::Enter) => Ok(match next_cell(s, h, r, c) {
+                Some((nr, nc)) => {
+                    self.go(s, Some((h, nr, nc)));
+                    Step::Continue
+                }
+                None => Step::Done,
+            }),
             (Some((h, r, c)), Input::Text(t) | Input::Keyword(t)) => {
                 let q = json!({ "handle": h.hex(), "row": r, "col": c, "text": t });
-                match super::run_set(s, &q) {
-                    Ok(_) => Ok(Step::Done),
-                    Err(e) => {
-                        s.echo(e.to_string());
-                        Ok(Step::Continue)
-                    }
+                if let Err(e) = super::run_set(s, &q) {
+                    s.echo(e.to_string());
+                    return Ok(Step::Continue);
                 }
+                Ok(match next_cell(s, h, r, c) {
+                    Some((nr, nc)) => {
+                        self.go(s, Some((h, nr, nc)));
+                        Step::Continue
+                    }
+                    None => Step::Done,
+                })
+            }
+            // A point while typing picks another cell.
+            (Some(_), Input::Point(p)) => {
+                match cell_under(s, p) {
+                    Some(c) => self.go(s, Some(c)),
+                    None => s.echo("No table cell there."),
+                }
+                Ok(Step::Continue)
             }
             _ => Ok(Step::Continue),
         }

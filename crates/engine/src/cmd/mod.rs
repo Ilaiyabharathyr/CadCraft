@@ -7,6 +7,7 @@ mod array;
 mod audit;
 pub(crate) mod blocks;
 pub mod clipboard;
+mod connector;
 pub mod constraints;
 mod draw;
 mod draw2;
@@ -37,10 +38,12 @@ mod selecttools;
 mod settings;
 mod spline_opts;
 mod table;
+pub use table::table_file_kind;
 mod tolerance;
 mod trimextend;
 mod utility;
 mod view;
+pub mod wire;
 
 pub mod curves;
 pub mod helpers;
@@ -202,6 +205,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(tolerance::specs());
         v.extend(constraints::specs());
         v.extend(lisp::specs());
+        v.extend(wire::specs());
+        v.extend(connector::specs());
         v
     })
 }

@@ -719,6 +719,10 @@
 	Set Layer Properties	Задать свойства слоя
 	Set Properties	Задать свойства
 	Set Table Cell	Задать ячейку таблицы
+	Insert Block in Table Cell	Вставить блок в ячейку таблицы
+	Format Table Cells	Форматировать ячейки таблицы
+	Table Column Width and Row Height	Ширина столбца и высота строки таблицы
+	Set Table Cell Borders	Задать границы ячеек таблицы
 	Set Variable	Задать переменную
 	Set View	Задать вид
 	Share	Поделиться
@@ -990,6 +994,46 @@
 	−Bin	−двоич.
 	−LOC	−строк
 	⌘↩ to finish	⌘↩ для завершения
+# Table cells picked with the mouse: the right-click menu.
+	Alignment	Выравнивание
+	Top Left	Сверху слева
+	Top Center	Сверху по центру
+	Top Right	Сверху справа
+	Middle Left	Посередине слева
+	Middle Center	Посередине по центру
+	Middle Right	Посередине справа
+	Bottom Left	Снизу слева
+	Bottom Center	Снизу по центру
+	Bottom Right	Снизу справа
+	Borders	Границы
+	Text Rotation	Поворот текста
+	Vertical, Upwards	Вертикально, снизу вверх
+	Vertical, Downwards	Вертикально, сверху вниз
+	Remove Formatting	Сбросить форматирование
+	Edit Text	Редактировать текст
+	Insert Block...	Вставить блок...
+	Delete Content	Удалить содержимое
+	Insert Above	Вставить выше
+	Insert Below	Вставить ниже
+	Delete Rows	Удалить строки
+	Insert Left	Вставить слева
+	Insert Right	Вставить справа
+	Delete Columns	Удалить столбцы
+	Rows	Строки
+	Columns	Столбцы
+	All Borders	Все границы
+	Outside Borders	Внешние границы
+	Inside Borders	Внутренние границы
+	Inside Horizontal	Внутренние горизонтальные
+	Inside Vertical	Внутренние вертикальные
+	Top Border	Верхняя граница
+	Bottom Border	Нижняя граница
+	Left Border	Левая граница
+	Right Border	Правая граница
+	Hidden	Скрыть
+	As the Cell Style	Как в стиле ячейки
+	Column Width and Row Height...	Ширина столбцов и высота строк...
+	Other...	Другая...
 @plural	{n} commit	{n} коммит|{n} коммита|{n} коммитов
 @plural	{n} contributor	{n} участник|{n} участника|{n} участников
 	Drawing as bytes	Чертеж как байты
@@ -1008,3 +1052,71 @@
 	Sheet Books to PDF...	Книги листов в PDF...
 	Not a number or distance: {text}	Не число и не расстояние: {text}
 	Query Texts	Запрос текстов
+	Freely	Свободно
+	In Steps of 8	Кратно 8
+	In Steps of...	Кратно шагу...
+	Fixed Height	Фиксированная высота
+	Rows Grow for Text	Рост строк под текст
+	Copy Table Cells	Копировать ячейки таблицы
+	Paste Table Cells	Вставить ячейки таблицы
+	Clear Table Cells	Очистить ячейки таблицы
+# Report tables (REPORT, REPORTUPDATE).
+	Report Table...	Таблица-отчёт...
+	Update Report Tables	Обновить таблицы-отчёты
+	Update Report	Обновить отчёт
+	Enter report file name	Введите имя файла отчёта
+	Select objects to report on <All>	Выберите объекты для отчёта <Все>
+	Select report tables to update <All>	Выберите таблицы-отчёты для обновления <Все>
+	Report definition	Описание отчёта
+	Browse...	Обзор...
+# Table templates (TABLETEMPLATE).
+	Table from Template...	Таблица по шаблону...
+	Apply Table Template...	Применить шаблон таблицы...
+	Enter table template file	Введите имя файла шаблона таблицы
+	Table template	Шаблон таблицы
+	No files in the usual folders: browse for one.	В обычных папках файлов нет: выберите через «Обзор...».
+	Select objects to report on	Выберите объекты для отчёта
+# The in-place text editor on a table cell.
+	Stack	Стопка (дробь)
+	Enter or Tab: next cell, Alt+Enter: new line, Esc: done	Enter или Tab — следующая ячейка, Alt+Enter — новая строка, Esc — готово
+	Fraction:	Дробь:
+	Upper text	Верхний текст
+	Lower text	Нижний текст
+	Horizontal bar	Горизонтальная черта
+	Diagonal bar	Косая черта
+	No bar (tolerance)	Без черты (допуск)
+# TABLEBREAK.
+	Table Breaks...	Разбиение таблицы...
+	Enter maximum part height or	Введите наибольшую высоту части или
+	Enter height of the first part	Введите высоту первой части
+# Wires (WIRE, WIRENUM, the Properties palette's Wire section).
+	Wires	Провода
+	Wire Data...	Данные провода...
+	Set Wire Data	Задать данные провода
+	Wire Data	Данные провода
+	Wire Data Choices	Списки данных провода
+	Number Wires	Нумерация проводов
+	Wire	Провод
+	Terminal 1	Наконечник 1
+	Terminal 2	Наконечник 2
+	Number	Номер
+	Select wires	Выберите провода
+	Enter wire length or	Введите длину провода или
+	Enter terminal at the start	Введите наконечник в начале
+	Enter terminal at the end	Введите наконечник в конце
+	Enter wire number	Введите номер провода
+	Enter wire type	Введите тип провода
+	Enter wire color	Введите цвет провода
+	Enter first wire number	Введите первый номер провода
+	Select wire	Выберите провод
+	Sections	Участки
+	+ Section	+ участок
+	− Section	− участок
+	More than two terminals: a chain of sections	Больше двух наконечников: цепочка участков
+# Connectors (CONNECTOR, the wire ends attached to them).
+	Connector	Соединитель
+	Set Connector	Задать соединитель
+	List Connectors	Список соединителей
+	Specify connector point	Укажите точку соединителя
+	Enter connector name	Введите имя соединителя
+	End	Конец

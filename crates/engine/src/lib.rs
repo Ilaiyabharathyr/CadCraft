@@ -13,6 +13,7 @@ pub mod audit;
 pub mod autosave;
 pub mod blockedit;
 pub mod cmd;
+pub mod connect;
 mod finite;
 pub mod grip_dims;
 pub mod grips;
@@ -541,6 +542,10 @@ pub struct LastUsed {
     pub mleader: MLeaderOptions,
     /// MLEADER's block content name (Options > Content type > Block).
     pub mleader_block: String,
+    /// REPORT's report definition file.
+    pub report_file: String,
+    /// TABLETEMPLATE's table template file.
+    pub template_file: String,
 }
 
 impl Default for LastUsed {
@@ -553,6 +558,8 @@ impl Default for LastUsed {
             matchprop: cmd::MatchProps::default(),
             mleader: MLeaderOptions::default(),
             mleader_block: String::new(),
+            report_file: String::new(),
+            template_file: String::new(),
         }
     }
 }
@@ -651,6 +658,8 @@ pub struct Session {
     pub viewport_px: (f64, f64),
     pub clipboard: Vec<Entity>,
     pub clipboard_base: Vec2,
+    /// Table cells copied (`table.copycells`): the first cell's row and column, then the cells.
+    pub cell_clipboard: Option<(usize, usize, Vec<Vec<cadcraft_doc::TableCell>>)>,
     pub pending_window: Option<PendingWindow>,
     /// A selection mode typed at "Select objects" (W, C, F, WP, CP) collecting its points.
     pub select_mode: Option<select::SelectMode>,
@@ -708,6 +717,7 @@ impl Session {
             viewport_px: (1200.0, 800.0),
             clipboard: Vec::new(),
             clipboard_base: Vec2::ZERO,
+            cell_clipboard: None,
             pending_window: None,
             select_mode: None,
             select_single: false,
@@ -1295,7 +1305,8 @@ impl Session {
     /// The post-command passes, in order, run after every command — by [`Session::execute`] and
     /// when an interactive command finishes — so their edits land in the command's own undo step:
     /// group membership is pruned, constraints are inferred, purged and re-solved, and
-    /// associative dimensions and hatches follow their sources. A new pass is added here, once.
+    /// associative dimensions and hatches follow their sources, and wires their connectors. A new
+    /// pass is added here, once.
     ///
     /// `before` is the drawing the command started from; `uid` (when known) is the document it
     /// started in, so associativity is not applied across a document switch; `ok` is false for a
@@ -1304,6 +1315,7 @@ impl Session {
         cmd::groups::after_command(self, before);
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);
+        connect::after_command(self, before, uid);
     }
 
     fn resume_suspended(&mut self) {

@@ -8,7 +8,10 @@
 //! row and cell styles and the formulas go into CADCraft xdata (`TABLEX`, JSON).
 
 use cadcraft_color::Color;
-use cadcraft_doc::{CellBorder, CellStyle, DataLink, Lineweight, MAX_CELL_STYLES, MAX_TABLE_PARTS, Table, TableBreak, TableStyle};
+use cadcraft_doc::{
+    CellBlock, CellBorder, CellEdges, CellLook, CellStyle, DataLink, Lineweight, MAX_CELL_STYLES, MAX_TABLE_PARTS, RowGrow, Table, TableBreak,
+    TableReport, TableStyle, TableTemplateLink,
+};
 use cadcraft_dxf::Tag;
 use serde::{Deserialize, Serialize};
 
@@ -184,19 +187,95 @@ struct TableExtra {
     /// The data link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     link: Option<DataLink>,
+    /// (row, col, block) of the cells showing a block.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    blocks: Vec<(usize, usize, CellBlock)>,
+    /// (row, col, borders) of the cells with borders of their own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    edges: Vec<(usize, usize, CellEdges)>,
+    /// (row, col, look) of the cells with their own alignment, margins or text rotation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    looks: Vec<(usize, usize, CellLook)>,
+    /// How the rows grow for their text.
+    #[serde(default, skip_serializing_if = "RowGrow::is_free")]
+    grow: RowGrow,
+    /// The heights the rows were given, when some grew.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    mins: Vec<f64>,
+    /// The report the data rows come from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    report: Option<TableReport>,
+    /// The template it was laid out by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    template: Option<TableTemplateLink>,
+}
+
+/// Largest report definition written next to a report file: AutoCAD keeps at most 16 KB of
+/// xdata on an object, and with a file the definition can be read from there.
+const MAX_REPORT_COPY: usize = 8 << 10;
+
+/// A table's report as written: without its copy of a large definition when it names a file.
+fn report_xdata(r: &TableReport) -> TableReport {
+    let mut r = r.clone();
+    if !r.file.trim().is_empty() && r.definition.len() > MAX_REPORT_COPY {
+        r.definition.clear();
+    }
+    r
+}
+
+/// A table's template as written: without its copy of a large template when it names a file.
+fn template_xdata(r: &TableTemplateLink) -> TableTemplateLink {
+    let mut r = r.clone();
+    if !r.file.trim().is_empty() && r.definition.len() > MAX_REPORT_COPY {
+        r.definition.clear();
+    }
+    r
 }
 
 /// The xdata strings of a table's extra data (marker first), or nothing for a plain table.
 pub(crate) fn table_xdata(t: &Table) -> Vec<String> {
-    let mut x = TableExtra { v: 1, rows: t.row_styles.clone(), cells: Vec::new(), breaks: t.breaks.clone(), link: t.data_link.clone() };
+    let mut x = TableExtra {
+        v: 1,
+        rows: t.row_styles.clone(),
+        cells: Vec::new(),
+        breaks: t.breaks.clone(),
+        link: t.data_link.clone(),
+        blocks: Vec::new(),
+        edges: Vec::new(),
+        looks: Vec::new(),
+        grow: t.row_grow,
+        mins: if t.row_min.len() == t.row_heights.len() { t.row_min.clone() } else { Vec::new() },
+        report: t.report.as_ref().map(report_xdata),
+        template: t.template.as_ref().map(template_xdata),
+    };
     for (r, row) in t.cells.iter().enumerate() {
         for (c, cell) in row.iter().enumerate() {
             if !cell.style.is_empty() || cell.formula.is_some() {
                 x.cells.push((r, c, cell.style.clone(), cell.formula.clone()));
             }
+            if let Some(b) = &cell.block {
+                x.blocks.push((r, c, b.clone()));
+            }
+            if let Some(e) = cell.edges.filter(|e| !e.is_empty()) {
+                x.edges.push((r, c, e));
+            }
+            if let Some(l) = cell.look.filter(|l| !l.is_empty()) {
+                x.looks.push((r, c, l));
+            }
         }
     }
-    if x.rows.is_empty() && x.cells.is_empty() && x.breaks.is_none() && x.link.is_none() {
+    if x.rows.is_empty()
+        && x.cells.is_empty()
+        && x.breaks.is_none()
+        && x.link.is_none()
+        && x.blocks.is_empty()
+        && x.edges.is_empty()
+        && x.looks.is_empty()
+        && x.grow.is_free()
+        && x.mins.is_empty()
+        && x.report.is_none()
+        && x.template.is_none()
+    {
         return Vec::new();
     }
     let Ok(json) = serde_json::to_string(&x) else { return Vec::new() };
@@ -220,6 +299,30 @@ pub(crate) fn read_table_xdata(tags: &[Tag], t: &mut Table) {
         b
     });
     t.data_link = x.link.filter(|l| !l.path.trim().is_empty() && l.path.len() <= 4096);
+    t.report = x.report.and_then(TableReport::sanitized);
+    t.template = x.template.and_then(TableTemplateLink::sanitized);
+    for (r, c, b) in x.blocks {
+        let b = b.sanitized();
+        if let Some(cell) = t.cells.get_mut(r).and_then(|row| row.get_mut(c))
+            && !b.name.is_empty()
+        {
+            cell.block = Some(b);
+        }
+    }
+    for (r, c, e) in x.edges {
+        if let Some(cell) = t.cells.get_mut(r).and_then(|row| row.get_mut(c)) {
+            cell.edges = (!e.is_empty()).then_some(e);
+        }
+    }
+    t.row_grow = x.grow.sanitized();
+    t.row_min =
+        if x.mins.len() == t.row_heights.len() && x.mins.iter().all(|h| h.is_finite() && *h > 0.0 && *h <= 1e9) { x.mins } else { Vec::new() };
+    for (r, c, l) in x.looks {
+        let l = l.sanitized();
+        if let Some(cell) = t.cells.get_mut(r).and_then(|row| row.get_mut(c)) {
+            cell.look = (!l.is_empty()).then_some(l);
+        }
+    }
 }
 
 #[cfg(test)]

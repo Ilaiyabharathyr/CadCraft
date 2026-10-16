@@ -82,6 +82,11 @@ fn push(groups: &mut Vec<Vec<Entry>>, group: Vec<Entry>) {
 
 /// The idle menu's groups of entries (separated by lines).
 pub fn entries(app: &CadApp) -> Vec<Vec<Entry>> {
+    // Selected table cells: what can be done to them, then Undo/Redo and Pan/Zoom.
+    if let Some(mut cells) = crate::table_cells::entries(app) {
+        push(&mut cells, items(app, VIEW));
+        return cells;
+    }
     let mut groups = Vec::new();
     let mut first = Vec::new();
     if let Some(last) = app.session.last_command.as_deref().and_then(find_command) {
@@ -143,12 +148,23 @@ fn object_commands(app: &CadApp) -> Vec<(&'static str, Option<&'static str>)> {
             v
         }
         EntityKind::Hatch(_) => vec![("hatchedit", None)],
-        EntityKind::LwPolyline(_) | EntityKind::Polyline3d(_) => vec![("pedit", Some("Polyline Edit"))],
+        // Polylines and lines can be wires: their wire list data.
+        EntityKind::LwPolyline(_) | EntityKind::Polyline3d(_) => vec![("pedit", Some("Polyline Edit")), ("wire", None), ("wirenum", None)],
+        EntityKind::Line(_) => vec![("wire", None), ("wirenum", None)],
         EntityKind::Spline(_) => vec![("splinedit", Some("Spline Edit"))],
         EntityKind::Dimension(_) => vec![("dimtedit", None)],
         EntityKind::MLeader(_) => vec![("mleaderedit", None)],
         EntityKind::Viewport(_) => vec![("vpclip", None)],
         EntityKind::Image(_) => vec![("imageclip", None)],
+        EntityKind::Table(_) => {
+            let mut v = Vec::new();
+            if ents.iter().any(|e| matches!(&e.kind, EntityKind::Table(t) if t.report.is_some())) {
+                v.push(("reportupdate", Some("Update Report")));
+            }
+            v.push(("tabletemplate", Some("Apply Table Template...")));
+            v.push(("tablebreak", None));
+            v
+        }
         _ => Vec::new(),
     }
 }
@@ -213,6 +229,8 @@ pub fn choose(app: &mut CadApp, id: &str) {
         }
     } else if let Some(s) = id.strip_prefix(SNAP) {
         choose_snap(app, s);
+    } else if let Some(a) = id.strip_prefix(crate::table_cells::CELL) {
+        crate::table_cells::act(app, a);
     } else {
         activate(app, id);
     }

@@ -75,6 +75,11 @@ pub fn parse_polar_text(text: &str, angles: &crate::units::AngleSettings) -> Opt
 pub enum Picker {
     /// A hatch pattern by name (see [`crate::pattern_choices`]); holds the current pattern.
     HatchPattern(String),
+    /// A file to open: the UI can offer its file dialog, filtered to these extensions (lower
+    /// case, no dot), and list (and complete on Tab) the files of `kind` in `dirs`, where a bare
+    /// file name is looked for; the chosen path is entered as text. Kinds: `report` and
+    /// `template` ([`crate::cmd::table_file_kind`]), empty for any file.
+    OpenFile { title: String, extensions: Vec<String>, dirs: Vec<String>, kind: String },
 }
 
 impl Prompt {
@@ -215,8 +220,9 @@ pub trait Interactive: Send {
     fn drag(&self, _s: &Session, _cursor: Vec2) -> Option<Drag> {
         None
     }
-    /// The multiline text being typed (MTEXT, once its box is known) with empty contents: where
-    /// the UI places its in-place editor and with which height, width and justification.
+    /// The multiline text being typed (MTEXT once its box is known, with empty contents; a table
+    /// cell under TABLEDIT, with its contents): where the UI places its in-place editor, with
+    /// which height, width and justification, and what it starts with.
     fn editing_mtext(&self) -> Option<cadcraft_doc::MText> {
         None
     }
