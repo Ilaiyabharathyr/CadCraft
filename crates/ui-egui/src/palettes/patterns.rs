@@ -124,6 +124,10 @@ pub fn menu(ui: &mut egui::Ui, current: &str) -> Option<String> {
 /// HATCHEDIT's pattern prompt): a click enters the pattern's name at the prompt.
 pub fn prompt_picker(app: &mut CadApp, ctx: &egui::Context) {
     let Some(Picker::HatchPattern(current)) = app.session.current_prompt().and_then(|p| p.picker) else { return };
+    // With the Ribbon, the Hatch Creation / Hatch Editor tab's gallery is the picker.
+    if app.ui.show_ribbon {
+        return;
+    }
     let filter_id = egui::Id::new("hatch_pattern_filter");
     let mut filter: String = ctx.data_mut(|d| d.get_temp(filter_id)).unwrap_or_default();
     let mut chosen = None;
@@ -205,12 +209,14 @@ pub fn paint_tile(p: &egui::Painter, r: Rect, name: &str, selected: bool, hovere
             p.rect_filled(inner, 0.0, Color32::BLACK);
         } else {
             let at = |v: &Vec2| pos2(inner.min.x + v.x as f32 * inner.width(), inner.max.y - v.y as f32 * inner.height());
-            let stroke = Stroke::new(1.0, Color32::BLACK);
+            // One physical pixel, as a line of global width 0 in the drawing.
+            let px = 1.0 / p.ctx().pixels_per_point();
+            let stroke = Stroke::new(px, Color32::BLACK);
             for run in &s.runs {
                 match run.as_slice() {
                     [] => {}
                     [dot] => {
-                        p.circle_filled(at(dot), 0.7, Color32::BLACK);
+                        p.rect_filled(Rect::from_center_size(at(dot), vec2(px, px)), 0.0, Color32::BLACK);
                     }
                     pts => {
                         p.add(egui::Shape::line(pts.iter().map(at).collect(), stroke));

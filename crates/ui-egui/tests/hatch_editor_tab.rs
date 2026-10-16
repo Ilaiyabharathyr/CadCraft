@@ -114,3 +114,60 @@ fn french_pictures_of_the_hatch_editor() {
         h.run_steps(3);
     }
 }
+
+#[test]
+fn hatch_shows_the_hatch_creation_tab_and_close_makes_the_hatch() {
+    let (mut h, _, _) = harness(false);
+    // A free square to hatch.
+    h.state_mut().run("rectang", json!({ "p1": [40, 0], "p2": [50, 10] })).unwrap();
+    h.state_mut().cmd.buffer = "HATCH".into();
+    cadcraft_ui_egui::cmdline::submit(h.state_mut());
+    h.run_steps(3);
+    assert_eq!(h.state().ui.ribbon_tab, ribbon_hatch::CREATE_ID);
+    assert!(h.query_by_label("Hatch Creation").is_some());
+    assert!(h.state().ui.dialog.is_none(), "no dialog");
+    h.get_by_label("ANSI31").click();
+    h.run_steps(3);
+    h.state_mut().session.input(cadcraft_engine::Input::Point(cadcraft_engine::geom::Vec2::new(45.0, 5.0))).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Close Hatch Creation").click();
+    h.run_steps(3);
+    assert!(h.state().session.running.is_none());
+    let made = h
+        .state()
+        .session
+        .doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter(|e| matches!(&e.kind, cadcraft_engine::doc::EntityKind::Hatch(x) if x.pattern == "ANSI31"))
+        .count();
+    assert_eq!(made, 1);
+    assert_eq!(h.state().ui.ribbon_tab, "annotate", "back to the tab shown before");
+}
+
+/// With CRAFT_UI_VISUAL_DIR set: Hatch Creation, the colour list and the full gallery in French.
+#[test]
+fn french_pictures_of_hatch_creation_and_lists() {
+    let Ok(directory) = std::env::var("CRAFT_UI_VISUAL_DIR") else { return };
+    std::fs::create_dir_all(&directory).unwrap();
+    let (mut h, hatch, _) = harness(true);
+    h.state_mut().session.set_selection(vec![hatch]);
+    h.run_steps(3);
+    h.get_by_label("Hatch Color").click();
+    h.run_steps(3);
+    h.render().unwrap().save(format!("{directory}/hatch-colors.png")).unwrap();
+    // Escape would deselect the hatch: the list closes with a second click on it.
+    h.get_by_label("Hatch Color").click();
+    h.run_steps(3);
+    h.get_by_label("More").click();
+    h.run_steps(3);
+    h.render().unwrap().save(format!("{directory}/hatch-gallery.png")).unwrap();
+    h.key_press(egui::Key::Escape);
+    h.state_mut().session.set_selection(Vec::new());
+    h.run_steps(3);
+    h.state_mut().cmd.buffer = "HATCH".into();
+    cadcraft_ui_egui::cmdline::submit(h.state_mut());
+    h.run_steps(3);
+    h.render().unwrap().save(format!("{directory}/hatch-creation.png")).unwrap();
+}

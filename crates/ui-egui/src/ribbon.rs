@@ -1071,7 +1071,7 @@ pub fn ribbon(app: &mut CadApp, ui: &mut egui::Ui) {
             x += w + 2.0;
         }
         if let Some(id) = context {
-            let label = tab_label(crate::ribbon_hatch::TAB_TITLE);
+            let label = tab_label(crate::ribbon_hatch::title(id));
             let w = ui.painter().layout_no_wrap(label.clone(), crate::theme::body(), t.text).size().x + 18.0;
             let tr = Rect::from_min_size(pos2(x + 4.0, r.top() + 1.0), vec2(w, TAB_ROW - 1.0));
             let resp = ui.interact(tr, ui.id().with(("rb_tab", id)), Sense::click());
@@ -1080,7 +1080,7 @@ pub fn ribbon(app: &mut CadApp, ui: &mut egui::Ui) {
             let fill = if is_active { t.accent } else { t.accent.gamma_multiply(if resp.hovered() { 0.75 } else { 0.55 }) };
             ui.painter().rect_filled(tr, egui::CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, fill);
             ui.painter().text(tr.center(), Align2::CENTER_CENTER, label, crate::theme::body(), Color32::WHITE);
-            icons::describe_control(ui, &resp, crate::ribbon_hatch::TAB_TITLE, Some(is_active), true);
+            icons::describe_control(ui, &resp, crate::ribbon_hatch::title(id), Some(is_active), true);
             if resp.double_clicked() {
                 out = Some(Action::ToggleMinimized);
             } else if resp.clicked() {

@@ -27,6 +27,7 @@ pub mod spacemouse;
 // The External References palette.
 pub mod xrefs;
 
+pub mod color_list;
 pub mod dyngrips;
 pub mod dyninput;
 pub mod gpu;

@@ -191,3 +191,55 @@ fn user_defined_double_hatches_are_saved_as_such() {
     assert!(x.is_double(), "read back as a double user-defined hatch");
     assert!((x.scale - 2.0).abs() < 1e-9);
 }
+
+/// HATCH follows the HP* variables the Hatch Creation tab sets while it runs.
+#[test]
+fn hatch_creation_follows_the_hp_variables_while_it_runs() {
+    let mut s = Session::new();
+    let outer = rect(&mut s, [0.0, 0.0], [20.0, 20.0]);
+    s.start("hatch").unwrap();
+    s.input(Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+    for (name, value) in
+        [("HPNAME", json!("_USER")), ("HPDOUBLE", json!(1)), ("HPSCALE", json!(2.5)), ("HPCOLOR", json!("1")), ("HPBOUNDRETAIN", json!(1))]
+    {
+        s.execute("setvar", &json!({ "name": name, "value": value })).unwrap();
+    }
+    s.input(Input::Enter).unwrap();
+    let d = s.doc().unwrap();
+    let (h, color) = d.model.iter().find_map(|e| if let EntityKind::Hatch(x) = &e.kind { Some((x.clone(), e.common.color)) } else { None }).unwrap();
+    assert!(h.is_double() && (h.scale - 2.5).abs() < 1e-9);
+    assert_eq!(color.to_aci(), 1);
+    // A retained boundary: a new polyline besides the rectangle, the hatch linked to it.
+    let polys = d.model.iter().filter(|e| matches!(e.kind, EntityKind::LwPolyline(_))).count();
+    assert_eq!(polys, 2);
+    assert!(h.loops[0].sources.iter().all(|x| x.hex() != outer));
+}
+
+/// Hatch Creation's Remove and Match Properties, through HATCH's keywords.
+#[test]
+fn hatch_creation_removes_a_boundary_and_matches_a_hatch() {
+    let mut s = Session::new();
+    rect(&mut s, [0.0, 0.0], [20.0, 20.0]);
+    rect(&mut s, [30.0, 0.0], [40.0, 10.0]);
+    let other = rect(&mut s, [50.0, 0.0], [60.0, 10.0]);
+    let src = handle(&s.execute("hatch", &json!({ "handles": [other], "pattern": "ANSI37", "scale": 3 })).unwrap());
+    s.start("hatch").unwrap();
+    s.input(Input::Point(Vec2::new(5.0, 5.0))).unwrap();
+    s.input(Input::Point(Vec2::new(35.0, 5.0))).unwrap();
+    s.input(Input::Keyword("Remove boundaries".into())).unwrap();
+    s.input(Input::Point(Vec2::new(40.1, 5.0))).unwrap();
+    s.input(Input::Enter).unwrap();
+    s.input(Input::Keyword("Inherit properties".into())).unwrap();
+    s.input(Input::Pick(vec![Handle::parse_hex(&src).unwrap()])).unwrap();
+    s.input(Input::Enter).unwrap();
+    let d = s.doc().unwrap();
+    let made: Vec<Hatch> = d
+        .model
+        .iter()
+        .filter(|e| e.handle.hex() != src)
+        .filter_map(|e| if let EntityKind::Hatch(x) = &e.kind { Some(x.clone()) } else { None })
+        .collect();
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0].loops.len(), 1, "the second square's boundary was removed");
+    assert_eq!((made[0].pattern.as_str(), made[0].scale), ("ANSI37", 3.0));
+}

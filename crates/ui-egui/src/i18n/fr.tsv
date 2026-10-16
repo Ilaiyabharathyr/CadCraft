@@ -1253,3 +1253,14 @@ hatchribbon	Bring to Front	Mettre au premier plan
 	Display Boundary Objects	Afficher les objets de contour
 	Boundary Set	Jeu de contours
 	Close Hatch Editor	Fermer Editeur de hachures
+	Index Colors	Couleurs de l'index
+	More Colors...	Plus de couleurs...
+	Select Color	Sélectionner une couleur
+ribbon	Hatch Creation	Création de hachures
+ribbon	Close Hatch Creation	Fermer Création de hachures
+ribbon	Retain Boundaries - Polyline	Conserver les contours - Polyligne
+ribbon	Retain Boundaries - Region	Conserver les contours - Région
+ribbon	Select New Boundary Set	Sélectionner un nouveau jeu de contours
+ribbon	Hatch and Gradient	Hachures et gradient
+	Close Hatch Creation	Fermer Création de hachures
+	Select Hatch	Sélectionner une hachure
