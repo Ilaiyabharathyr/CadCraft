@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (a prompt's keyword list wraps above the command bar instead of running off it) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (a prompt's keyword list wraps above the command bar instead of running off it, and the bar's side edges resize its width) · **Target:** Autodesk AutoCAD 2027 for Mac (26.0)
 
 How CADCraft's interaction compares with AutoCAD's: point entry, object snaps, tracking, dynamic
 input, grips, selection, the command line, chrome and navigation. A drafter's speed in AutoCAD
@@ -202,6 +202,7 @@ down-arrow options menu (DYNPROMPT), and DYNDIM.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | The command bar's left and right edges drag to resize it (`ui.cmdline.width`, in the workspace and the Options profile; `null`/0 keeps the default share of the drawing area), so a long prompt can be widened instead of only scrolled (#1327) |
 | 2026-10-16 | minor | A prompt's keywords that don't fit after the prompt are drawn on lines above the command bar (with "+N more" for any that fit nowhere), so PURGE's 20 options stay on screen and clickable instead of running off the bar (#1327) |
 | 2026-10-12 | minor | Selected and hovered objects redrawn in the selection colour (text and arrowheads included); Options ▸ Selection laid out as AutoCAD's: Object grouping, Show grips, grip object limit, selection preview, Visual Effect Settings (selection area, preview filter) |
 | 2026-10-12 | minor | Animation effects (dialog and menu fades, smoothed wheel scrolling and ⌘/Ctrl+wheel zoom) follow the operating system's setting; View ▸ Accessibility ▸ Animation Effects chooses System, On or Off |
