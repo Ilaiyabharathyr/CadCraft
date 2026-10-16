@@ -75,7 +75,8 @@ reached", malformed source is a reader error, and every built-in checks its argu
   ellipses and splines, given by entity name. Parameters are AutoLISP's: a line's is the
   distance along it, an arc's or a circle's the angle, a polyline's the vertex index (plus the
   fraction of the segment after it), an ellipse's or a spline's its own. Ellipses and splines
-  are exact at a parameter and measured along a fine flattening (within 1e-5 of their length).
+  are exact too: lengths and areas are integrated along the curve itself, the same lengths
+  LENGTHEN measures.
 - **Output and files:** `princ prin1 print prompt terpri alert open close read-line write-line
   read-char write-char findfile`
 - **Files and folders:** `vl-file-copy` (never over an existing file; appends with its third

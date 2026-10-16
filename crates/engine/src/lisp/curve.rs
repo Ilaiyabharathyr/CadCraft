@@ -2,9 +2,10 @@
 //!
 //! Each kind keeps AutoLISP's parameter: a line's is the distance from its start, an arc's or a
 //! circle's the angle, a polyline's the vertex index (a fraction of the way along the segment
-//! after it), an ellipse's its own parameter, a spline's its knot parameter. Lines, arcs, circles
-//! and polylines are exact; ellipses and splines are evaluated exactly at a parameter and
-//! measured along a fine flattening.
+//! after it), an ellipse's its own parameter, a spline's its knot parameter. Everything is
+//! exact: ellipses and splines are evaluated on the curve itself, and their lengths and areas
+//! integrated along it (the same arc lengths LENGTHEN uses); a fine flattening only finds where
+//! to start looking for a closest point.
 
 use cadcraft_doc::{Entity, EntityKind};
 use cadcraft_geom::{Arc as GArc, Ellipse as GEllipse, Spline as GSpline, Vec2, bulge_to_arc};
@@ -159,12 +160,14 @@ pub struct Curve {
     exact: Exact,
     start: f64,
     end: f64,
+    /// The whole length: the pieces' for lines, arcs and polylines, the exact curve's otherwise.
+    len: f64,
     closed: bool,
     periodic: bool,
     planar: bool,
 }
 
-/// Most points a flattened ellipse or spline is measured along.
+/// Most points a flattened ellipse or spline is searched along.
 const MAX_SAMPLES: usize = 16_384;
 
 impl Curve {
@@ -239,6 +242,7 @@ impl Curve {
                     })
                     .collect();
                 Curve::from_pieces(flattened(&pts), Exact::Ellipse(ge, z), full, full, true)
+                    .map(|c| Curve { len: ge.arc_length_from(t0, sweep), ..c })
             }
             EntityKind::Spline(sp) => {
                 if !sp.is_valid() {
@@ -257,10 +261,11 @@ impl Curve {
                     })
                     .collect();
                 Curve::from_pieces(flattened(&pts), Exact::Spline(sp.clone()), sp.closed, sp.closed && sp.is_periodic(), true)
+                    .map(|c| Curve { len: sp.length(), ..c })
             }
             _ => return None,
         };
-        c.filter(|c| c.pieces.iter().all(|p| p.p0.is_finite() && p.p1.is_finite() && p.seg.len().is_finite()))
+        c.filter(|c| c.len.is_finite() && c.pieces.iter().all(|p| p.p0.is_finite() && p.p1.is_finite() && p.seg.len().is_finite()))
     }
 
     fn from_pieces(raw: Vec<(f64, f64, Seg)>, exact: Exact, closed: bool, periodic: bool, planar: bool) -> Option<Curve> {
@@ -275,7 +280,7 @@ impl Curve {
                 piece
             })
             .collect();
-        Some(Curve { pieces, exact, start, end, closed, periodic, planar })
+        Some(Curve { pieces, exact, start, end, len: d, closed, periodic, planar })
     }
 
     pub fn start_param(&self) -> f64 {
@@ -285,7 +290,7 @@ impl Curve {
         self.end
     }
     pub fn length(&self) -> f64 {
-        self.pieces.last().map_or(0.0, |p| p.d0 + p.seg.len())
+        self.len
     }
     pub fn is_closed(&self) -> bool {
         self.closed
@@ -313,14 +318,15 @@ impl Curve {
         Some((p, if span.abs() <= 1e-15 { 0.0 } else { ((t - p.p0) / span).clamp(0.0, 1.0) }))
     }
 
-    /// The parameter `d` along the curve; `None` past either end.
-    fn at_dist(&self, d: f64) -> Option<(&Piece, f64)> {
-        let len = self.length();
+    /// `d` kept within the curve's length; `None` past either end.
+    fn in_length(&self, d: f64) -> Option<f64> {
         let eps = self.tol();
-        if !d.is_finite() || d < -eps || d > len + eps {
-            return None;
-        }
-        let d = d.clamp(0.0, len);
+        (d.is_finite() && d >= -eps && d <= self.len + eps).then(|| d.clamp(0.0, self.len))
+    }
+
+    /// The piece `d` along the pieces and how far along it (0..1); `None` past either end.
+    fn at_dist(&self, d: f64) -> Option<(&Piece, f64)> {
+        let d = self.in_length(d)?;
         let p = self.pieces.iter().find(|p| d <= p.d0 + p.seg.len() + 1e-12).or(self.pieces.last())?;
         let l = p.seg.len();
         Some((p, if l <= 1e-15 { 0.0 } else { ((d - p.d0) / l).clamp(0.0, 1.0) }))
@@ -347,12 +353,84 @@ impl Curve {
 
     pub fn dist_at_param(&self, t: f64) -> Option<f64> {
         let (p, f) = self.at_param(t)?;
-        Some(p.d0 + p.seg.len() * f)
+        let t = t.clamp(self.start, self.end);
+        Some(match &self.exact {
+            Exact::None => p.d0 + p.seg.len() * f,
+            Exact::Ellipse(e, _) => e.arc_length_from(self.start, t - self.start),
+            Exact::Spline(sp) => sp.length_between(self.start, t),
+        })
     }
 
     pub fn param_at_dist(&self, d: f64) -> Option<f64> {
-        let (p, f) = self.at_dist(d)?;
-        Some(Curve::param_of(p, f))
+        if let Exact::None = self.exact {
+            let (p, f) = self.at_dist(d)?;
+            return Some(Curve::param_of(p, f));
+        }
+        let d = self.in_length(d)?;
+        if d >= self.len {
+            return Some(self.end);
+        }
+        if let Some(t) = self.newton_param_at(d) {
+            return Some(t);
+        }
+        Some(match &self.exact {
+            Exact::Ellipse(e, _) => e.param_at_length(self.start, d).unwrap_or(self.end).clamp(self.start, self.end),
+            Exact::Spline(sp) => sp.param_at_length(self.start, d),
+            Exact::None => self.start,
+        })
+    }
+
+    /// Exact arc length from parameter `a` to `b` (negative when `b` comes first).
+    fn exact_len_between(&self, a: f64, b: f64) -> f64 {
+        let (lo, hi, sign) = if a <= b { (a, b, 1.0) } else { (b, a, -1.0) };
+        sign * match &self.exact {
+            Exact::Ellipse(e, _) => e.arc_length_from(lo, hi - lo),
+            Exact::Spline(sp) => sp.length_between(lo, hi),
+            Exact::None => 0.0,
+        }
+    }
+
+    /// The speed |dC/dt| of an ellipse or a spline.
+    fn exact_speed(&self, t: f64) -> f64 {
+        match &self.exact {
+            Exact::Ellipse(e, _) => e.derivative(t).len(),
+            Exact::Spline(sp) => sp.derivative(t).len(),
+            Exact::None => 0.0,
+        }
+    }
+
+    /// The parameter `d` along an ellipse or a spline: the flattening's guess, then Newton steps
+    /// on the exact arc length (whose derivative is the speed), measured from the guessed piece's
+    /// start so that each step integrates only a short stretch. `None` when it doesn't settle
+    /// (a cusp, where the speed vanishes), for the slower bisection to answer.
+    fn newton_param_at(&self, d: f64) -> Option<f64> {
+        let chord = self.pieces.last().map_or(0.0, |p| p.d0 + p.seg.len());
+        let g = if self.len > 0.0 { (d * chord / self.len).clamp(0.0, chord) } else { 0.0 };
+        let p = self.pieces.iter().find(|p| g <= p.d0 + p.seg.len() + 1e-12).or(self.pieces.last())?;
+        let l = p.seg.len();
+        let mut t = Curve::param_of(p, if l <= 1e-15 { 0.0 } else { ((g - p.d0) / l).clamp(0.0, 1.0) });
+        let (base_t, base) = (p.p0, self.exact_len_between(self.start, p.p0));
+        let tol = 1e-12 * (1.0 + self.len);
+        for _ in 0..16 {
+            let err = base + self.exact_len_between(base_t, t) - d;
+            if !err.is_finite() {
+                return None;
+            }
+            if err.abs() <= tol {
+                return Some(t);
+            }
+            let speed = self.exact_speed(t);
+            if !(speed.is_finite() && speed > 1e-12 * (1.0 + self.len)) {
+                return None;
+            }
+            let next = (t - err / speed).clamp(self.start, self.end);
+            if next == t {
+                // Held at an end short of `d`: leave it to the bisection.
+                return None;
+            }
+            t = next;
+        }
+        None
     }
 
     pub fn point_at_dist(&self, d: f64) -> Option<P3> {
@@ -378,18 +456,17 @@ impl Curve {
                 ([-a.x * s + b.x * c, -a.y * s + b.y * c, 0.0], [-a.x * c - b.x * s, -a.y * c - b.y * s, 0.0])
             }
             Exact::Spline(sp) => {
-                // Central differences on the exact evaluation, one-sided at the ends.
+                // The exact first derivative; the second by central differences on it, one-sided
+                // at the ends.
+                let t = t.clamp(self.start, self.end);
+                let d1 = sp.derivative(t);
                 let h = 1e-5 * (self.end - self.start).abs().max(1e-9);
-                let ev = |x: f64| sp.eval(x.clamp(self.start, self.end));
                 let (lo, hi) = ((t - h).max(self.start), (t + h).min(self.end));
                 let w = hi - lo;
                 if w <= 0.0 {
-                    return Some(([0.0; 3], [0.0; 3]));
+                    return Some(([d1.x, d1.y, 0.0], [0.0; 3]));
                 }
-                let (a, m, b) = (ev(lo), ev((lo + hi) / 2.0), ev(hi));
-                let d1 = (b - a) * (1.0 / w);
-                let hh = w / 2.0;
-                let d2 = (a + b - m * 2.0) * (1.0 / (hh * hh));
+                let d2 = (sp.derivative(hi) - sp.derivative(lo)) * (1.0 / w);
                 ([d1.x, d1.y, 0.0], [d2.x, d2.y, 0.0])
             }
         })
@@ -459,15 +536,9 @@ impl Curve {
                 let (c, ma, mi) = (e.center, e.major, e.minor());
                 (c.x * (p1.y - p0.y) - c.y * (p1.x - p0.x) + (ma.x * mi.y - ma.y * mi.x) * (t1 - t0)) / 2.0
             }
-            // Simpson's rule on the exact curve over each stretch: the chords of the flattening
-            // would cut a little off every bend.
-            Exact::Spline(_) => {
-                let f = |t: f64| match (self.point_at_param(t), self.derivs(t)) {
-                    (Some(p), Some((d, _))) => p[0] * d[1] - p[1] * d[0],
-                    _ => 0.0,
-                };
-                self.pieces.iter().map(|p| (p.p1 - p.p0) / 6.0 * (f(p.p0) + 4.0 * f((p.p0 + p.p1) / 2.0) + f(p.p1)) / 2.0).sum()
-            }
+            // Integrated on the exact curve, seen from its start point, so the closing chord adds
+            // nothing.
+            Exact::Spline(sp) => return sp.area_term_between(self.start, self.end, sp.eval(self.start)).abs(),
             Exact::None => self.pieces.iter().map(|p| p.seg.area_term()).sum(),
         };
         if !self.closed

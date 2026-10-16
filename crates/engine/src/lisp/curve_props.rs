@@ -97,14 +97,11 @@ fn entity_of(s: &mut Session, kind: EntityKind) -> Entity {
     (**s.doc().unwrap().entity(h).unwrap()).clone()
 }
 
-/// `n` points evenly spaced by distance along the curve.
+/// `n + 1` points on the curve, evenly spaced by parameter (straight from the exact evaluation,
+/// not through the distance functions under test).
 fn samples(c: &Curve, n: usize) -> Vec<P3> {
-    (0..=n).filter_map(|i| c.point_at_dist(c.length() * i as f64 / n as f64)).collect()
-}
-
-/// Exact for lines, arcs, circles and 2D/3D polylines; the flattening for ellipses and splines.
-fn exact(k: &EntityKind) -> bool {
-    !matches!(k, EntityKind::Ellipse(_) | EntityKind::Spline(_))
+    let (t0, t1) = (c.start_param(), c.end_param());
+    (0..=n).filter_map(|i| c.point_at_param(t0 + (t1 - t0) * i as f64 / n as f64)).collect()
 }
 
 #[test]
@@ -120,7 +117,7 @@ fn every_function_agrees_with_the_others_on_random_curves() {
             let ctx = format!("round {round} kind {k}: {kind:?}");
             let len = c.length();
             let scale = 1.0 + len;
-            let tol = if exact(&kind) { 1e-9 * scale } else { 1e-6 * scale };
+            let tol = 1e-9 * scale;
             assert!(len.is_finite() && len >= 0.0, "{ctx}");
             let (t0, t1) = (c.start_param(), c.end_param());
             assert!(t1 >= t0, "{ctx}");
@@ -197,20 +194,66 @@ fn ellipse_and_spline_lengths_match_numeric_integration() {
             let e = entity_of(&mut s, kind.clone());
             let c = Curve::of(&e).unwrap();
             let (t0, t1) = (c.start_param(), c.end_param());
-            // Simpson's rule on |C'(t)|, from the exact evaluation, 20 000 steps.
-            let n = 20_000;
-            let h = (t1 - t0) / n as f64;
+            // Simpson's rule on |C'(t)|, 4000 steps between each pair of knots (a spline is smooth
+            // only within a span) and 20 000 over an ellipse, the speed from points on the exact
+            // curve a millionth of the parameter range apart (a wider step's chord falls short).
+            let dt = 1e-6 * (t1 - t0);
             let speed = |t: f64| {
-                let (a, b) = (c.point_at_param((t - h / 4.0).max(t0)).unwrap(), c.point_at_param((t + h / 4.0).min(t1)).unwrap());
-                dist(&a, &b) / ((t + h / 4.0).min(t1) - (t - h / 4.0).max(t0))
+                let (lo, hi) = ((t - dt).max(t0), (t + dt).min(t1));
+                dist(&c.point_at_param(lo).unwrap(), &c.point_at_param(hi).unwrap()) / (hi - lo)
             };
-            let mut sum = speed(t0) + speed(t1);
-            for i in 1..n {
-                sum += speed(t0 + h * i as f64) * if i % 2 == 1 { 4.0 } else { 2.0 };
+            let mut cuts = vec![t0];
+            if let EntityKind::Spline(sp) = &kind {
+                cuts.extend(sp.knots.iter().copied().filter(|k| *k > t0 && *k < t1));
             }
-            let want = sum * h / 3.0;
+            cuts.push(t1);
+            cuts.dedup();
+            let n = if cuts.len() > 2 { 4000 } else { 20_000 };
+            let mut want = 0.0;
+            for w in cuts.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let h = (b - a) / n as f64;
+                let mut sum = speed(a) + speed(b);
+                for i in 1..n {
+                    sum += speed(a + h * i as f64) * if i % 2 == 1 { 4.0 } else { 2.0 };
+                }
+                want += sum * h / 3.0;
+            }
             let got = c.length();
-            assert!((got - want).abs() <= 2e-5 * (1.0 + want), "round {round}: {kind:?}: {got} vs {want}");
+            assert!((got - want).abs() <= 1e-8 * (1.0 + want), "round {round}: {kind:?}: {got} vs {want}");
+        }
+    }
+}
+
+#[test]
+fn ellipse_and_spline_lengths_are_lengthen_s_own() {
+    // LENGTHEN measures with the geometry crate's arc lengths: a routine and the command agree.
+    let mut r = Rng(0x1E57_0335);
+    let mut s = Session::new();
+    for round in 0..60 {
+        for k in [4, 5] {
+            let kind = random_kind(&mut r, k);
+            let e = entity_of(&mut s, kind.clone());
+            let c = Curve::of(&e).unwrap();
+            let (t0, t1) = (c.start_param(), c.end_param());
+            let ctx = format!("round {round}: {kind:?}");
+            let (len, at) = match &kind {
+                EntityKind::Spline(sp) => (sp.length(), sp.length_between(t0, (t0 + t1) / 2.0)),
+                EntityKind::Ellipse(el) => {
+                    let g = cadcraft_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
+                    let full = if g.is_full() { g.arc_length_from(0.0, std::f64::consts::TAU) } else { g.length() };
+                    (full, g.arc_length_from(t0, (t1 - t0) / 2.0))
+                }
+                _ => continue,
+            };
+            assert!((c.length() - len).abs() <= 1e-12 * (1.0 + len), "{ctx}: {} vs {len}", c.length());
+            assert!((c.dist_at_param((t0 + t1) / 2.0).unwrap() - at).abs() <= 1e-12 * (1.0 + len), "{ctx}");
+            // Distance → parameter → distance comes back to the same distance.
+            for i in 0..=20 {
+                let d = len * i as f64 / 20.0;
+                let t = c.param_at_dist(d).unwrap();
+                assert!((c.dist_at_param(t).unwrap() - d).abs() <= 1e-9 * (1.0 + len), "{ctx}: at {d}");
+            }
         }
     }
 }
@@ -303,7 +346,8 @@ fn areas_match_the_area_command_and_dense_sampling() {
             // Dense sampling, closed by the chord as an open curve is.
             let want = sampled_area(&c, 40_000);
             let size = c.length().powi(2).max(1.0);
-            assert!((got - want).abs() <= 1e-6 * size, "round {round} kind {k}: {got} vs {want}: {kind:?}");
+            // A polygon through 40 000 points is itself ~1e-9 of the size short on a bend.
+            assert!((got - want).abs() <= 1e-8 * size, "round {round} kind {k}: {got} vs {want}: {kind:?}");
             // AREA's Object option, for what it accepts.
             match &kind {
                 EntityKind::Circle(_) | EntityKind::LwPolyline(LwPolyline { closed: true, .. }) => {
