@@ -48,3 +48,39 @@ fn objects_past_the_window_on_the_paper_still_plot() {
     line(&mut near, (5.0, 11.0), (5.0, 12.0));
     assert_ne!(window_pdf(&near), window_pdf(&a));
 }
+
+#[test]
+fn far_block_contents_leave_a_window_page_unchanged() {
+    // A block reference over the window whose block also holds geometry far from it.
+    let page = |far: bool| {
+        let mut d = drawing();
+        let mut blk = cadcraft_doc::Block::new("PLAN");
+        let mut add = |a: (f64, f64), b: (f64, f64)| {
+            let h = cadcraft_doc::Handle(blk.entities.len() as u64 + 1);
+            blk.entities.push(cadcraft_doc::Entity::new(h, EntityKind::Line(Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) })));
+        };
+        add((3.0, 3.0), (6.0, 4.0));
+        if far {
+            for i in 0..200 {
+                let y = 3000.0 + f64::from(i);
+                add((3000.0, y), (3400.0, y + 3.0));
+            }
+        }
+        d.blocks.insert("PLAN".into(), std::sync::Arc::new(blk));
+        let ins = cadcraft_doc::Insert {
+            block: "PLAN".into(),
+            insert: Vec3::new(0.0, 0.0, 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: vec![],
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+        };
+        d.add(&Space::Model, Common::default(), EntityKind::Insert(ins)).unwrap();
+        window_pdf(&d)
+    };
+    assert_eq!(page(true), page(false));
+    assert_ne!(page(false), window_pdf(&drawing()), "the near block contents plot");
+}
