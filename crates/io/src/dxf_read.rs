@@ -485,7 +485,7 @@ fn entity(kind: &str, tags: &[Tag]) -> Option<(Common, EntityKind)> {
             center: t.p(10),
             width: t.fd(40, 1.0),
             height: t.fd(41, 1.0),
-            view_center: Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0)),
+            view_center: viewport_view_center(&t),
             view_height: t.fd(45, 1.0),
             id: t.i(69).unwrap_or(0) as u32,
             locked: t.i(90).unwrap_or(0) & 16384 != 0,
@@ -603,6 +603,19 @@ fn acad_table(tags: &[Tag]) -> Table {
     let mut t = Table { insert: T(tags).p(10), col_widths, row_heights, cells, style, text_height, title, header, ..Table::default() };
     crate::dxf_table::read_table_xdata(tags, &mut t);
     t
+}
+
+/// A VIEWPORT's view centre in the drawing's coordinates. Group 12 is in display coordinates,
+/// measured from the view target (group 17): with a nonzero target, read alone the centre showed
+/// another part of the drawing (#1468). For a plan view (looking down Z, no twist) display
+/// coordinates are the drawing's moved to the target; other views keep group 12 as it is.
+fn viewport_view_center(t: &T) -> Vec2 {
+    let c = Vec2::new(t.fd(12, 0.0), t.fd(22, 0.0));
+    let target = Vec2::new(t.fd(17, 0.0), t.fd(27, 0.0));
+    let dir = Vec3::new(t.fd(16, 0.0), t.fd(26, 0.0), t.fd(36, 1.0));
+    let plan = dir.z > 0.0 && dir.x.hypot(dir.y) <= dir.z * 1e-9;
+    let moved = c + target;
+    if plan && t.fd(51, 0.0).abs() < 1e-12 && moved.is_finite() { moved } else { c }
 }
 
 fn hatch(tags: &[Tag], t: &T) -> Option<EntityKind> {

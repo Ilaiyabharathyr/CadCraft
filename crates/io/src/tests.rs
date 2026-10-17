@@ -699,6 +699,55 @@ fn join(p: &[(String, String)]) -> String {
         .collect()
 }
 
+/// The view centre of viewport `id` in the drawing read from `p` after `edit` rewrites its record.
+fn vp_view_center(p: &[(String, String)], id: &str, edit: impl Fn(&mut Vec<(String, String)>)) -> Vec2 {
+    let r = vp_record(p, id);
+    let mut rec = p[r.clone()].to_vec();
+    edit(&mut rec);
+    let mut q: Vec<(String, String)> = p[..r.start].to_vec();
+    q.extend(rec);
+    q.extend(p[r.end..].iter().cloned());
+    let back = read_dxf(join(&q).as_bytes()).unwrap();
+    back.layouts
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .find_map(|e| match &e.kind {
+            EntityKind::Viewport(v) if v.id.to_string() == id => Some(v.view_center),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// #1468: a viewport's view centre (group 12) is measured from its view target (group 17). A
+/// plan view with a nonzero target shows the part of the drawing at target + centre, as
+/// AutoCAD draws it; read alone, the centre showed another part.
+#[test]
+fn viewport_view_centre_is_measured_from_the_view_target() {
+    let (_, p) = frozen_vp_dxf();
+    let set = |rec: &mut Vec<(String, String)>, code: &str, v: &str| match rec.iter_mut().find(|(c, _)| c == code) {
+        Some(t) => t.1 = v.into(),
+        None => rec.insert(2, (code.into(), v.into())),
+    };
+    // As CADCraft writes it (no target): the centre as stored.
+    assert_eq!(vp_view_center(&p, "2", |_| {}), Vec2::new(5.0, 2.5));
+    // AutoCAD's way: target (68.3, 57.7), centre (-63.3, -55.2) from it.
+    let c = vp_view_center(&p, "2", |rec| {
+        for (code, v) in
+            [("12", "-63.3"), ("22", "-55.2"), ("17", "68.3"), ("27", "57.7"), ("37", "0.0"), ("16", "0.0"), ("26", "0.0"), ("36", "592.99")]
+        {
+            set(rec, code, v);
+        }
+    });
+    assert!(c.near(Vec2::new(5.0, 2.5), 1e-9), "{c:?}");
+    // A view not looking straight down keeps the centre as stored.
+    let c = vp_view_center(&p, "2", |rec| {
+        for (code, v) in [("12", "1.0"), ("22", "2.0"), ("17", "10.0"), ("27", "20.0"), ("16", "1.0"), ("26", "-1.0"), ("36", "1.0")] {
+            set(rec, code, v);
+        }
+    });
+    assert_eq!(c, Vec2::new(1.0, 2.0));
+}
+
 #[test]
 fn viewport_frozen_layers_written_as_341_handles() {
     let (_, p) = frozen_vp_dxf();
