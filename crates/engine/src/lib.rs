@@ -1581,6 +1581,33 @@ impl Session {
         r
     }
 
+    /// Run a script, but keep going after a failed line: every failure is reported with its
+    /// 1-based position in the script, and an empty result means the whole script ran. One bad
+    /// line costs that line, not the drawing — `cadcraft-cli run` uses this so a 40-block script
+    /// with one open hatch still yields the 39 blocks that are fine.
+    pub fn script_report(&mut self, text: &str) -> Vec<(usize, EngineError)> {
+        if self.in_script {
+            return vec![(
+                1,
+                EngineError::BadParams { cmd: "script".into(), msg: "a script is already running; nested scripts are not supported".into() },
+            )];
+        }
+        self.in_script = true;
+        let mut failures = Vec::new();
+        for (i, line) in text.lines().enumerate() {
+            // Trailing spaces are inputs (Enter); other trailing whitespace (`\r`) is not.
+            let line = line.trim_end_matches(|c: char| c.is_whitespace() && c != ' ');
+            if line.trim_start().starts_with(';') {
+                continue;
+            }
+            if let Err(e) = self.input_line(line, true) {
+                failures.push((i + 1, e));
+            }
+        }
+        self.in_script = false;
+        failures
+    }
+
     fn script_lines(&mut self, text: &str) -> Result<()> {
         for line in text.lines() {
             // Trailing spaces are inputs (Enter); other trailing whitespace (`\r`) is not.
