@@ -638,6 +638,23 @@ fn script_runs_commands() {
 }
 
 #[test]
+fn script_report_keeps_the_lines_that_are_fine() {
+    let mut s = Session::new();
+    // A blank line is Enter: it ends the LINE, and the unknown command on line 3 fails on its own.
+    let f = s.script_report("LINE 0,0 10,0\n\nNOT_A_COMMAND\nCIRCLE 5,5 2\n");
+    assert_eq!(kinds(&s), vec!["Line", "Circle"], "the drawing survives the bad line");
+    assert_eq!(f.len(), 1);
+    assert_eq!(f[0].0, 3, "the position is the line in the script, counted with the blank separator");
+    assert!(matches!(&f[0].1, EngineError::UnknownCommand(c) if c == "NOT_A_COMMAND"));
+}
+
+#[test]
+fn script_report_is_empty_when_everything_runs() {
+    let mut s = Session::new();
+    assert!(s.script_report("LINE 0,0 10,0\n\nCIRCLE 5,5 2\n").is_empty());
+}
+
+#[test]
 fn script_splits_line_at_keyword_prompt() {
     let mut s = Session::new();
     s.script("POLYGON 6 200,20 I 15").unwrap();
