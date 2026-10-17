@@ -9,6 +9,7 @@ mod table;
 const SESSION_VARS: &[&str] = &[
     "OSMODE",
     "OSNAPHATCH",
+    "OSNAPZ",
     "ANNOAUTOSCALE",
     "ORTHOMODE",
     "POLARMODE",
@@ -72,6 +73,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
     let v = match n.as_str() {
         "OSMODE" => json!(st.osmode),
         "OSNAPHATCH" => json!(i32::from(st.osnaphatch)),
+        "OSNAPZ" => json!(i32::from(st.osnapz)),
         // AutoCAD's values: positive on, negative off (4 = every annotative object).
         "ANNOAUTOSCALE" => json!(if st.annoautoscale { 4 } else { -4 }),
         // Paper units per drawing unit of the current annotation scale (1:50 → 0.02).
@@ -127,7 +129,10 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "CURSORSIZE" => json!(st.cursorsize),
         "MAXARRAY" => json!(st.maxarray),
         "ZOOMFACTOR" => json!(st.zoomfactor),
-        "LASTPOINT" => json!([s.last_point.x, s.last_point.y, 0.0]),
+        "LASTPOINT" => {
+            let p = s.last_point3();
+            json!([p.x, p.y, p.z])
+        }
         // Held in radians (as `$ANGBASE` in DXF); reported in degrees, like POLARANG.
         "ANGBASE" => json!(s.doc().ok()?.header.f64("ANGBASE", 0.0).to_degrees()),
         "CONSTRAINTINFER" => json!(i32::from(s.doc().ok()?.parametric.settings.infer)),
@@ -226,6 +231,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
     match n.as_str() {
         "OSMODE" => st.osmode = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(bad)? as u32 & 0x7fff,
         "OSNAPHATCH" => st.osnaphatch = as_bool(v).ok_or_else(bad)?,
+        "OSNAPZ" => st.osnapz = as_bool(v).ok_or_else(bad)?,
         "ANNOAUTOSCALE" => st.annoautoscale = as_i(v).filter(|i| (-4..=4).contains(i)).ok_or_else(bad)? > 0,
         // A scale of the drawing's list; ANNOAUTOSCALE adds it to the annotative objects.
         "CANNOSCALE" => crate::cmd::annoscale::set_current(s, v.as_str().ok_or_else(bad)?)?,
