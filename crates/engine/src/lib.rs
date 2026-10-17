@@ -348,6 +348,9 @@ pub struct Settings {
     pub snapunit: Vec2,
     /// OSNAPHATCH: object snaps find hatch objects (off by default, as in AutoCAD).
     pub osnaphatch: bool,
+    /// OSNAPZ: an object snap gives the point the current elevation (on) instead of the Z of the
+    /// object it snapped to (off, the default, as in AutoCAD).
+    pub osnapz: bool,
     /// GRIDUNIT in a drafting settings snapshot; zero components follow SNAPUNIT.
     pub gridunit: Vec2,
     /// Major grid line every N minor lines (GRIDMAJOR).
@@ -456,6 +459,7 @@ impl Default for Settings {
             snapmode: false,
             snapunit: Vec2::new(0.5, 0.5),
             osnaphatch: false,
+            osnapz: false,
             gridunit: Vec2::new(0.5, 0.5),
             gridmajor: 5,
             zoomfactor: 60,
@@ -1028,9 +1032,22 @@ impl Session {
     pub fn input_snapped(&mut self, hit: snap::SnapHit) -> Result<()> {
         let source = hit.viewport.filter(|_| self.point_mods.iter().all(|f| matches!(f, pointmod::Frame::Snap { mode } if *mode != 0)));
         let previous = std::mem::replace(&mut self.picked_viewport, source);
+        // An object snap gives the Z of what it snapped to, as in AutoCAD: a survey point's
+        // level, a contour's elevation (OSNAPZ 1 uses the current elevation instead). A point
+        // picked through a layout viewport stays at z = 0.
+        self.point_z = if hit.viewport.is_none() && hit.mode != 0 { self.snap_z(hit.point) } else { 0.0 };
         let result = self.input(hit.input());
+        self.point_z = 0.0;
         self.picked_viewport = previous;
         result
+    }
+
+    /// The Z an object snap at `p` gives a point: the Z of the object there ([`cmd::inquiry::z_at`]),
+    /// or ELEVATION with OSNAPZ on.
+    fn snap_z(&self, p: Vec2) -> f64 {
+        let elevation = self.doc().map(|d| d.header.f64("ELEVATION", 0.0)).unwrap_or(0.0);
+        let z = if self.settings.osnapz { elevation } else { cmd::inquiry::z_at(self, p) };
+        if z.is_finite() { z } else { 0.0 }
     }
 
     /// LASTPOINT with its Z (z = 0 unless the last point was typed with one, or relative to one).
