@@ -1,0 +1,194 @@
+//! A hatch made by picking an internal point keeps the arcs of its boundary (#1167): the traced
+//! outline comes from flattened curves, and its runs along a circle, an arc or a polyline's arc
+//! segment become arcs again, so AREA on the hatch equals AREA on the objects. Only edges traced
+//! from those circular pieces become arcs: a line or an ellipse near a circle stays as it is.
+
+use std::f64::consts::PI;
+
+use cadcraft_engine::Session;
+use cadcraft_engine::doc::{EntityKind, Handle, Hatch, HatchLoop};
+use cadcraft_engine::geom::Polyline;
+use serde_json::{Value, json};
+
+fn handle(v: &Value) -> String {
+    v["handle"].as_str().or_else(|| v["handles"][0].as_str()).unwrap().to_string()
+}
+
+fn hatch(s: &Session, h: &str) -> Hatch {
+    match &s.doc().unwrap().entity(Handle::parse_hex(h).unwrap()).unwrap().kind {
+        EntityKind::Hatch(x) => x.clone(),
+        k => panic!("not a hatch: {k:?}"),
+    }
+}
+
+fn pl(l: &HatchLoop) -> Polyline {
+    Polyline { vertices: l.vertices.clone(), closed: true }
+}
+
+/// Filled area, exact with bulges: outer loops minus islands.
+fn area(h: &Hatch) -> f64 {
+    h.loops.iter().map(|l| pl(l).area().abs() * if l.outer { 1.0 } else { -1.0 }).sum()
+}
+
+fn bulges(l: &HatchLoop) -> usize {
+    l.vertices.iter().filter(|v| v.bulge.abs() > 1e-9).count()
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-6 * (1.0 + b.abs())
+}
+
+fn hatch_at(s: &mut Session, points: &[[f64; 2]]) -> String {
+    handle(&s.execute("hatch", &json!({ "points": points, "pattern": "SOLID" })).unwrap())
+}
+
+#[test]
+fn a_circle_hatched_inside_is_two_half_circles_with_the_circles_area() {
+    let mut s = Session::new();
+    let c = handle(&s.execute("circle", &json!({ "center": [50, 50], "radius": 40 })).unwrap());
+    let h = {
+        let hh = hatch_at(&mut s, &[[50.0, 50.0]]);
+        hatch(&s, &hh)
+    };
+    let l = &h.loops[0];
+    assert_eq!(l.vertices.len(), 2, "{:?}", l.vertices);
+    assert!(l.vertices.iter().all(|v| (v.bulge.abs() - 1.0).abs() < 1e-12));
+    assert!(close(area(&h), PI * 1600.0), "{}", area(&h));
+    assert!(h.associative && l.sources.iter().any(|x| x.hex() == c));
+    // Typed at the command line, as in the report.
+    let mut s = Session::new();
+    s.script("CIRCLE 50,50 40\n-HATCH P SOLID\n50,50\n\n").unwrap();
+    let h = s.doc().unwrap().model.iter().find_map(|e| if let EntityKind::Hatch(x) = &e.kind { Some(x.clone()) } else { None }).unwrap();
+    assert!(close(area(&h), PI * 1600.0), "{}", area(&h));
+}
+
+#[test]
+fn a_rounded_rectangle_keeps_its_arc_as_one_polyline_or_as_lines_and_an_arc() {
+    // 100 x 50 with a semicircular right side: 5000 + π·25²/2.
+    let want = 5000.0 + PI * 625.0 / 2.0;
+    let mut s = Session::new();
+    s.execute("pline", &json!({ "vertices": [[0, 0], { "p": [100, 0], "bulge": 1.0 }, [100, 50], [0, 50]], "closed": true })).unwrap();
+    let h = {
+        let hh = hatch_at(&mut s, &[[50.0, 25.0]]);
+        hatch(&s, &hh)
+    };
+    assert_eq!(h.loops[0].vertices.len(), 4, "{:?}", h.loops[0].vertices);
+    assert_eq!(bulges(&h.loops[0]), 1);
+    assert!(close(area(&h), want), "{}", area(&h));
+    // The same shape as three lines and an arc, then moved with its objects.
+    let mut s = Session::new();
+    let mut objs = Vec::new();
+    for (a, b) in [([0, 0], [100, 0]), ([100, 50], [0, 50]), ([0, 50], [0, 0])] {
+        objs.push(handle(&s.execute("line", &json!({ "points": [a, b] })).unwrap()));
+    }
+    objs.push(handle(&s.execute("arc", &json!({ "center": [100, 25], "radius": 25, "start": -90, "end": 90 })).unwrap()));
+    let hh = hatch_at(&mut s, &[[50.0, 25.0]]);
+    let h = hatch(&s, &hh);
+    assert_eq!(bulges(&h.loops[0]), 1);
+    assert!(close(area(&h), want), "{}", area(&h));
+    objs.push(hh.clone());
+    s.execute("move", &json!({ "handles": objs, "delta": [7, 3] })).unwrap();
+    let h = hatch(&s, &hh);
+    assert_eq!(bulges(&h.loops[0]), 1, "{:?}", h.loops[0].vertices);
+    assert!(close(area(&h), want), "{}", area(&h));
+}
+
+/// A circle of radius 10 at the origin cut by a line `y = c`: the cap above it and the rest.
+fn cut_circle(c: f64) -> (Session, f64, f64) {
+    let mut s = Session::new();
+    s.execute("circle", &json!({ "center": [0, 0], "radius": 10 })).unwrap();
+    s.execute("line", &json!({ "points": [[-20, c], [20, c]] })).unwrap();
+    let theta = 2.0 * (c / 10.0).acos();
+    let cap = 50.0 * (theta - theta.sin());
+    (s, cap, PI * 100.0 - cap)
+}
+
+#[test]
+fn a_circle_cut_by_a_line_gives_the_exact_segments_even_for_a_shallow_cut() {
+    // (A cut shallower than the flattening tolerance finds no boundary, as before.)
+    for c in [3.0, 9.9, 9.99] {
+        let (mut s, cap, rest) = cut_circle(c);
+        let top = {
+            let hh = hatch_at(&mut s, &[[0.0, (c + 10.0) / 2.0]]);
+            hatch(&s, &hh)
+        };
+        let bottom = {
+            let hh = hatch_at(&mut s, &[[0.0, 0.0]]);
+            hatch(&s, &hh)
+        };
+        assert!(close(area(&top), cap), "cap at {c}: {} vs {cap}", area(&top));
+        assert!(close(area(&bottom), rest), "rest at {c}: {} vs {rest}", area(&bottom));
+        // Every point of both outlines stays on or inside the circle and on its side of the line.
+        for (h, above) in [(&top, true), (&bottom, false)] {
+            for q in pl(&h.loops[0]).tessellate(1e-4) {
+                assert!(q.len() <= 10.0 + 1e-6, "{q:?} outside the circle (cut at {c})");
+                assert!(if above { q.y >= c - 1e-6 } else { q.y <= c + 1e-6 }, "{q:?} past the line (cut at {c})");
+            }
+        }
+    }
+}
+
+#[test]
+fn an_ellipse_or_a_line_next_to_a_circle_is_not_taken_for_it() {
+    // An ellipse a hair wider than the circle crosses it four times; the region inside both is
+    // bounded by circle arcs and ellipse pieces, which stay flattened.
+    let mut s = Session::new();
+    s.execute("circle", &json!({ "center": [0, 0], "radius": 10 })).unwrap();
+    s.execute("ellipse", &json!({ "center": [0, 0], "major": [10.05, 0], "ratio": 0.99 })).unwrap();
+    let h = {
+        let hh = hatch_at(&mut s, &[[0.0, 0.0]]);
+        hatch(&s, &hh)
+    };
+    // Within the flattening tolerance of both curves, as the flattened outline was: where the
+    // two cross at a shallow angle the corner is only known to that tolerance.
+    let tol = 2.0 * (s.doc().unwrap().extents(&cadcraft_engine::doc::Space::Model).width() + 20.1) / 20000.0;
+    for q in pl(&h.loops[0]).tessellate(1e-4) {
+        assert!(q.len() <= 10.0 + tol, "{q:?} outside the circle");
+        let r = 10.05 * (q.x * q.x + q.y * q.y / (0.99 * 0.99)).sqrt() / 10.05;
+        assert!(r <= 10.05 + tol, "{q:?} outside the ellipse");
+    }
+    // A line just outside the circle, tangent-close: the hatch inside the circle is the circle.
+    let mut s = Session::new();
+    s.execute("circle", &json!({ "center": [0, 0], "radius": 10 })).unwrap();
+    s.execute("line", &json!({ "points": [[-20, 10.0001], [20, 10.0001]] })).unwrap();
+    let h = {
+        let hh = hatch_at(&mut s, &[[0.0, 0.0]]);
+        hatch(&s, &hh)
+    };
+    assert!(close(area(&h), PI * 100.0), "{}", area(&h));
+}
+
+#[test]
+fn one_hatch_inside_and_around_a_circle_fills_both() {
+    // Picked inside the circle and in the square around it: the circle is filled too.
+    let mut s = Session::new();
+    s.execute("rectang", &json!({ "p1": [0, 0], "p2": [100, 100] })).unwrap();
+    s.execute("circle", &json!({ "center": [50, 50], "radius": 20 })).unwrap();
+    let hh = hatch_at(&mut s, &[[50.0, 50.0], [5.0, 5.0]]);
+    let h = hatch(&s, &hh);
+    assert!(close(filled(&h), 10000.0), "{} from {:?}", filled(&h), h.loops.iter().map(|l| (l.outer, l.vertices.len())).collect::<Vec<_>>());
+    // The same with a square inside the square (exact on main too, so merged there).
+    let mut s = Session::new();
+    s.execute("rectang", &json!({ "p1": [0, 0], "p2": [100, 100] })).unwrap();
+    s.execute("rectang", &json!({ "p1": [40, 40], "p2": [60, 60] })).unwrap();
+    let hh = hatch_at(&mut s, &[[50.0, 50.0], [5.0, 5.0]]);
+    let h = hatch(&s, &hh);
+    assert!(close(filled(&h), 10000.0), "{}", filled(&h));
+}
+
+/// The area the even-odd fill covers: points on a fine grid inside an odd number of loops.
+fn filled(h: &Hatch) -> f64 {
+    let polys: Vec<Vec<cadcraft_engine::geom::Vec2>> = h.loops.iter().map(|l| pl(l).tessellate(1e-3)).collect();
+    let n = 400;
+    let step = 100.0 / n as f64;
+    let mut inside = 0usize;
+    for i in 0..n {
+        for j in 0..n {
+            let q = cadcraft_engine::geom::Vec2::new((i as f64 + 0.5) * step, (j as f64 + 0.5) * step);
+            if polys.iter().filter(|p| cadcraft_engine::geom::point_in_polygon(p, q)).count() % 2 == 1 {
+                inside += 1;
+            }
+        }
+    }
+    inside as f64 * step * step
+}
