@@ -1,0 +1,221 @@
+# CADCraft Japanese interface catalog — draft translation (first section, AI-assisted; needs native proofreading).
+# License: MIT OR Apache-2.0 (the repository LICENSE-MIT and LICENSE-APACHE).
+# Written from CADCraft's English strings; no proprietary translations were copied.
+# UTF-8: context<TAB>English source<TAB>Japanese translation.
+# Empty context = ordinary label; @plural = single form (other) with {n}.
+# Keep command IDs, keywords, technology/product names and user data unchanged.
+# External References palette (#525).
+	Apply	適用
+	Attach DWG...	DWGをアタッチ...
+	Bind	バインド
+	Detach	デタッチ
+	Loaded	ロード済み
+	Make it a block of this drawing, keeping its layer names	この図面のブロックにする(画層名を保持)
+	Make it a block of this drawing; its layers become NAME$0$LAYER	この図面のブロックにする(画層は NAME$0$LAYER になります)
+	No external references are attached.	外部参照はアタッチされていません。
+	Not Found	見つかりません
+	Not loaded	未ロード
+	Open	開く
+	Overlay	オーバーレイ
+	Reference Manager	参照マネージャ
+	Reference Name	参照名
+	References: {n}	参照: {n}
+	Reload	再ロード
+	Reload All	すべて再ロード
+	Saved Path	保存パス
+	Unload	アンロード
+	Unloaded	アンロード済み
+	Unreferenced	未参照
+	Unresolved	未解決
+	  Cancel  	キャンセル
+	  OK  	OK
+	 or [	 または [
+	% of all commits	全コミットに占める割合
+	* Wildcard Match	* ワイルドカード一致
+	*VARIES*	*さまざま*
+	+  |  Top  |  2D Wireframe	+  |  上面  |  2Dワイヤフレーム
+	+Bin	+バイナリ
+	+LOC	+行数
+	1 Viewport	ビューポート 1個
+	2 Points	2点
+	2 Viewports	ビューポート 2個
+	2D Solid	2Dソリッド
+	3 Points	3点
+	3 Viewports	ビューポート 3個
+	3D Face	3Dフェイス
+	3D Operations	3D操作
+	3D Polyline	3Dポリライン
+	4 Viewports	ビューポート 4個
+	< Less than	< より小さい
+	<> Not Equal	<> 等しくない
+	= Equals	= 等しい
+	> Greater than	> より大きい
+	A variable name starts with a letter and has only letters, digits and _	変数名は文字で始まり、文字・数字・_ のみ使用できます
+	About	バージョン情報
+	About CADCraft	CADCraft について
+	Absolute	絶対
+	Add Leader	引出線を追加
+	Additional angles	追加の角度
+	Align	位置合わせ
+	Align Text	文字の位置合わせ
+	Aligned	平行
+	All	すべて
+	All Annotation Objects	すべての注釈オブジェクト
+	All Used Layers	使用中のすべての画層
+	All files	すべてのファイル
+	Angle	角度
+	Angular	角度寸法
+	Annotation Visibility	注釈の表示
+	Annotation scale	注釈尺度
+	Apparent Intersection	みかけの交点
+	Append to current selection set	現在の選択セットに追加
+	Apply to:	適用先:
+	Apply true color	トゥルーカラーを適用
+	Arc	円弧
+	Arc Length	弧長
+	Area	面積
+	Arrange Panel	パネルを配置
+	Array	配列複写
+	Attach	アタッチ
+	Attribute	属性
+	Attribute Definition	属性定義
+	Attribute Display	属性の表示
+	Audit	図面チェック
+	Auto (system language)	自動(システムの言語)
+	Auto Constrain	自動拘束
+	AutoConstrain	自動拘束
+	Axis, End	軸、端点
+	Base	基準
+	Baseline	並列寸法
+	Batch Publish	一括パブリッシュ
+	Binary assets added	追加されたバイナリアセット
+	Binary assets removed	削除されたバイナリアセット
+	Bind...	バインド...
+	Blend	ブレンド
+	Block	ブロック
+	Block Attribute Manager...	ブロック属性管理...
+	Block Editor	ブロックエディタ
+	Block Reference	ブロック参照
+	Block...	ブロック...
+	Blocks	ブロック
+	Blue	青
+	Bold	太字
+	Boolean	ブール演算
+	Boundary	境界
+	Boundary...	境界...
+	Box	直方体
+	Break	部分削除
+	Break At Point	点で部分削除
+	Bring Above Objects	オブジェクトの前面へ
+	Bring Annotations to Front	注釈を最前面へ
+	Bring to Front	最前面へ
+	Bulleted list	箇条書き
+	ByBlock	ByBlock
+	ByColor	ByColor
+	ByLayer	ByLayer
+	CADCraft Help	CADCraft ヘルプ
+	Cancel	キャンセル
+	Cartesian (x, y)	直交座標 (x, y)
+	Center	中心
+	Center Line	中心線
+	Center Mark	中心マーク
+	Center X	中心 X
+	Center Y	中心 Y
+	Center Z	中心 Z
+	Center, Diameter	中心、直径
+	Center, Radius	中心、半径
+	Center, Start, Angle	中心、始点、角度
+	Center, Start, End	中心、始点、終点
+	Center, Start, Length	中心、始点、長さ
+	Chamfer	面取り
+	Change Space	空間を変更
+	Change to Current Layer	現在の画層に変更
+	Changed: {n}	変更: {n}
+	Circle	円
+	Circumference	円周
+	Clear History	履歴をクリア
+	Clear	クリア
+	Clip	クリップ
+	Clip Viewport	ビューポートをクリップ
+	Clipboard	クリップボード
+	Close	閉じる
+	Close All	すべて閉じる
+	Close All Other Drawings	ほかの図面をすべて閉じる
+	Closed	閉
+	Close Comparison	比較を閉じる
+	Coincident	一致
+	Collapse Palettes	パレットを折りたたむ
+	Collapse Tool Sets	ツールセットを折りたたむ
+	Collinear	共線
+	Color	色
+	Color 8	色 8
+	Color 9	色 9
+	Color Index	色番号
+	Color...	色...
+	Command Aliases	コマンドエイリアス
+	Command History	コマンド履歴
+	Clear Command History	コマンド履歴をクリア
+	Command Line	コマンドライン
+	Command Line History Lines	コマンドライン履歴の行数
+	Command Reference	コマンドリファレンス
+	Commits	コミット
+	Company	会社
+	Compare Drawings...	図面を比較...
+	Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust.	コンピュータ支援設計・製図:Rust で書かれた、オープンソースのクリーンルーム方式 CAD アプリケーション。
+	Concentric	同心
+	Cone	円錐
+	Constraint Bars	拘束バー
+	Constraint Settings	拘束設定
+	Construction Line	構築線
+	Contents	内容
+	Continue	続行
+	Contributors	貢献者
+	Control Vertices	制御点
+	Convert	変換
+	Copy	コピー
+	Copy Full File Path	ファイルのフルパスをコピー
+	Copy History	履歴をコピー
+	Copy Layout	レイアウトをコピー
+	Copy Nested Objects	ネストされたオブジェクトをコピー
+	Copy Selection	選択をコピー
+	Copy with Base Point	基点を指定してコピー
+	Count	数
+	Count List	カウント一覧
+	Count Table	カウント表
+	Create Block	ブロック作成
+	Creates a user parameter	ユーザパラメータを作成します
+	Ctrl+Enter to finish	Ctrl+Enter で完了
+	Current layer	現在の画層
+	Current selection	現在の選択
+	Current: {color}	現在: {color}
+	Cut	切り取り
+	Cyan	シアン
+	Cylinder	円柱
+	DWG	DWG
+	DWG Reference...	DWG参照...
+	DXF	DXF
+	Dark	ダーク
+	Data Extraction...	データ抽出...
+	Default	既定
+	Data Link...	データリンク...
+	Default Save Format	既定の保存形式
+	Default Save Version	既定の保存バージョン
+	Define Attributes	属性定義
+	Define Attributes...	属性定義...
+	Defined width	定義幅
+	Degree	次数
+	Degrees of Freedom	自由度
+	Degrees of freedom: {n}	自由度: {n}
+	Delete	削除
+	Delete Column	列を削除
+	Delete Constraints	拘束を削除
+	Delete Dimension Style	寸法スタイルを削除
+	Delete Duplicate Objects	重複オブジェクトを削除
+	Delete Layer	画層を削除
+	Delete Layer State	画層状態を削除
+	Delete Layout	レイアウトを削除
+	Delete Row	行を削除
+	Delete Text Style	文字スタイルを削除
+	Delta X	差分 X
+	Delta Y	差分 Y
+	Description	説明
