@@ -77,6 +77,19 @@ pub(crate) fn expand(s: &Session, hs: Vec<Handle>) -> Vec<Handle> {
         }
     }
 
+    // Clipped viewport <-> boundary entity pairing.
+    let mut vp_to_boundary: HashMap<Handle, Handle> = HashMap::new();
+    let mut boundary_to_vp: HashMap<Handle, Handle> = HashMap::new();
+    for e in store.iter() {
+        if let EntityKind::Viewport(ref vp) = e.kind
+            && let Some(bh) = vp.clip
+            && store.get(bh).is_some_and(|be| d.is_visible(be))
+        {
+            vp_to_boundary.insert(e.handle, bh);
+            boundary_to_vp.insert(bh, e.handle);
+        }
+    }
+
     let mut seen: HashSet<Handle> = hs.iter().copied().collect();
     let mut done_groups: HashSet<usize> = HashSet::new();
     let mut out = hs.clone();
@@ -84,6 +97,17 @@ pub(crate) fn expand(s: &Session, hs: Vec<Handle>) -> Vec<Handle> {
     while i < out.len() {
         let h = out[i];
         i += 1;
+
+        if let Some(&bh) = vp_to_boundary.get(&h)
+            && seen.insert(bh)
+        {
+            out.push(bh);
+        }
+        if let Some(&vh) = boundary_to_vp.get(&h)
+            && seen.insert(vh)
+        {
+            out.push(vh);
+        }
 
         if pick_groups {
             for gi in groups_of.get(&h).into_iter().flatten() {

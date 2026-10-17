@@ -101,9 +101,34 @@ pub fn specs() -> Vec<CommandSpec> {
 
 pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy: bool) -> Result<Vec<Handle>> {
     let d = s.doc_mut()?;
+    let mut targets = hs.to_vec();
+    if let Some(sp) = hs.first().and_then(|h| d.space_of(*h))
+        && let Some(store) = d.space(&sp)
+    {
+        for &h in hs {
+            if let Some(e) = store.get(h) {
+                if let EntityKind::Viewport(ref vp) = e.kind
+                    && let Some(bh) = vp.clip
+                    && !targets.contains(&bh)
+                    && store.get(bh).is_some()
+                {
+                    targets.push(bh);
+                } else {
+                    for se in store.iter() {
+                        if let EntityKind::Viewport(ref vp) = se.kind
+                            && vp.clip == Some(h)
+                            && !targets.contains(&se.handle)
+                        {
+                            targets.push(se.handle);
+                        }
+                    }
+                }
+            }
+        }
+    }
     let mut out = Vec::new();
     let mut old_to_new = std::collections::HashMap::new();
-    for h in hs {
+    for h in &targets {
         let Some(sp) = d.space_of(*h) else { continue };
         if copy {
             let Some(e) = d.entity(*h).map(|e| (**e).clone()) else { continue };
@@ -126,6 +151,19 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
     }
     if copy && !old_to_new.is_empty() {
         super::groups::copy_groups(d, &old_to_new);
+        for (&old_h, &new_h) in &old_to_new {
+            if let Some(e) = d.entity(old_h)
+                && let EntityKind::Viewport(ref vp) = e.kind
+                && let Some(old_clip) = vp.clip
+                && let Some(&new_clip) = old_to_new.get(&old_clip)
+            {
+                let _ = d.modify_entity(new_h, |ne| {
+                    if let EntityKind::Viewport(ref mut nvp) = ne.kind {
+                        nvp.clip = Some(new_clip);
+                    }
+                });
+            }
+        }
     }
     Ok(out)
 }
