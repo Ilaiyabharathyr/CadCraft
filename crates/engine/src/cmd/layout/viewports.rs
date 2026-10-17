@@ -963,28 +963,28 @@ pub(crate) fn update_clipped_viewports(d: &mut Drawing) {
                 && let Some(bh) = vp.clip
             {
                 match l.entities.get(bh) {
-                        Some(be) => {
-                            if let Some(poly) = cadcraft_render::clip::boundary_polygon(&be.kind) {
-                                let mut b = Bounds2::from_points(poly);
-                                let eb = cadcraft_doc::entity_bounds(d, be, 0);
-                                if !eb.is_empty() && eb.min.is_finite() && eb.max.is_finite() {
-                                    b = b.union(&eb);
-                                }
-                                if b.width() >= 1e-6 && b.height() >= 1e-6 {
-                                    let new_center = b.center().to3(0.0);
-                                    if !vp.center.xy().near(new_center.xy(), 1e-9)
-                                        || (vp.width - b.width()).abs() > 1e-9
-                                        || (vp.height - b.height()).abs() > 1e-9
-                                    {
-                                        updates.push((e.handle, Some((new_center, b.width(), b.height()))));
-                                    }
+                    Some(be) => {
+                        if let Some(poly) = cadcraft_render::clip::boundary_polygon(&be.kind) {
+                            let mut b = Bounds2::from_points(poly);
+                            let eb = cadcraft_doc::entity_bounds(d, be, 0);
+                            if !eb.is_empty() && eb.min.is_finite() && eb.max.is_finite() {
+                                b = b.union(&eb);
+                            }
+                            if b.width() >= 1e-6 && b.height() >= 1e-6 {
+                                let new_center = b.center().to3(0.0);
+                                if !vp.center.xy().near(new_center.xy(), 1e-9)
+                                    || (vp.width - b.width()).abs() > 1e-9
+                                    || (vp.height - b.height()).abs() > 1e-9
+                                {
+                                    updates.push((e.handle, Some((new_center, b.width(), b.height()))));
                                 }
                             }
                         }
-                        None => {
-                            // Boundary was deleted; revert to rectangular unclipped viewport
-                            updates.push((e.handle, None));
-                        }
+                    }
+                    None => {
+                        // Boundary was deleted; revert to rectangular unclipped viewport
+                        updates.push((e.handle, None));
+                    }
                 }
             }
         }

@@ -74,7 +74,9 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
             let snapshot = p.get("layerSnapshot").and_then(Value::as_bool).unwrap_or(s.settings.view_layer_snapshot);
             let save_ucs = p.get("saveUcs").or_else(|| p.get("ucs")).and_then(Value::as_bool).unwrap_or(s.settings.view_save_ucs);
             let ucs_name = str_param(p, "ucsName").or_else(|| str_param(p, "ucs"));
-            let bg = str_param(p, "background").map(str::trim).map(str::to_string)
+            let bg = str_param(p, "background")
+                .map(str::trim)
+                .map(str::to_string)
                 .or_else(|| (s.settings.view_background != "None").then(|| s.settings.view_background.clone()));
             save(s, name, window, snapshot, save_ucs, bg, ucs_name)
         }
@@ -106,9 +108,7 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
             }))
         }
         "orthographic" | "o" => {
-            let view_name = str_param(p, "view")
-                .or_else(|| str_param(p, "name"))
-                .unwrap_or("top");
+            let view_name = str_param(p, "view").or_else(|| str_param(p, "name")).unwrap_or("top");
             orthographic(s, view_name)
         }
         _ => Err(bad("view", "option must be save, window, restore, delete, list, settings or orthographic")),
@@ -173,9 +173,7 @@ fn save(
         }
     };
     let replaced = find(&st.doc.views, name).map(|v| v.name.clone());
-    let ucs = explicit_ucs
-        .map(|u| u.trim().to_string())
-        .or_else(|| save_ucs.then(|| "World".to_string()));
+    let ucs = explicit_ucs.map(|u| u.trim().to_string()).or_else(|| save_ucs.then(|| "World".to_string()));
     let d = s.doc_mut()?;
     let layer_state = snapshot.then(|| {
         let state = snapshot_name(name);
@@ -378,12 +376,12 @@ impl Interactive for ViewM {
                 let on = if s.settings.view_save_ucs { "Yes" } else { "No" };
                 Prompt::new("Save UCS with views?", Accept::TEXT).kw(&["Yes", "No"]).default(on)
             }
-            Stage::Background => Prompt::new("Enter background type", Accept::TEXT)
-                .kw(&["None", "Solid", "Gradient", "Image"])
-                .default(&s.settings.view_background),
-            Stage::Orthographic => Prompt::new("Enter an option", Accept::TEXT)
-                .kw(&["Top", "Bottom", "Front", "Left", "Right", "bAck"])
-                .default("Top"),
+            Stage::Background => {
+                Prompt::new("Enter background type", Accept::TEXT).kw(&["None", "Solid", "Gradient", "Image"]).default(&s.settings.view_background)
+            }
+            Stage::Orthographic => {
+                Prompt::new("Enter an option", Accept::TEXT).kw(&["Top", "Bottom", "Front", "Left", "Right", "bAck"]).default("Top")
+            }
         }
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
