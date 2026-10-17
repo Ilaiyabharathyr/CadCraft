@@ -1,10 +1,11 @@
 //! FILLET and CHAMFER with polyline segments (#466): two straight segments of one polyline
-//! (adjacent, or with one segment between them, which the corner replaces), or a straight end
-//! segment of an open polyline with a line or with another open polyline's segment, which joins
-//! the polyline.
+//! (adjacent, or with one segment between them, which the corner replaces), or a segment of a
+//! polyline with a line or with another polyline's segment, which joins the polyline. A closed
+//! polyline opens at its first vertex, as in AutoCAD; an arc segment joins at radius 0 where the
+//! other object crosses it.
 
 use cadcraft_doc::{EntityKind, Handle, LwPolyline};
-use cadcraft_geom::{Line, PolyVertex, Polyline, Segment, Vec2, arc_to_bulge, bulge_to_arc, line_line_infinite};
+use cadcraft_geom::{Circle, Line, PolyVertex, Polyline, Segment, Vec2, arc_to_bulge, bulge_to_arc, line_circle, line_line_infinite};
 
 use super::{curves, other, push_entity, set_kind};
 use crate::cmd::helpers::{arc, line};
@@ -160,15 +161,31 @@ fn line_run(ln: Line, pick: Vec2, x: Vec2) -> Run {
     Run { vs: vec![PolyVertex::new(keep)], reversed: false }
 }
 
-/// The picked straight segment of an open polyline, as a line.
-fn picked_line(pl: &LwPolyline, pick: Vec2) -> Result<(usize, Line)> {
-    if pl.closed {
-        return Err(other("A line or another polyline fillets or chamfers with a segment of an open polyline."));
+/// A closed polyline as an open one that starts and ends at its first vertex (the closing
+/// segment becomes the last): joined to another object, AutoCAD opens it there. An open one as
+/// it is.
+fn opened(pl: &LwPolyline) -> LwPolyline {
+    let mut o = pl.clone();
+    if pl.closed
+        && let Some(first) = pl.vertices.first()
+    {
+        o.vertices.push(PolyVertex { bulge: 0.0, ..*first });
+        o.closed = false;
     }
+    o
+}
+
+/// The picked segment of an open polyline.
+fn picked_seg(pl: &LwPolyline, pick: Vec2) -> Result<(usize, Segment)> {
     let segs = Polyline { vertices: pl.vertices.clone(), closed: false }.segments();
     let k = picked_segment(&segs, pick).ok_or_else(|| other("Select a polyline segment."))?;
-    match segs.get(k) {
-        Some(Segment::Line(l)) => Ok((k, *l)),
+    segs.get(k).map(|sg| (k, *sg)).ok_or_else(|| other("Select a polyline segment."))
+}
+
+/// The picked straight segment of an open polyline, as a line.
+fn picked_line(pl: &LwPolyline, pick: Vec2) -> Result<(usize, Line)> {
+    match picked_seg(pl, pick)? {
+        (k, Segment::Line(l)) => Ok((k, l)),
         _ => Err(other("Fillet and chamfer work on straight polyline segments.")),
     }
 }
@@ -198,16 +215,32 @@ fn polyline_and_other(
     chamfer: Option<ChamferDistances>,
     trim: bool,
 ) -> Result<Option<Handle>> {
-    let (k, seg) = picked_line(pl, pp)?;
-    let other_seg = match ko {
-        EntityKind::Line(l) => (None, Line::new(l.a.xy(), l.b.xy())),
-        EntityKind::LwPolyline(op) => {
+    let pl = &opened(pl);
+    let other_opened = match ko {
+        EntityKind::LwPolyline(op) => Some(opened(op)),
+        _ => None,
+    };
+    let other_seg = match (ko, &other_opened) {
+        (EntityKind::Line(l), _) => (None, Line::new(l.a.xy(), l.b.xy())),
+        (EntityKind::LwPolyline(_), Some(op)) => {
             let (ok, os) = picked_line(op, po)?;
             (Some((op, ok)), os)
         }
         _ => return Err(other("A polyline fillets or chamfers with a line, or with another segment of itself.")),
     };
     let (other_pl, oseg) = other_seg;
+    let (k, seg) = match picked_seg(pl, pp)? {
+        (k, Segment::Line(l)) => (k, l),
+        (k, Segment::Arc { .. }) => {
+            if r > 1e-12 || chamfer.is_some() {
+                return Err(other("A polyline's arc segment fillets with radius 0 only."));
+            }
+            if !trim {
+                return Ok(None);
+            }
+            return arc_segment_and_other(s, (hp, pl, k, pp), (ho, other_pl, oseg, po));
+        }
+    };
     let x = line_line_infinite(seg.a, seg.b, oseg.a, oseg.b).map(|r| r.0).ok_or_else(|| other("Lines are parallel."))?;
     let mine = pline_run(pl, k, seg, pp, x);
     let theirs = match other_pl {
@@ -240,6 +273,66 @@ fn polyline_and_other(
         vs = curves::reverse_vertices(&vs, false);
     }
     set_kind(s, hp, EntityKind::LwPolyline(LwPolyline { vertices: vs, ..pl.clone() }))?;
+    s.doc_mut()?.remove_entity(ho);
+    Ok(Some(hp))
+}
+
+/// A polyline's arc segment `k` with a line, or another polyline's straight segment, that
+/// crosses it (FILLET with radius 0): the arc is cut where they cross, nearest the picks, and
+/// keeps its picked side; the other object's picked side joins the polyline there. Neither is
+/// extended: a line that misses the arc is refused, as in AutoCAD.
+fn arc_segment_and_other(
+    s: &mut Session,
+    (hp, pl, k, pp): (Handle, &LwPolyline, usize, Vec2),
+    (ho, other_pl, oseg, po): (Handle, Option<(&LwPolyline, usize)>, Line, Vec2),
+) -> Result<Option<Handle>> {
+    let vs = &pl.vertices;
+    let (Some(start), Some(end)) = (vs.get(k).copied(), vs.get(k + 1).copied()) else { return Err(other("Select a polyline segment.")) };
+    let (ar, ccw) = bulge_to_arc(start.p, end.p, start.bulge).ok_or_else(|| other("Select a polyline segment."))?;
+    let total = (4.0 * start.bulge.atan()).abs();
+    let a0 = ar.center.angle_to(start.p);
+    // How far along the arc, from its start in its own direction, a point lies (radians).
+    let along = |q: Vec2| {
+        let d = ar.center.angle_to(q) - a0;
+        let d = if ccw { d } else { -d };
+        d.rem_euclid(std::f64::consts::TAU)
+    };
+    let eps = 1e-9 * (1.0 + total);
+    let x = line_circle(&oseg, &Circle::new(ar.center, ar.radius))
+        .into_iter()
+        .map(|h| h.0)
+        .filter(|q| q.is_finite() && along(*q) > eps && along(*q) < total - eps)
+        .min_by(|a, b| (a.dist(pp) + a.dist(po)).total_cmp(&(b.dist(pp) + b.dist(po))))
+        .ok_or_else(|| other("The line does not cross the polyline's arc segment."))?;
+    let tx = along(x);
+    let sub = |sweep: f64| arc_to_bulge(start.bulge.signum() * sweep);
+    let theirs = match other_pl {
+        Some((op, ok)) => pline_run(op, ok, oseg, po, x),
+        None => line_run(oseg, po, x),
+    };
+    let tmpl = end;
+    let plain = |v: PolyVertex| if other_pl.is_some() { v } else { PolyVertex { p: v.p, bulge: 0.0, ..tmpl } };
+    let mut out: Vec<PolyVertex> = Vec::new();
+    if along(pp).min(total) <= tx {
+        // Keep the start of the arc: the polyline up to the crossing, then the other object.
+        out.extend(vs.get(..k).unwrap_or_default().iter().copied());
+        out.push(PolyVertex { bulge: sub(tx), ..start });
+        push_point(&mut out, PolyVertex { p: x, bulge: 0.0, ..tmpl });
+        for v in curves::reverse_vertices(&theirs.vs, false) {
+            push_point(&mut out, plain(v));
+        }
+    } else {
+        // Keep the end of the arc: the other object, then the polyline from the crossing on.
+        for v in &theirs.vs {
+            push_point(&mut out, plain(*v));
+        }
+        if let Some(l) = out.last_mut() {
+            l.bulge = 0.0;
+        }
+        push_point(&mut out, PolyVertex { p: x, bulge: sub(total - tx), ..tmpl });
+        out.extend(vs.get(k + 1..).unwrap_or_default().iter().copied());
+    }
+    set_kind(s, hp, EntityKind::LwPolyline(LwPolyline { vertices: out, ..pl.clone() }))?;
     s.doc_mut()?.remove_entity(ho);
     Ok(Some(hp))
 }
