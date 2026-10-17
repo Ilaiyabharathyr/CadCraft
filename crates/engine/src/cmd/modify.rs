@@ -102,6 +102,7 @@ pub fn specs() -> Vec<CommandSpec> {
 pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy: bool) -> Result<Vec<Handle>> {
     let d = s.doc_mut()?;
     let mut out = Vec::new();
+    let mut old_to_new = std::collections::HashMap::new();
     for h in hs {
         let Some(sp) = d.space_of(*h) else { continue };
         if copy {
@@ -112,6 +113,7 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
             if let Some(st) = d.space_mut(&sp) {
                 st.push(ne);
                 out.push(nh);
+                old_to_new.insert(*h, nh);
             }
         } else {
             let locked = d.entity(*h).and_then(|e| d.layer(&e.common.layer)).is_some_and(|l| l.locked);
@@ -121,6 +123,9 @@ pub(crate) fn transform_entities(s: &mut Session, hs: &[Handle], m: &Mat3, copy:
             d.modify_entity(*h, |e| e.kind.transform(m))?;
             out.push(*h);
         }
+    }
+    if copy && !old_to_new.is_empty() {
+        super::groups::copy_groups(d, &old_to_new);
     }
     Ok(out)
 }

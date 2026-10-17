@@ -393,8 +393,10 @@ pub struct Settings {
     pub acadlspasdoc: bool,
     pub pickadd: bool,
     /// PICKSTYLE: bit 1 picks whole selectable groups ([`cmd::groups`]), bit 2 associative hatches
-    /// with their boundaries (stored, not used yet).
+    /// with their boundaries.
     pub pickstyle: u8,
+    /// GROUPDISPLAYMODE: 0 off, 1 single grip + bounding box, 2 bounding box only.
+    pub groupdisplaymode: u8,
     pub gripsize: f64,
     pub cursorsize: f64,
     /// MAXARRAY: the most objects one array command creates (items × selected objects).
@@ -478,6 +480,7 @@ impl Default for Settings {
             acadlspasdoc: false,
             pickadd: true,
             pickstyle: 1,
+            groupdisplaymode: 2,
             gripsize: 5.0,
             cursorsize: 5.0,
             maxarray: 100_000,
