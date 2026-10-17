@@ -19,6 +19,8 @@ struct W {
     pstyles: HashMap<String, String>,
     /// Upper-case layer name → its LAYER table record handle (group 341 of viewports).
     layers: HashMap<String, String>,
+    /// Upper-case UCS name → its UCS table record handle (group 345 of layouts and viewports).
+    ucss: HashMap<String, String>,
     /// Persistent reactors of boundary objects: each source object of an associative hatch →
     /// the hatches (groups `{ACAD_REACTORS 330 …}`), from [`hatch_reactors`].
     reactors: HashMap<Handle, Vec<String>>,
@@ -201,7 +203,7 @@ fn annotative_xdata(w: &mut W) {
 
 /// Override (`ACAD` DSTYLE) and associativity (`CADCRAFT` ASSOC) xdata of a dimension.
 fn dim_xdata(w: &mut W, dm: &Dimension, cx: &Ctx) {
-    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+    let mut ov = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), ucss: HashMap::new(), reactors: HashMap::new() };
     let mut sah = false;
     for (k, v) in &dm.overrides {
         let Some(field) = DimStyle::field_name(k) else { continue };
@@ -281,6 +283,11 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("CHAMFERB", 40),
     ("ANGBASE", 50),
     ("ANGDIR", 70),
+    // Model space's current UCS (each layout's is in its LAYOUT object).
+    ("UCSNAME", 2),
+    ("UCSORG", -3),
+    ("UCSXDIR", -3),
+    ("UCSYDIR", -3),
     ("PDMODE", 70),
     ("PDSIZE", 40),
     ("PLINEWID", 40),
@@ -291,6 +298,19 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("PSLTSCALE", 70),
 ];
 
+/// Model space's current UCS from the header (UCSORG, UCSXDIR, UCSYDIR, UCSNAME): unusable
+/// values are the World UCS's, so a broken one read from a file isn't written back.
+fn model_ucs(d: &Drawing) -> Ucs {
+    let h = &d.header;
+    let p = |name: &str| h.point(name).filter(|v| v.is_finite());
+    let axis = |name: &str| p(name).filter(|v| v.len() > 1e-12);
+    let (x, y) = match (axis("UCSXDIR"), axis("UCSYDIR")) {
+        (Some(x), Some(y)) if x.cross(y).len() > 1e-9 * x.len() * y.len() => (x, y),
+        _ => (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)),
+    };
+    Ucs { name: h.str("UCSNAME", ""), origin: p("UCSORG").unwrap_or(Vec3::ZERO), x_axis: x, y_axis: y }
+}
+
 fn header_vars(w: &mut W, d: &Drawing) {
     for (name, code) in HEADER_VARS {
         let Some(v) = d.header.get(name) else { continue };
@@ -299,6 +319,9 @@ fn header_vars(w: &mut W, d: &Drawing) {
                 let p = match *name {
                     "SNAPUNIT" => d.header.snap_unit().to3(0.0),
                     "GRIDUNIT" => d.header.grid_unit().to3(0.0),
+                    "UCSORG" => model_ucs(d).origin,
+                    "UCSXDIR" => model_ucs(d).x_axis,
+                    "UCSYDIR" => model_ucs(d).y_axis,
                     _ => *p,
                 };
                 w.s(9, format!("${name}"));
@@ -1518,6 +1541,16 @@ fn vport_table(w: &mut W, d: &Drawing, ext: Bounds2) {
         w.f(41, if t.aspect.is_finite() && t.aspect > 0.0 { t.aspect } else { 1.0 });
         w.f(42, 50.0);
         w.f(50, d.header.f64("SNAPANG", 0.0));
+        // The shown configuration's tiles keep model space's current UCS (UCSVP 1).
+        if name == VportConfig::ACTIVE {
+            let ucs = model_ucs(d);
+            w.i(65, 1);
+            w.p(110, ucs.origin);
+            w.p(111, ucs.x_axis);
+            w.p(112, ucs.y_axis);
+            w.i(79, 0);
+            w.f(146, 0.0);
+        }
     }
     w.s(0, "ENDTAB");
 }
@@ -1586,6 +1619,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         next: d.handseed.max(0x100).saturating_add(0x1000),
         pstyles: HashMap::new(),
         layers: HashMap::new(),
+        ucss: HashMap::new(),
         reactors: hatch_reactors(d),
     };
     // Pre-allocate handles for block records.
@@ -1748,6 +1782,9 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     xrecords.push((dxf_ext::HANDSEED_KEY, w.h(), vec![format!("{:X}", d.handseed)]));
     if let Some(name) = d.header.get("CMLEADERSTYLE").and_then(HVal::as_str) {
         xrecords.push((dxf_ext::MLEADER_STYLE_KEY, w.h(), vec![name.to_string()]));
+    }
+    if let Some(name) = d.header.get("UCSNAME").and_then(HVal::as_str).map(str::trim).filter(|n| !n.is_empty()) {
+        xrecords.push((dxf_ext::UCS_NAME_KEY, w.h(), vec![name.to_string()]));
     }
     if let Some(chunks) = dxf_ext::constraint_chunks(&d.constraints, &d.parametric) {
         xrecords.push((dxf_ext::CONSTRAINTS_KEY, w.h(), chunks));
@@ -2017,7 +2054,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
     // UCS: named user coordinate systems (DXF Reference, UCS).
     let th = table_head(&mut w, "UCS", d.ucss.len());
     for u in &d.ucss {
-        record_head(&mut w, "UCS", &th, "AcDbUCSTableRecord");
+        let h = record_head(&mut w, "UCS", &th, "AcDbUCSTableRecord");
+        w.ucss.insert(u.name.to_ascii_uppercase(), h);
         w.s(2, &u.name);
         w.i(70, 0);
         w.p(10, u.origin);
@@ -2054,7 +2092,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.i(70, 0);
         let v = serde_json::to_value(s).unwrap_or_default();
         let defaults = serde_json::to_value(DimStyle::default()).unwrap_or_default();
-        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), reactors: HashMap::new() };
+        let mut newer = W { t: Vec::new(), next: 0, pstyles: HashMap::new(), layers: HashMap::new(), ucss: HashMap::new(), reactors: HashMap::new() };
         for (field, code, kind) in dxf_ext::DIM_CODES {
             let Some(enc) = v.get(*field).and_then(|x| cx.encode(*kind, x)) else { continue };
             if !dxf_ext::NEWER_CODES.contains(code) {
@@ -2359,94 +2397,101 @@ fn tags_for(d: &Drawing, version: Version, target: Version) -> Vec<Tag> {
         w.s(3, &l.name);
         w.s(350, layout_handles.get(i).cloned().unwrap_or_default());
     }
-    let layout_obj = |w: &mut W, h: &str, name: &str, tab: i64, brh: &str, flags: i64, page: &PageSetup, view: Option<(Vec2, f64)>| {
-        // Plot scale: a standard scale when fitting or 1:1, otherwise custom (142 paper units
-        // per 143 drawing units).
-        let scale = if page.scale.is_finite() && page.scale > 0.0 { page.scale } else { 1.0 };
-        let standard = page.scale_to_fit || scale == 1.0;
-        let plot_flags = 512
-            | 32
-            | if standard { 16 } else { 0 }
-            | if page.lineweights { 128 } else { 0 }
-            | if page.center { 4 } else { 0 }
-            | if page.show_plot_styles { 2 } else { 0 };
-        let plot_type = match page.plot_area.as_str() {
-            "display" => 0,
-            "extents" => 1,
-            "limits" => 2,
-            "window" => 4,
-            _ => 5,
+    let layout_obj =
+        |w: &mut W, h: &str, name: &str, tab: i64, brh: &str, flags: i64, page: &PageSetup, view: Option<(Vec2, f64)>, ucs: Option<&Ucs>| {
+            // Plot scale: a standard scale when fitting or 1:1, otherwise custom (142 paper units
+            // per 143 drawing units).
+            let scale = if page.scale.is_finite() && page.scale > 0.0 { page.scale } else { 1.0 };
+            let standard = page.scale_to_fit || scale == 1.0;
+            let plot_flags = 512
+                | 32
+                | if standard { 16 } else { 0 }
+                | if page.lineweights { 128 } else { 0 }
+                | if page.center { 4 } else { 0 }
+                | if page.show_plot_styles { 2 } else { 0 };
+            let plot_type = match page.plot_area.as_str() {
+                "display" => 0,
+                "extents" => 1,
+                "limits" => 2,
+                "window" => 4,
+                _ => 5,
+            };
+            w.s(0, "LAYOUT");
+            w.s(5, h);
+            w.s(330, layout_dict.clone());
+            w.s(100, "AcDbPlotSettings");
+            w.s(1, "");
+            let device = page.device.trim();
+            w.s(2, if device.is_empty() || device.eq_ignore_ascii_case("None") { "none_device" } else { device });
+            w.s(4, page.paper.replace(' ', "_"));
+            w.s(6, "");
+            for (c, v) in [
+                (40, page.margins_mm[0]),
+                (41, page.margins_mm[1]),
+                (42, page.margins_mm[2]),
+                (43, page.margins_mm[3]),
+                (44, page.width_mm),
+                (45, page.height_mm),
+                (46, 0.0),
+                (47, 0.0),
+                (48, 0.0),
+                (49, 0.0),
+                (140, 0.0),
+                (141, 0.0),
+                (142, scale),
+                (143, 1.0),
+            ] {
+                w.f(c, v);
+            }
+            w.i(70, plot_flags);
+            w.i(72, 0);
+            w.i(73, i64::from(page.landscape));
+            w.i(74, plot_type);
+            w.s(7, &page.plot_style_table);
+            w.i(75, if page.scale_to_fit { 0 } else { 16 });
+            w.f(147, scale);
+            w.f(148, 0.0);
+            w.f(149, 0.0);
+            w.s(100, "AcDbLayout");
+            w.s(1, name);
+            w.i(70, flags);
+            w.i(71, tab);
+            w.p2(10, Vec2::ZERO);
+            w.p2(11, Vec2::new(12.0, 9.0));
+            w.p(12, Vec3::ZERO);
+            w.p(14, Vec3::ZERO);
+            w.p(15, Vec3::ZERO);
+            // The layout's current UCS: origin, X and Y axes, orthographic type, then (after the
+            // block record) the named UCS it is.
+            let u = ucs.filter(|u| [u.origin, u.x_axis, u.y_axis].iter().all(|v| v.is_finite()) && u.x_axis.cross(u.y_axis).len() > 1e-12);
+            w.f(146, 0.0);
+            w.p(13, u.map_or(Vec3::ZERO, |u| u.origin));
+            w.p(16, u.map_or(Vec3::new(1.0, 0.0, 0.0), |u| u.x_axis));
+            w.p(17, u.map_or(Vec3::new(0.0, 1.0, 0.0), |u| u.y_axis));
+            w.i(76, 0);
+            w.s(330, brh);
+            if let Some(h) = u.filter(|u| !u.name.trim().is_empty()).and_then(|u| w.ucss.get(&u.name.trim().to_ascii_uppercase())).cloned() {
+                w.s(345, h);
+            }
+            // The saved paper-space view (centre, height) as CADCraft xdata.
+            if let Some((c, height)) = view.filter(|(c, v)| c.x.is_finite() && c.y.is_finite() && v.is_finite()) {
+                w.s(1001, dxf_ext::APP);
+                w.s(1000, "PSVIEW");
+                w.s(1002, "{");
+                w.p(1010, c.to3(0.0));
+                w.f(1040, height);
+                w.s(1002, "}");
+            }
         };
-        w.s(0, "LAYOUT");
-        w.s(5, h);
-        w.s(330, layout_dict.clone());
-        w.s(100, "AcDbPlotSettings");
-        w.s(1, "");
-        let device = page.device.trim();
-        w.s(2, if device.is_empty() || device.eq_ignore_ascii_case("None") { "none_device" } else { device });
-        w.s(4, page.paper.replace(' ', "_"));
-        w.s(6, "");
-        for (c, v) in [
-            (40, page.margins_mm[0]),
-            (41, page.margins_mm[1]),
-            (42, page.margins_mm[2]),
-            (43, page.margins_mm[3]),
-            (44, page.width_mm),
-            (45, page.height_mm),
-            (46, 0.0),
-            (47, 0.0),
-            (48, 0.0),
-            (49, 0.0),
-            (140, 0.0),
-            (141, 0.0),
-            (142, scale),
-            (143, 1.0),
-        ] {
-            w.f(c, v);
-        }
-        w.i(70, plot_flags);
-        w.i(72, 0);
-        w.i(73, i64::from(page.landscape));
-        w.i(74, plot_type);
-        w.s(7, &page.plot_style_table);
-        w.i(75, if page.scale_to_fit { 0 } else { 16 });
-        w.f(147, scale);
-        w.f(148, 0.0);
-        w.f(149, 0.0);
-        w.s(100, "AcDbLayout");
-        w.s(1, name);
-        w.i(70, flags);
-        w.i(71, tab);
-        w.p2(10, Vec2::ZERO);
-        w.p2(11, Vec2::new(12.0, 9.0));
-        w.p(12, Vec3::ZERO);
-        w.p(14, Vec3::ZERO);
-        w.p(15, Vec3::ZERO);
-        w.f(146, 0.0);
-        w.p(13, Vec3::ZERO);
-        w.p(16, Vec3::new(1.0, 0.0, 0.0));
-        w.p(17, Vec3::new(0.0, 1.0, 0.0));
-        w.i(76, 0);
-        w.s(330, brh);
-        // The saved paper-space view (centre, height) as CADCraft xdata.
-        if let Some((c, height)) = view.filter(|(c, v)| c.x.is_finite() && c.y.is_finite() && v.is_finite()) {
-            w.s(1001, dxf_ext::APP);
-            w.s(1000, "PSVIEW");
-            w.s(1002, "{");
-            w.p(1010, c.to3(0.0));
-            w.f(1040, height);
-            w.s(1002, "}");
-        }
-    };
     // Model space has no page setup of its own: write what PLOT does for it, the drawing extents
     // fitted to the paper (plot type 1, scaled to fit). The default page's "layout" area is
     // plot type 5, "Layout information" (DXF Reference, PLOTSETTINGS group 74), which means
     // nothing for model space: another program's Plot dialog then shows no plot area or scale.
     let model_page = PageSetup { plot_area: "extents".into(), scale_to_fit: true, ..PageSetup::default() };
-    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &model_page, None);
+    layout_obj(&mut w, &model_layout, "Model", 0, &ms_br, 1, &model_page, None, None);
     for (i, (_, brh, l)) in ps_brs.iter().enumerate() {
         let h = layout_handles.get(i).cloned().unwrap_or_default();
-        layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &l.page, l.view);
+        layout_obj(&mut w, &h, &l.name, i64::from(l.tab_order.max(1)), brh, 1, &l.page, l.view, l.ucs.as_ref());
     }
     // Raster image definitions.
     w.t.extend(crate::dxf_image::objects(&cx.images, &root_dict));
@@ -2669,6 +2714,7 @@ pub fn entity_groups(d: &Drawing, e: &Entity) -> (String, Vec<Tag>) {
         next: d.handseed.max(0x100).saturating_add(0x1000),
         pstyles: HashMap::new(),
         layers: HashMap::new(),
+        ucss: HashMap::new(),
         reactors: HashMap::new(),
     };
     let cx = Ctx { target: Version::R2018, ..Ctx::default() };

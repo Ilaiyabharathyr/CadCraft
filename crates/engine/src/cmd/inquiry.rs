@@ -71,8 +71,9 @@ fn fmt_a(s: &Session, v: f64) -> String {
     format_angle(v, h.0, h.1)
 }
 
+/// DIST's report: the angle and deltas measured in the current UCS.
 fn dist_text(s: &Session, a: Vec2, b: Vec2) -> String {
-    let d = b - a;
+    let d = s.input_ucs().vec_to_ucs(b - a);
     format!(
         "Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = 0\nDelta X = {},  Delta Y = {},   Delta Z = {}",
         fmt_d(s, a.dist(b)),
@@ -89,10 +90,17 @@ fn run_dist(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "distance": a.dist(b), "angle": (b - a).angle().to_degrees(), "dx": b.x - a.x, "dy": b.y - a.y, "message": dist_text(s, a, b) }))
 }
 
+/// ID's report: the point in the current UCS (on its XY plane).
+fn id_text(s: &Session, p: Vec2) -> String {
+    let u = s.ucs_point(p);
+    format!("X = {}     Y = {}     Z = {}", fmt_d(s, u.x), fmt_d(s, u.y), fmt_d(s, 0.0))
+}
+
 fn run_id(s: &mut Session, p: &Value) -> Result<Value> {
     let a = point_req("id", p, "at")?;
     s.last_point = a;
-    Ok(json!({ "x": a.x, "y": a.y, "message": format!("X = {}     Y = {}     Z = {}", fmt_d(s, a.x), fmt_d(s, a.y), fmt_d(s, 0.0)) }))
+    let u = s.ucs_point(a);
+    Ok(json!({ "x": a.x, "y": a.y, "ucs": [u.x, u.y, 0.0], "message": id_text(s, a) }))
 }
 
 fn list_text(s: &Session, h: Handle) -> String {
@@ -600,7 +608,7 @@ impl Interactive for IdM {
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {
         if let Input::Point(p) = i {
-            let m = format!("X = {}     Y = {}     Z = {}", fmt_d(s, p.x), fmt_d(s, p.y), fmt_d(s, 0.0));
+            let m = id_text(s, p);
             s.echo(m);
         }
         Ok(Step::Done)
