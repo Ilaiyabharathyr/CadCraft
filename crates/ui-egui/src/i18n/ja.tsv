@@ -626,3 +626,314 @@
 	Paste to Original Coordinates	元の座標に貼り付け
 	Path Array	パス配列複写
 	Pattern	パターン
+	Perpendicular	垂直
+	Plot	印刷
+	Plot (click: do not plot)	印刷する(クリックで印刷しない)
+	Plot Preview	印刷プレビュー
+	Plot Window	印刷ウィンドウ
+	Plot style	印刷スタイル
+	Plot style attached to	印刷スタイルのアタッチ先
+	Plot style table	印刷スタイルテーブル
+	Plot Style...	印刷スタイル...
+	Plot Style Manager	印刷スタイル管理
+	Plot Style Manager...	印刷スタイル管理...
+	Plot Styles...	印刷スタイル...
+	Plotter Manager	プロッタ管理
+	Plotter Manager...	プロッタ管理...
+	New CTB	新規 CTB
+	New STB	新規 STB
+	New style	新規スタイル
+	Reset Panel Layout	パネルレイアウトをリセット
+	Send Hatches to Back	ハッチングを最背面へ
+	Send Under Objects	オブジェクトの背面へ
+	Text Objects Only	文字オブジェクトのみ
+	Use for this layout	このレイアウトに使用
+	Display plot styles	印刷スタイルを表示
+	No plot style tables.	印刷スタイルテーブルがありません。
+	A built-in table: editing it keeps an edited copy in the drawing.	組み込みのテーブルです。編集すると、編集後のコピーが図面内に保持されます。
+	Keep an editable copy of this table in the drawing	このテーブルの編集可能なコピーを図面内に保持
+	Layout {name}: {table}	レイアウト {name}: {table}
+	Grayscale	グレースケール
+	Screening	スクリーニング
+	Use object linetype	オブジェクトの線種を使用
+	Use object lineweight	オブジェクトの線の太さを使用
+	Remove	削除
+	Add	追加
+	Open a drawing first.	先に図面を開いてください。
+	Plot table type	印刷テーブルの種類
+	Color-dependent	色従属
+	Named	名前付き
+	Plus/minus	プラスマイナス
+	Point	点
+	Point Filters	点フィルタ
+	Point Style...	点スタイル...
+	Polar Array	円形配列複写
+	Polar Tracking	極トラッキング
+	Polar Tracking (F10)	極トラッキング (F10)
+	Polar Tracking On (F10)	極トラッキングをオン (F10)
+	Polar angle measurement	極角度の測定
+	Polar distance	極距離
+	Polar: {distance} < {angle}°	極座標: {distance} < {angle}°
+	PolarSnap	極スナップ
+	Polygon	正多角形
+	Polygonal	多角形
+	Polygonal Viewport	多角形ビューポート
+	Polyline	ポリライン
+	Polyline Edit	ポリライン編集
+	Position X	位置 X
+	Position Y	位置 Y
+	Position Z	位置 Z
+	Previous	前へ
+	Previous Change	前の変更
+	Previous Layer	前の画層
+	Primitives	プリミティブ
+	Print	印刷
+	Print...	印刷...
+	Properties	プロパティ
+	Properties Inspector	プロパティインスペクタ
+	Properties:	プロパティ:
+	Proxy	プロキシ
+	Purge	名前削除
+	Pyramid	角錐
+	Quadrant	四半円点
+	Query Entities	エンティティを照会
+	Quick	クイック
+	Quick Dimension	クイック寸法
+	Quick Properties	クイックプロパティ
+	Quick Select	クイック選択
+	Quick Select Properties	クイック選択のプロパティ
+	Quick Select...	クイック選択...
+	QuickCalc	クイック計算
+	QuickCalc Pick	クイック計算で選択
+	Quit CADCraft	CADCraft を終了
+	Radius	半径
+	Raster Image	ラスタイメージ
+	Ray	レイ
+	Read-only	読み取り専用
+	Real name	実名
+	Realtime	リアルタイム
+	Reassociate Dimensions	寸法を再関連付け
+	Recent	最近
+	Recent Commands	最近のコマンド
+	Recent Input	最近の入力
+	Recover...	修復...
+	Rectangle	長方形
+	Recalculate Table Formulas	表の計算式を再計算
+	Rectangular	矩形
+	Rectangular snap	矩形スナップ
+	Rectangular Array	矩形配列複写
+	Red	赤
+	Redo	やり直し
+	Redo (⇧⌘Z)	やり直し (⇧⌘Z)
+	Redraw	再描画
+	Regen	再作図
+	Regen All	すべて再作図
+	Region	リージョン
+	Region/Mass Properties	リージョン/マスプロパティ
+	Reinitialize	再初期化
+	Relative	相対
+	Relative to last segment	最後のセグメントからの相対
+	Remove Leader	引出線を削除
+	Remove the viewport override	ビューポートの優先設定を削除
+	Rename Dimension Style	寸法スタイルの名前変更
+	Rename Layer	画層の名前変更
+	Rename Layer State	画層状態の名前変更
+	Rename Layout	レイアウトの名前変更
+	Rename Text Style	文字スタイルの名前変更
+	Rename...	名前変更...
+	Repeat {command}	{command} を繰り返す
+	Requires a point (x,y, @dx,dy or @d<a).	点が必要です (x,y、@dx,dy、または @d<a)。
+	Reset Palettes	パレットをリセット
+	Restore	復元
+	Restore Layer State	画層状態を復元
+	Reverse	反転
+	Reverse the order	順序を逆にする
+	Revision Cloud	雲マーク
+	Revolve	回転体
+	Right	右
+	Rotate	回転
+	Rotation	回転角度
+	S	南
+	Save	保存
+	Save (⌘S)	保存 (⌘S)
+	Save As	名前を付けて保存
+	Save As...	名前を付けて保存...
+	Save Layer State	画層状態を保存
+	Save State	状態を保存
+	Scale	尺度変更
+	Search for layer	画層を検索
+	Search for parameter	パラメータを検索
+	Second and next points:	2点目以降:
+	Select	選択
+	Select 2D polyline	2Dポリラインを選択
+	Select All	すべて選択
+	Select Objects	オブジェクトを選択
+	Select Similar	同様のものを選択
+	Select a 2D polyline.	2Dポリラインを選択してください。
+	Select a block reference.	ブロック参照を選択してください。
+	Select a circle or arc.	円または円弧を選択してください。
+	Select a closed polyline	閉じたポリラインを選択
+	Select a closed polyline, circle, ellipse or closed spline.	閉じたポリライン、円、楕円、または閉じたスプラインを選択してください。
+	Select a closed polyline.	閉じたポリラインを選択してください。
+	Select a curve as the path.	パスとして曲線を選択してください。
+	Select a dimension constraint type	寸法拘束の種類を選択
+	Select a line object	線分オブジェクトを選択
+	Select a line object.	線分オブジェクトを選択してください。
+	Select a line or an arc.	線分または円弧を選択してください。
+	Select a line or polyline segment	線分またはポリラインのセグメントを選択
+	Select a line, arc or open polyline.	線分、円弧、または開いたポリラインを選択してください。
+	Select a line, arc, circle, polyline, ellipse or spline as the path.	パスとして、線分、円弧、円、ポリライン、楕円、またはスプラインを選択してください。
+	Select a line, circle, arc or polyline segment.	線分、円、円弧、またはポリラインのセグメントを選択してください。
+	Select a line.	線分を選択してください。
+	Select a polyline.	ポリラインを選択してください。
+	Select a text, mtext, attribute definition or dimension.	文字、マルチテキスト、属性定義、または寸法を選択してください。
+	Select an annotation object	注釈オブジェクトを選択
+	Select an arc or circle	円弧または円を選択
+	Select an arc.	円弧を選択してください。
+	Select an object	オブジェクトを選択
+	Select an object to change or	変更するオブジェクトを選択、または
+	Select an object to measure or	測定するオブジェクトを選択、または
+	Select an object.	オブジェクトを選択してください。
+	Select an open curve.	開いた曲線を選択してください。
+	Select an open line, arc, polyline, ellipse arc or spline.	開いた線分、円弧、ポリライン、楕円弧、またはスプラインを選択してください。
+	Select arc or circle	円弧または円を選択
+	Select arc or polyline arc segment	円弧またはポリラインの円弧セグメントを選択
+	Select arc style	円弧スタイルを選択
+	Select arc, circle, line	円弧、円、線分を選択
+	Select at least two objects to join.	結合するオブジェクトを2つ以上選択してください。
+	Select circle or arc to add center mark	中心マークを追加する円または円弧を選択
+	Select closed objects (regions, closed polylines, circles).	閉じたオブジェクト(リージョン、閉じたポリライン、円)を選択してください。
+	Select first line	1本目の線分を選択
+	Select first line or arc	1本目の線分または円弧を選択
+	Select first object	1つ目のオブジェクトを選択
+	Select first object or	1つ目のオブジェクトを選択、または
+	Select first point	1点目を選択
+	Select nested objects to copy or	コピーするネストされたオブジェクトを選択、または
+	Select object	オブジェクトを選択
+	Select object to dimension	寸法を記入するオブジェクトを選択
+	Select object to divide	分割するオブジェクトを選択
+	Select object to extend or shift-select to trim	延長するオブジェクトを選択 (Shift を押しながら選択でトリム)
+	Select object to measure	長さで分割するオブジェクトを選択
+	Select object to offset	オフセットするオブジェクトを選択
+	Select object to trim or shift-select to extend	トリムするオブジェクトを選択 (Shift を押しながら選択で延長)
+	Select objects	オブジェクトを選択
+	Select objects (crossing window first corner)	オブジェクトを選択 (交差窓の最初のコーナー)
+	Select objects to array.	配列複写するオブジェクトを選択してください。
+	Select objects to stretch by crossing-window or crossing-polygon...	交差窓または交差ポリゴンでストレッチするオブジェクトを選択...
+	Select objects:	オブジェクトを選択:
+	Add to Working Set	作業セットに追加
+	Edit Reference In-Place	参照をその場で編集
+	Save Reference Edits	参照の編集を保存
+	Working Set	作業セット
+	Xref and Block In-place Editing	外部参照とブロックのその場編集
+	Select one polyline (Multiple is available through the JSON form).	ポリラインを1つ選択してください (Multiple は JSON 形式で利用できます)。
+	Select path curve	パス曲線を選択
+	Select point or object	点またはオブジェクトを選択
+	Select polyline or	ポリラインを選択、または
+	Select second line	2本目の線分を選択
+	Select second line or shift-select to apply corner	2本目の線分を選択 (Shift を押しながら選択でコーナー適用)
+	Select second object	2つ目のオブジェクトを選択
+	Select second object or shift-select to apply corner	2つ目のオブジェクトを選択 (Shift を押しながら選択でコーナー適用)
+	Select second point	2点目を選択
+	Select spline	スプラインを選択
+	Select symmetry line	対称軸を選択
+	Select two points	2点を選択
+	Selection Cycling	選択の循環
+	Send to Back	最背面へ
+	Set Current	現在にする
+	Set Current Dimension Style	寸法スタイルを現在にする
+	Set Current Text Style	文字スタイルを現在にする
+	Set Current Viewport	ビューポートを現在にする
+	Set Layer Properties	画層プロパティを設定
+	Set Properties	プロパティを設定
+	Set Table Cell	表のセルを設定
+	Set Table Cell Style	表のセルスタイルを設定
+	Set Variable	変数を設定
+	Set View	ビューを設定
+	Share	共有
+	Show	表示
+	Show All	すべて表示
+	Show All Constraint Bars	すべての拘束バーを表示
+	Show All Dynamic Dimensions	すべてのダイナミック寸法を表示
+	Show and hide the tools of this category	このカテゴリのツールを表示/非表示
+	Show in Tool Sets	ツールセットに表示
+	Show command prompting near the crosshairs	十字カーソルの近くにコマンドプロンプトを表示
+	Show Layer List	画層リストを表示
+	Show/Hide Lineweight	線の太さの表示/非表示
+	Show/Hide Transparency	透過性の表示/非表示
+	Single Line Text	単一行テキスト
+	Single Point	単一点
+	Single...	単一...
+	Smooth	スムーズ
+	Snap	スナップ
+	Snap Mode	スナップモード
+	Snap Mode (F9)	スナップモード (F9)
+	Snap On (F9)	スナップをオン (F9)
+	Snap Overrides	スナップの優先
+	Snap X spacing	スナップ X 間隔
+	Snap and Grid	スナップとグリッド
+	Snap type	スナップの種類
+	Solid	ソリッド
+	Sort	並べ替え
+	Specify a point	点を指定
+	Specify a scale for the hatch pattern	ハッチングパターンの尺度を指定
+	Specify a second extension line origin	2つ目の寸法補助線の起点を指定
+	Specify an angle for the hatch pattern	ハッチングパターンの角度を指定
+	Specify angle end point	角度の終点を指定
+	Specify angle of dimension line	寸法線の角度を指定
+	Specify angle of dimension text	寸法文字の角度を指定
+	Specify angle start point	角度の始点を指定
+	Specify angle vertex	角度の頂点を指定
+	Specify angle vertex point	角度の頂点を指定
+	Specify arc length dimension location	弧長寸法の位置を指定
+	Specify axis endpoint of ellipse	楕円の軸の端点を指定
+	Specify base diameter	底面の直径を指定
+	Specify base point	基点を指定
+	Specify base point or	基点を指定、または
+	Specify base point or displacement (drag with the middle mouse button for realtime pan)	基点または移動距離を指定 (マウスの中ボタンのドラッグでリアルタイムに画面移動)
+	Specify base radius or	底面の半径を指定、または
+	Specify center of donut	ドーナツの中心を指定
+	Specify center of ellipse	楕円の中心を指定
+	Specify center of polygon	多角形の中心を指定
+	Specify center point for circle	円の中心点を指定
+	Specify center point of arc	円弧の中心点を指定
+	Specify center point of array	配列の中心点を指定
+	Specify center point of base	底面の中心点を指定
+	Specify corner of viewport	ビューポートのコーナーを指定
+	Specify corner of window, enter a scale factor (nX or nXP)	ウィンドウのコーナーを指定、または尺度係数 (nX または nXP) を入力
+	Specify diameter of circle	円の直径を指定
+	Specify dimension arc line location	寸法円弧線の位置を指定
+	Specify dimension line location	寸法線の位置を指定
+	Specify distance between turns	巻きの間隔を指定
+	Specify distance to other axis	もう一方の軸までの距離を指定
+	Specify end angle	終了角度を指定
+	Specify end point of arc	円弧の終点を指定
+	Specify end point of arc (hold Ctrl to switch direction)	円弧の終点を指定 (Ctrl を押すと方向を切り替え)
+	Specify ending width	終了幅を指定
+	Specify ending width for next segment	次のセグメントの終了幅を指定
+	Specify endpoint of arc	円弧の端点を指定
+	Specify endpoint of axis	軸の端点を指定
+	Specify endpoint of line	線分の端点を指定
+	Specify feature location	フィーチャの位置を指定
+	Specify fillet radius	フィレット半径を指定
+	Specify fillet radius for rectangles	長方形のフィレット半径を指定
+	Specify first angle endpoint	角度の1つ目の端点を指定
+	Specify first chamfer distance	1つ目の面取り距離を指定
+	Specify first chamfer distance for rectangles	長方形の1つ目の面取り距離を指定
+	Specify first constraint point	1つ目の拘束点を指定
+	Specify first corner	1つ目のコーナーを指定
+	Specify first corner point	1つ目のコーナー点を指定
+	Specify first destination point	1つ目の目的点を指定
+	Specify first end point of circle's diameter	円の直径の1つ目の端点を指定
+	Specify first endpoint of edge	エッジの1つ目の端点を指定
+	Specify first extension line origin	1つ目の寸法補助線の起点を指定
+	Specify first point	1点目を指定
+	Specify first point of mirror line	鏡像軸の1点目を指定
+	Specify first point on circle	円周上の1点目を指定
+	Specify first point on circle: _tan to	円周上の1点目を指定: _tan to
+	Specify first source point	1つ目の元の点を指定
+	Specify height	高さを指定
+	Specify helix height or	らせんの高さを指定、または
+	Specify included angle	挟角を指定
+	Specify insertion base point	挿入基点を指定
+	Specify insertion point	挿入点を指定
