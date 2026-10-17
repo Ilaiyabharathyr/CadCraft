@@ -161,6 +161,83 @@ fn a_rotated_linear_dimension_stores_its_projected_length() {
     assert!((m - 210.0).abs() < 1e-9, "group 42 = {m}");
 }
 
+/// Group 10 and the value of every TEXT in a DXF, in file order.
+fn text_starts(dxf: &str) -> Vec<(String, cadcraft_geom::Vec2)> {
+    let t = tags(dxf);
+    let mut out = Vec::new();
+    for (i, (c, v)) in t.iter().enumerate() {
+        if *c == 0 && v == "TEXT" {
+            let end = t[i + 1..].iter().position(|(c, _)| *c == 0).map_or(t.len(), |k| i + 1 + k);
+            let g = |code: i32| t[i + 1..end].iter().find(|(c, _)| *c == code).map(|(_, v)| v.clone());
+            let num = |code: i32| g(code).and_then(|v| v.parse::<f64>().ok()).unwrap_or(f64::NAN);
+            out.push((g(1).unwrap_or_default(), cadcraft_geom::Vec2::new(num(10), num(20))));
+        }
+    }
+    out
+}
+
+/// Justified TEXT made in CADCraft (insertion point = alignment point) is written with its
+/// baseline start in group 10, for every justification and rotated too: placed baseline-left at
+/// the written group 10, each text covers what CADCraft draws for the justified one. Left Middle
+/// and Left Bottom were kept at the alignment point, half or a third of a height off, because
+/// that point passed for AutoCAD's own (test by @lee-cyrille-maskell, from their fix for #1050).
+#[test]
+fn justified_text_made_here_writes_its_baseline_start_for_every_justification() {
+    use HAlign::{Center, Left, Right};
+    use VAlign::{Baseline, Bottom, Top};
+    let just = [
+        (Left, Baseline),
+        (Center, Baseline),
+        (Right, Baseline),
+        (HAlign::Middle, Baseline),
+        (Left, Top),
+        (Center, Top),
+        (Right, Top),
+        (Left, VAlign::Middle),
+        (Center, VAlign::Middle),
+        (Right, VAlign::Middle),
+        (Left, Bottom),
+        (Center, Bottom),
+        (Right, Bottom),
+    ];
+    let mut d = Drawing::new_imperial();
+    let mut made = Vec::new();
+    for (i, &(h, v)) in just.iter().enumerate() {
+        for rotation in [0.0, 0.5] {
+            let at = Vec3::new(100.0, 400.0 - 22.0 * i as f64, 0.0);
+            let left = h == Left && v == Baseline;
+            let t = Text {
+                insert: at,
+                align_pt: if left { None } else { Some(at) },
+                height: 5.0,
+                value: format!("{h:?} {v:?} {rotation} Hxg"),
+                rotation,
+                width_factor: 0.8,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: h,
+                valign: v,
+            };
+            d.add(&Space::Model, Common::default(), EntityKind::Text(t.clone())).unwrap();
+            made.push(t);
+        }
+    }
+    let dxf = write_dxf(&d);
+    let starts = text_starts(&dxf);
+    assert_eq!(starts.len(), made.len());
+    let near = |a: cadcraft_geom::Vec2, b: cadcraft_geom::Vec2| (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6;
+    for (t, (value, p)) in made.iter().zip(&starts) {
+        assert_eq!(&t.value, value);
+        let (_, want) = cadcraft_render::place_text_entity(&d, t, &t.value);
+        let start = Text { insert: Vec3::new(p.x, p.y, 0.0), align_pt: None, halign: Left, valign: Baseline, ..t.clone() };
+        let (_, got) = cadcraft_render::place_text_entity(&d, &start, &start.value);
+        assert!(near(got.min, want.min) && near(got.max, want.max), "{value}: drawn {want:?}, from group 10 {got:?}");
+    }
+    // Read back and saved again, group 10 stays put.
+    let back = read(dxf.as_bytes(), "t.dxf").unwrap();
+    assert_eq!(text_starts(&write_dxf(&back)), starts);
+}
+
 /// Group 42 of a dimension in the DXF AutoCAD reads from `d`'s DWG.
 fn stored_measurement(d: &Drawing) -> f64 {
     let dwg = write_with(d, "case.dwg", &SaveOptions { version: Some(Version::R2018), binary: false }).unwrap();

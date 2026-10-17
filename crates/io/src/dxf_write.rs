@@ -510,12 +510,29 @@ fn attrib_flags(a: &Attrib) -> i64 {
 ///
 /// The stored point is kept when it is close to where CADCraft's font puts the baseline start:
 /// then it is AutoCAD's own (exact for its fonts). It is replaced when it is clearly stale: the
-/// alignment point itself (text made here) or a text whose length changed since.
+/// alignment point itself (text made here) or a text whose length changed since. Close means
+/// along the baseline within a tenth of the text's width plus half its height (AutoCAD's fonts,
+/// or the ones CADCraft substitutes for them, differ most in width, and most on short texts) and
+/// across it within a fifth of its height: Left Middle and Left Bottom text made here, whose
+/// alignment point is only half or a third of a height from the baseline start, must not pass
+/// for AutoCAD's.
 fn text_insert(d: &Drawing, t: &Text) -> Vec3 {
     let computed = computed_text_insert(d, t);
-    let width = t.align_pt.map_or(0.0, |a| 2.0 * a.xy().dist(computed.xy()));
-    let tolerance = 0.1 * width + 0.5 * t.height.abs();
-    if t.insert.xy().dist(computed.xy()) <= tolerance { t.insert } else { computed }
+    if t.align_pt.is_some_and(|a| a.xy() == t.insert.xy()) {
+        return computed;
+    }
+    let h = t.height.abs();
+    let off = (t.insert.xy() - computed.xy()).rotate(-t.rotation);
+    let close = if t.value.contains('\n') {
+        // A multiline attribute's lines are placed by its embedded MTEXT: a one-line baseline
+        // start says little about them, so only the distance counts.
+        let width = t.align_pt.map_or(0.0, |a| 2.0 * a.xy().dist(computed.xy()));
+        off.len() <= 0.1 * width + 0.5 * h
+    } else {
+        let width = cadcraft_fonts::line_width(&t.value, h, t.width_factor.abs());
+        off.x.abs() <= 0.1 * width + 0.5 * h && off.y.abs() <= 0.2 * h
+    };
+    if close { t.insert } else { computed }
 }
 
 fn computed_text_insert(d: &Drawing, t: &Text) -> Vec3 {
