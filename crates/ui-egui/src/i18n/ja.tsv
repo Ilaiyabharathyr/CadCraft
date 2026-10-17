@@ -219,3 +219,410 @@
 	Delta X	差分 X
 	Delta Y	差分 Y
 	Description	説明
+	Deselect All	選択解除
+	Diameter	直径
+	Dim style	寸法スタイル
+	Dimension Break	寸法ブレーク
+	Dimension Edit	寸法編集
+	Dimension	寸法
+	Dimension Objects Only	寸法オブジェクトのみ
+	Dimension Space	寸法間隔
+	Dimension Style Override	寸法スタイルの優先
+	Dimension Style...	寸法スタイル...
+	Dimension Text Edit	寸法文字編集
+	Dimension style	寸法スタイル
+	Dimensional Constraint	寸法拘束
+	Dimensional Constraint Parameters	寸法拘束パラメータ
+	Dimensional Constraints	寸法拘束
+	Disassociate Dimensions	寸法の関連付けを解除
+	Display name	表示名
+	Distance	距離
+	Divide	等分割
+	Do not plot (click: plot)	印刷しない(クリックで印刷する)
+	Donut	ドーナツ
+	Double-click to edit the description	ダブルクリックで説明を編集
+	Down	下へ
+	Drafting	製図
+	Drafting Settings	作図設定
+	Drafting Settings...	作図設定...
+	Draw	作成
+	Draw Order	表示順序
+	Drawing (DWG)	図面 (DWG)
+	Drawing (DXF)	図面 (DXF)
+	Drawing Limits	図面範囲
+	Drawing Template (DWT)	図面テンプレート (DWT)
+	Drawing Utilities	図面ユーティリティ
+	Drawings (DWG, DXF)	図面 (DWG, DXF)
+	SVG drawings (SVG, SVGZ)	SVG図面 (SVG, SVGZ)
+	Dynamic	ダイナミック
+	Dynamic Dimensions	ダイナミック寸法
+	Dynamic Input	ダイナミック入力
+	Dynamic Input (F12)	ダイナミック入力 (F12)
+	E	東
+	Edit	編集
+	Edit Attributes...	属性を編集...
+	Edit Text...	文字を編集...
+	Edit Table Cell	表のセルを編集
+	Elevation	高度
+	Ellipse	楕円
+	Elliptical Arc	楕円弧
+	Enable Dynamic Input (F12)	ダイナミック入力を有効にする (F12)
+	End Object Isolation	オブジェクトの分離を終了
+	End Width	終了幅
+	End X	終点 X
+	End Y	終点 Y
+	End angle	終了角度
+	Endpoint	端点
+	Enter	Enter
+	Enter Top, Zero or Bottom.	Top、Zero、Bottom のいずれかを入力してください。
+	Enter a fit data option	フィットデータのオプションを入力
+	Enter a pattern name	パターン名を入力
+	Enter a vertex editing option	頂点編集のオプションを入力
+	Enter an option	オプションを入力
+	Enter angle of xline	構築線の角度を入力
+	Enter angle of xline (0) or	構築線の角度 (0) を入力、または
+	Enter area of rectangle in current units	現在の単位で長方形の面積を入力
+	Enter attribute prompt	属性のプロンプトを入力
+	Enter attribute tag name	属性のタグ名を入力
+	Enter attribute value	属性値を入力
+	Enter block name	ブロック名を入力
+	Enter constraint type	拘束の種類を入力
+	Enter continuity	連続性を入力
+	Enter default attribute value	属性の既定値を入力
+	Enter degree of spline	スプラインの次数を入力
+	Enter delta angle	角度の増分を入力
+	Enter delta length or	長さの増分を入力、または
+	Enter dimension text	寸法文字を入力
+	Enter dimension text (<> = measurement)	寸法文字を入力 (<> = 測定値)
+	Enter dimension value or [name=expression]	寸法値を入力、または [name=expression]
+	Enter dimension variable name to override	上書きする寸法変数名を入力
+	Enter justification type	位置合わせの種類を入力
+	Enter leader text	引出線の文字を入力
+	Enter mline scale	複線の尺度を入力
+	Enter mode	モードを入力
+	Enter name of block to insert	挿入するブロック名を入力
+	Enter new text	新しい文字を入力
+	Enter next point	次の点を入力
+	Enter number of columns	列数を入力
+	Enter number of data rows	データ行数を入力
+	Enter number of items	要素数を入力
+	Enter number of items along path	パスに沿った要素数を入力
+	Enter number of sides	辺の数を入力
+	Enter number of turns	巻き数を入力
+	Enter percentage length	長さのパーセントを入力
+	Enter rectangle length	長方形の長さを入力
+	Enter rectangle width	長方形の幅を入力
+	Enter scale factor	尺度係数を入力
+	Enter text	文字を入力
+	Enter text (use \P for new paragraphs)	文字を入力 (\P で改段落)
+	Enter the number of segments	分割数を入力
+	Enter twist direction of helix	らせんの巻き方向を入力
+	Entire drawing	図面全体
+	Equal	等しい
+	Erase	削除
+	Evaluate	評価
+	Evaluate LISP	LISP を評価
+	Exclude from new selection set	新しい選択セットから除外
+	Explode	分解
+	Export	エクスポート
+	Export Table	表をエクスポート
+	Export to PDF...	PDF にエクスポート...
+	Expression	式
+	Extend	延長
+	Extension	延長
+	Extents	範囲
+	External Reference	外部参照
+	External References	外部参照
+	Extrude	押し出し
+	File	ファイル
+	File Tab	ファイルタブ
+	Fillet	フィレット
+	Filter	フィルタ
+	Filters	フィルタ
+	Find and Replace	検索と置換
+	Find...	検索...
+	First	最初
+	First commit	最初のコミット
+	Fit Points	フィット点
+	Fix	固定
+	Flatten Objects	オブジェクトのフラット化
+	Format	書式
+	Freehand	フリーハンド
+	Freeze	フリーズ
+	Freeze Layer	画層をフリーズ
+	Freeze in new viewports	新しいビューポートでフリーズ
+	Freeze/Thaw	フリーズ/フリーズ解除
+	Freeze/Thaw in all viewports	すべてのビューポートでフリーズ/フリーズ解除
+	Freeze/Thaw in the current viewport	現在のビューポートでフリーズ/フリーズ解除
+	From	基点
+	From Template...	テンプレートから...
+	General	一般
+	Geometric Center	図心
+	Geometric Constraint	幾何拘束
+	Geometric Constraints	幾何拘束
+	Geometry	ジオメトリ
+	Get from the Drawing	図面から取得
+	Get Variable	変数を取得
+	Get View	ビューを取得
+	Global	グローバル
+	Global width	全体の幅
+	Grab bag	その他
+	Gradient	グラデーション
+	Gradient...	グラデーション...
+	Green	緑
+	Grid (F7)	グリッド (F7)
+	Grid Display	グリッド表示
+	Grid On (F7)	グリッドをオン (F7)
+	Grid snap	グリッドスナップ
+	Grid spacing	グリッド間隔
+	Grip Edit	グリップ編集
+	Grip Mirror	グリップ鏡像
+	Grip Option	グリップオプション
+	Grip Rotate	グリップ回転
+	Grip Scale	グリップ尺度変更
+	Grip Stretch	グリップストレッチ
+	Group	グループ化
+	Group Edit	グループ編集
+	Group Options	グループオプション
+	Group Selection	グループ選択
+	Hatch	ハッチング
+	Hatch Edit	ハッチング編集
+	Hatch Patterns	ハッチングパターン
+	Hatch...	ハッチング...
+	Height	高さ
+	Height: {height}	高さ: {height}
+	Helix	らせん
+	Help	ヘルプ
+	Hide All	すべて非表示
+	Hide All Constraint Bars	すべての拘束バーを非表示
+	Hide All Dynamic Dimensions	すべてのダイナミック寸法を非表示
+	Hide Layer List	画層リストを非表示
+	Hide Objects	オブジェクトを非表示
+	Hide Palettes	パレットを非表示
+	History	履歴
+	Home	ホーム
+	Horizontal	水平
+	HorizontalDistance	水平距離
+	How to apply:	適用方法:
+	ID Point	点座標
+	Import	インポート
+	Align Multileaders	マルチ引出線を整列
+	Collect	集約
+	Collect Multileaders	マルチ引出線を集約
+	Edit Multileader	マルチ引出線を編集
+	In	拡大
+	In-window Menu Bar	ウィンドウ内メニューバー
+	Include in new selection set	新しい選択セットに含める
+	Increment angle	角度の増分
+	Index Color	インデックスカラー
+	Index color: {index}	インデックスカラー: {index}
+	Infer Constraints	拘束の推定
+	Inquiry	照会
+	Insert	挿入
+	Insert Block	ブロックを挿入
+	Insert Column	列を挿入
+	Insert Row	行を挿入
+	Insert tab	タブを挿入
+	Insert this block	このブロックを挿入
+	Insert Table Formula	表に計算式を挿入
+	Insertion	挿入基点
+	Insertion X	挿入基点 X
+	Insertion Y	挿入基点 Y
+	Insertion Z	挿入基点 Z
+	Inspect Constraints	拘束を確認
+	Inspect Drawing	図面を確認
+	Inspection	検査
+	Interface Language	インターフェースの言語
+	Interface Theme	インターフェースのテーマ
+	Intersect	交差
+	Intersection	交点
+	Isolate	分離
+	Isolate Layer	画層を分離
+	Isolate Objects	オブジェクトを分離
+	Isometric Drafting	アイソメ作図
+	Jogged	ジョグ
+	Jogged Linear	ジョグ線形
+	Join	結合
+	Join the ArtCraft Discord…	ArtCraft の Discord に参加…
+	Join us on Discord	Discord に参加しよう
+	Isometric Plane	アイソメ平面
+	Isometric snap	アイソメスナップ
+	Language	言語
+	Last	最後
+	Last commit	最後のコミット
+	Layer	画層
+	Layer Delete	画層削除
+	Layer Match	画層合わせ
+	Layer Merge	画層マージ
+	Layer Off	画層オフ
+	Layer Properties	画層プロパティ
+	Layer Properties Manager	画層プロパティ管理
+	Layer Properties Manager — current viewport	画層プロパティ管理 — 現在のビューポート
+	Layer State	画層状態
+	Layer States Manager...	画層状態管理...
+	Layer Tools	画層ツール
+	Layer contains objects (double-click to make current)	画層にオブジェクトがあります (ダブルクリックで現在の画層にする)
+	Layer is empty (double-click to make current)	画層は空です (ダブルクリックで現在の画層にする)
+	Layers	画層
+	Layers Palette	画層パレット
+	Hide Palette	パレットを非表示
+	Layers displayed: {shown} of {total}.   Current layer: {layer}	表示中の画層: {shown} / {total}。   現在の画層: {layer}
+	Layout	レイアウト
+	Layout list	レイアウト一覧
+	Leader	引出線
+	Leaders Only	引出線のみ
+	Left	左
+	Length	長さ
+	Length X	長さ X
+	Length Y	長さ Y
+	Lengthen	長さ変更
+	Light	ライト
+	Line	線分
+	Line delta	行数の増減
+	Linear	長さ寸法
+	Lines +/−	行 +/−
+	Lines added	追加された行
+	Lines deleted	削除された行
+	Lines of Command History	コマンド履歴の行数
+	Linetype	線種
+	Linetype Scale	線種尺度
+	Linetype scale	線種尺度
+	Ltscale	線種尺度
+	Linetype...	線種...
+	Lineweight	線の太さ
+	Lineweight...	線の太さ...
+	List	リスト
+	List Blocks	ブロック一覧
+	List Dimension Styles	寸法スタイル一覧
+	List Groups	グループ一覧
+	List Layer States	画層状態一覧
+	List Layouts	レイアウト一覧
+	List System Variables	システム変数一覧
+	List Text Styles	文字スタイル一覧
+	Load all	すべてロード
+	Load...	ロード...
+	Load Application...	アプリケーションをロード...
+	Loaded linetypes	ロード済みの線種
+	Lock	ロック
+	Lock Layer	画層をロック
+	Lock viewport	ビューポートをロック
+	Lock/Unlock	ロック/ロック解除
+	Loft	ロフト
+	MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.	MIT OR Apache-2.0。Autodesk, Inc. とは無関係です。
+	MODEL	モデル
+	MText	マルチテキスト
+	Magenta	マゼンタ
+	Major line every	主線の間隔
+	Make Current	現在にする
+	Make Object's Layer Current	オブジェクトの画層を現在にする
+	Make...	作成...
+	Match Layer	画層合わせ
+	Match Properties	プロパティコピー
+	Measure	長さ分割
+	Measure Distance	距離を測定
+	Measure Geometry	ジオメトリを測定
+	Merge Cells	セルを結合
+	Merged PRs	マージされたPR
+	Mid Between 2 Points	2点間の中点
+	Midpoint	中点
+	Mirror	鏡像
+	Model	モデル
+	Model Space (in viewport)	モデル空間 (ビューポート内)
+	Modeling	モデリング
+	Models	モデル
+	Modify	修正
+	Move	移動
+	Multileader	マルチ引出線
+	Multileader Style...	マルチ引出線スタイル...
+	Multileader style	マルチ引出線スタイル
+	Multiline	複線
+	Multiline Text	マルチテキスト
+	Multiline Text...	マルチテキスト...
+	Multiple	複数
+	Multiple Point	複数点
+	My	自分の
+	My properties: not available yet	自分のプロパティ: まだ利用できません
+	N	北
+	Name	名前
+	Name (A–Z)	名前 (A–Z)
+	Named Views...	名前の付いたビュー...
+	Nearest	近接点
+	New	新規
+	New (metric)	新規 (メートル法)
+	New Drawing	新規図面
+	New Drawing (⌘N)	新規図面 (⌘N)
+	New Drawing...	新規図面...
+	New Layer	新規画層
+	New Layout	新規レイアウト
+	New VP Freeze	新規VPフリーズ
+	New Viewports...	新規ビューポート...
+	New from Template...	テンプレートから新規作成...
+	New layout	新規レイアウト
+	New state name	新しい状態名
+	Next Change	次の変更
+	No	いいえ
+	No blocks defined in this drawing.	この図面にはブロックが定義されていません。
+	No contributor data was built into this copy.	このビルドには貢献者データが含まれていません。
+	No model credits were built into this copy.	このビルドにはモデルのクレジットが含まれていません。
+	No saved layer states	保存された画層状態はありません
+	No selection	選択なし
+	Node	ノード
+	None	なし
+	Not available	利用できません
+	Not available yet	まだ利用できません
+	Numbered list	番号付きリスト
+	OK	OK
+	Object	オブジェクト
+	Object Snap	オブジェクトスナップ
+	Object Snap (F3)	オブジェクトスナップ (F3)
+	Object Snap On (F3)	オブジェクトスナップをオン (F3)
+	Object Snap Tracking	オブジェクトスナップトラッキング
+	Object Snap Tracking (F11)	オブジェクトスナップトラッキング (F11)
+	Object Snap Tracking Settings	オブジェクトスナップトラッキング設定
+	Object type:	オブジェクトの種類:
+	Oblique	傾斜
+	Off	オフ
+	Offset	オフセット
+	On	オン
+	On/Off	オン/オフ
+	One of the Crafting Apps by the ArtCraft team and community.	ArtCraft のチームとコミュニティによる Crafting Apps のひとつです。
+	Only in this drawing: {n}	この図面のみ: {n}
+	Only in {name}: {n}	{name} のみ: {n}
+	Open (⌘O)	開く (⌘O)
+	Open Sample Drawing	サンプル図面を開く
+	Open sample drawing	サンプル図面を開く
+	Open Xref	外部参照を開く
+	Open...	開く...
+	Open Recent	最近使ったファイルを開く
+	Clear Recent Files	最近使ったファイルをクリア
+	Operator:	演算子:
+	Orbit	オービット
+	Ordinate	座標寸法
+	Ortho (F8)	直交モード (F8)
+	Ortho Mode	直交モード
+	Ortho Mode (F8)	直交モード (F8)
+	Osnap Settings...	オブジェクトスナップ設定...
+	Out	縮小
+	Over-constrained	過剰拘束
+	Override	上書き
+	PAPER	ペーパー
+	Percent	パーセント
+	Polar (distance < angle)	極座標 (距離 < 角度)
+	PRs	PR
+	Page Setup Manager	ページ設定管理
+	Page Setup Manager...	ページ設定管理...
+	Pan	画面移動
+	Pan Down	下へ画面移動
+	Pan Left	左へ画面移動
+	Pan Right	右へ画面移動
+	Pan Up	上へ画面移動
+	Paper Space	ペーパー空間
+	Parallel	平行
+	Parameters Manager	パラメータ管理
+	Parametric	パラメトリック
+	Paste	貼り付け
+	Paste as Block	ブロックとして貼り付け
+	Paste to Command Line	コマンドラインに貼り付け
+	Paste to Original Coordinates	元の座標に貼り付け
+	Path Array	パス配列複写
+	Pattern	パターン
