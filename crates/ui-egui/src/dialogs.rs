@@ -421,29 +421,43 @@ fn blocks(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     egui::Window::new(crate::tl!("Blocks")).id(egui::Id::new("Blocks")).open(open).default_size(vec2(320.0, 360.0)).show(ctx, |ui| {
         if names.is_empty() {
             ui.label(crate::tl!("No blocks defined in this drawing."));
+            return;
         }
-        // At most one preview is built per frame, so a large library opens at once.
-        let mut build = true;
-        for n in &names {
-            let list = if block_preview_ready(app, n) || std::mem::take(&mut build) {
-                block_preview(app, n)
-            } else {
-                ui.ctx().request_repaint();
-                None
-            };
-            let note = if list.is_some() { crate::tl!("Empty") } else { "" };
-            let row = ui
-                .horizontal(|ui| {
-                    crate::bedit::draw_preview(ui, list.as_deref(), note, THUMB);
-                    ui.label(n);
-                })
-                .response
-                .interact(egui::Sense::click())
-                .on_hover_text(crate::tl!("Insert this block"));
-            if row.clicked() {
-                pick = Some(n.clone());
+        let id = egui::Id::new("blockfilter");
+        let mut filter = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.label(crate::tl!("Filter"));
+            ui.text_edit_singleline(&mut filter);
+        });
+        ui.data_mut(|d| d.insert_temp(id, filter.clone()));
+        let f = filter.to_lowercase();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            // At most one visible preview is built per frame, so a large library opens at once.
+            let mut build = true;
+            for n in names.iter().filter(|n| f.is_empty() || n.to_lowercase().contains(&f)) {
+                let row = ui
+                    .horizontal(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(THUMB, egui::Sense::hover());
+                        if ui.is_rect_visible(rect) {
+                            let list = if block_preview_ready(app, n) || std::mem::take(&mut build) {
+                                block_preview(app, n)
+                            } else {
+                                ui.ctx().request_repaint();
+                                None
+                            };
+                            let note = if list.is_some() { crate::tl!("Empty") } else { "" };
+                            crate::bedit::draw_preview_at(ui, rect, list.as_deref(), note);
+                        }
+                        ui.label(n);
+                    })
+                    .response
+                    .interact(egui::Sense::click())
+                    .on_hover_text(crate::tl!("Insert this block"));
+                if row.clicked() {
+                    pick = Some(n.clone());
+                }
             }
-        }
+        });
     });
     if let Some(n) = pick {
         insert_block(app, &n);

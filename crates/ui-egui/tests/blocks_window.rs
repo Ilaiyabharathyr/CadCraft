@@ -45,3 +45,31 @@ fn a_long_block_list_scrolls_to_its_last_block() {
     let shown = drawn.is_some_and(|(_, at, clip)| window.contains_rect(*clip) && clip.contains_rect(*at));
     assert!(shown, "{last} is not drawn inside the Blocks window {window:?}: {drawn:?}");
 }
+
+#[test]
+fn filtering_blocks_shows_only_matching_blocks() {
+    let mut app = CadApp::new(Session::new(), Services::default());
+    for name in ["Valve_DN50", "Pump_Centrifugal", "Damper_Fire"] {
+        let c = app.session.execute("circle", &json!({"center": [0, 0], "radius": 1})).unwrap();
+        let h = c["handle"].as_str().unwrap().to_string();
+        app.session.execute("block", &json!({"name": name, "base": [0, 0], "handles": [h], "keep": "delete"})).unwrap();
+    }
+    app.ui.dialog = Some("blocks".into());
+    let mut h = Harness::builder().with_size(vec2(1200.0, 760.0)).build_ui_state(
+        |ui, app: &mut CadApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    assert!(h.query_by_label("Valve_DN50").is_some());
+    assert!(h.query_by_label("Pump_Centrifugal").is_some());
+
+    let filter_id = egui::Id::new("blockfilter");
+    h.ctx.data_mut(|d| d.insert_temp(filter_id, "pump".to_string()));
+    h.run_steps(2);
+    assert!(h.query_by_label("Pump_Centrifugal").is_some());
+    assert!(h.query_by_label("Valve_DN50").is_none());
+    assert!(h.query_by_label("Damper_Fire").is_none());
+}

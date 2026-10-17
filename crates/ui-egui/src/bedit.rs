@@ -131,14 +131,25 @@ pub(crate) fn build_preview(d: &Drawing, name: &str, px: f64) -> Option<DisplayL
         return Some(rough);
     }
     let size = rough.bounds.width().max(rough.bounds.height());
-    let opts = cadcraft_render::Options { tolerance: (size / (2.0 * px.max(1.0))).max(1e-9), ..Default::default() };
+    let px = px.max(1.0);
+    let opts = cadcraft_render::Options { tolerance: (size / (2.0 * px)).max(1e-9), min_dash: (2.0 * size / px).max(1e-9), ..Default::default() };
     Some(cadcraft_render::build_entities(d, entities.iter().map(|e| e.as_ref()), &opts))
 }
 
 /// Draw `list` fitted into a box of `size`, or `note` when there is nothing to draw.
 pub(crate) fn draw_preview(ui: &mut egui::Ui, list: Option<&DisplayList>, note: &str, size: egui::Vec2) {
-    let t = Tokens::get();
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    draw_preview_at(ui, rect, list, note);
+}
+
+/// Draw `list` fitted into `rect`, or `note` when there is nothing to draw. Skips painting when
+/// `rect` is clipped out of view.
+pub(crate) fn draw_preview_at(ui: &mut egui::Ui, rect: egui::Rect, list: Option<&DisplayList>, note: &str) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let t = Tokens::get();
+    let size = rect.size();
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 4.0, t.canvas);
     p.rect_stroke(rect, 4.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
