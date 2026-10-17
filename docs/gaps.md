@@ -1,6 +1,6 @@
 # Where CADCraft falls short of AutoCAD
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (clipped viewport coupling landed: F15 narrowed; groups: F16 narrowed) · **Target:** Autodesk AutoCAD 2027
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (VIEW Orthographic, UCS and background settings landed: U11 narrowed; F15, F16 narrowed) · **Target:** Autodesk AutoCAD 2027
 
 Every known shortfall, one row each, ranked within each section by user impact. This is the work
 list: agents pick from here (top of a section first), and remove or update a row in the same PR
@@ -58,7 +58,7 @@ Detail and evidence: [ui-parity.md](ui-parity.md).
 | U6 | Selection: lasso; selection cycling (a list of overlapping objects, SELECTIONCYCLING); the CLass keyword; isolation saved with the drawing (OBJECTISOLATIONMODE 1) and the status-bar isolate button. Press-drag windows (#63), the W, C, F, WP and CP keywords (#226), BOX, AUto, SIngle, Multiple, Group, Add, Remove and Undo, SELECTSIMILAR, and ISOLATEOBJECTS/HIDEOBJECTS/UNISOLATEOBJECTS (#428) landed | Medium | 3–5 |
 | U7 | Right-click menus: no in-place layout tab rename or Move or Copy dialog, no Select All Layouts, no Paste to command line; palette menus are on the Layers rows and the Properties background only. The command menu (held right-click: Enter, Cancel, Recent Input, options, Snap Overrides, Pan/Zoom), the selection menu with object edits, command line, drawing tab, layout tab and palette menus landed (#512) | Low | 1–2 |
 | U10 | SETVAR covers about 150 of ~1,000 variables (UNDO options, MREDO and UNDOCTL, and header variables such as CIRCLERAD, OFFSETDIST, POLYSIDES, HPNAME and the dimension variables in SETVAR ? landed, #461; typing a bare variable name as a command runs SETVAR on it) | Low-medium | 3–5 |
-| U11 | MVIEW Restore (a saved viewport configuration into a layout); VIEW Orthographic, UCS and background settings; view twist is kept but not shown (Zoom Realtime and Dynamic, ZOOMFACTOR, named views (VIEW) and tiled model viewports with saved configurations (VPORTS) landed in #463) | Low | 1–2 |
+| U11 | View twist is kept in files and DXF but not shown on 2D display (MVIEW Restore, VIEW Orthographic, UCS and background settings, Zoom Realtime and Dynamic, ZOOMFACTOR, named views (VIEW) and tiled model viewports with saved configurations (VPORTS) landed in #463) | Low | 0–1 |
 | U12 | Workspaces, navigation bar, CUI customisation, alias editor, ViewCube drag (#7) | Low-medium | 15–25 |
 | U13 | `.dxf` from Finder fails to open on macOS (#158) (window controls fixed, #161) | Medium | 1–2 |
 
@@ -147,7 +147,7 @@ Detail: [localization-parity.md](localization-parity.md).
 |---|---|---|
 | 2026-10-12 | minor | Object transparency (entity, ByLayer, ByBlock) is drawn: on screen (TRANSPARENCYDISPLAY, on by default), in PNG/SVG exports, and in plots when the page setup's "Plot transparency" is on (PDF alpha, PNG blending, SVG opacity; PLOTTRANSPARENCYOVERRIDE): F14 narrowed |
 | 2026-10-12 | minor | Hatch and Gradient dialog (HATCH, GRADIENT; HPDLGMODE) and Hatch Edit dialog (HATCHEDIT, right-click, double-click a hatch): F13 narrowed to Preview, Inherit Properties and boundary add/remove in edit mode |
-| 2026-10-17 | minor | Clipped viewports and boundary entities coupled during transforms/edits (F15); PICKSTYLE associative hatch selection and group copy/display modes landed (F16) |
+| 2026-10-17 | minor | VIEW Orthographic, UCS and background settings landed (U11 narrowed); clipped viewports and boundary entities coupled during transforms/edits (F15); PICKSTYLE associative hatch selection and group copy/display modes landed (F16) |
 | 2026-10-12 | minor | A bare system variable name typed at the command line (ORTHOMODE, GRIDMODE…) runs SETVAR on that variable, as in AutoCAD; U10 narrowed |
 | 2026-10-13 | minor | STRETCH takes crossing and window polygons (CP, WP), BOX and a fence (F), typed and as JSON (`polygon`, `fence`): F1 narrowed |
 | 2026-10-12 | minor | Property-based and hostile-input tests for geometry numerics landed (deterministic xorshift generator, no new dependency; known answers at 1e6–1e7 coordinates): S6 removed |

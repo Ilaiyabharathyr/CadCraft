@@ -356,6 +356,10 @@ pub struct Settings {
     pub zoomfactor: u32,
     /// -VIEW sEttings > Layer snapshot: named views save the layer settings with them.
     pub view_layer_snapshot: bool,
+    /// -VIEW sEttings > Ucs: named views save the UCS with them.
+    pub view_save_ucs: bool,
+    /// -VIEW sEttings > Background: default background mode ("None", "Solid", "Gradient", "Image").
+    pub view_background: String,
     pub dynmode: bool,
     /// DYNDIGRIP: which dimensions grip dimensional input shows while a grip is stretched (bits:
     /// 1 resulting length, 2 length change, 4 absolute angle, 8 angle change, 16 radius); read
@@ -462,6 +466,8 @@ impl Default for Settings {
             gridmajor: 5,
             zoomfactor: 60,
             view_layer_snapshot: true,
+            view_save_ucs: true,
+            view_background: "None".to_string(),
             dynmode: true,
             dyndigrip: 31,
             dyndivis: 1,
