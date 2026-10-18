@@ -1,0 +1,127 @@
+name: CLI binaries
+
+# Builds the headless `cadcraft-cli` (the program behind the Claude plugin's MCP server) for
+# Linux, macOS and Windows and attaches it to a GitHub release, so plugin users can download a
+# ready-made binary instead of installing Rust and compiling.
+#
+# Run it by pushing a tag:      git tag cli-v0.7.0 && git push origin cli-v0.7.0
+# or from the Actions tab:      "CLI binaries" -> Run workflow -> enter the tag.
+#
+# Independent of release.yml (the desktop-app release): different trigger, no secrets needed.
+
+on:
+  push:
+    tags: ["cli-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or update (must look like cli-v0.7.0)"
+        required: true
+        default: "cli-v0.7.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-binaries-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux is built on 22.04 so the binary runs on distributions with glibc 2.35 or newer.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04, exe: "", smoke: true }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm, exe: "", smoke: true }
+          - { target: aarch64-apple-darwin, os: macos-14, exe: "", smoke: true }
+          # Cross-compiled from an Apple Silicon runner, so it is built but not run here.
+          - { target: x86_64-apple-darwin, os: macos-14, exe: "", smoke: false }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, exe: ".exe", smoke: true }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
+          rustup default stable
+          rustc --version
+
+      - name: Build cadcraft-cli
+        run: cargo build --release --locked -p cadcraft-cli --target "${{ matrix.target }}"
+
+      - name: Smoke test
+        if: matrix.smoke
+        run: |
+          bin="target/${{ matrix.target }}/release/cadcraft-cli${{ matrix.exe }}"
+          "$bin" --version
+          # Draw a circle headlessly and export a PNG.
+          "$bin" run --sample --script $'CIRCLE 22,3 1\n' --export smoke.png
+          test -s smoke.png
+          # The MCP server must answer the protocol handshake.
+          reply="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' | "$bin" mcp | head -n 1)"
+          echo "$reply" | grep -q '"result"'
+
+      - name: Package
+        run: |
+          name="cadcraft-cli-${{ matrix.target }}"
+          mkdir stage
+          cp "target/${{ matrix.target }}/release/cadcraft-cli${{ matrix.exe }}" stage/
+          cp NOTICE LICENSE-MIT LICENSE-APACHE stage/
+          tar -czf "$name.tar.gz" -C stage "cadcraft-cli${{ matrix.exe }}" NOTICE LICENSE-MIT LICENSE-APACHE
+          ls -l "$name.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: cadcraft-cli-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Check the tag name
+        run: |
+          case "$TAG" in
+            cli-v[0-9]*) ;;
+            *) echo "Tag '$TAG' must look like cli-v0.7.0" >&2; exit 1 ;;
+          esac
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum -- *.tar.gz | tee SHA256SUMS.txt
+
+      - name: Create or update the release
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "CADCraft CLI ${TAG#cli-v}" \
+              --notes "Prebuilt headless \`cadcraft-cli\` for the CADCraft Claude plugin (Linux x86_64/aarch64, macOS arm64/x86_64, Windows x86_64). Built from commit $GITHUB_SHA. Verify downloads with SHA256SUMS.txt."
+          fi

@@ -17,7 +17,8 @@ cat >&2 <<'EOF'
 cadcraft-cli was not found, so the CADCraft MCP server cannot start.
 
 One-time setup: in Claude, run  /cadcraft:setup
-(it builds cadcraft-cli from https://github.com/ihayashi/cadcraft with cargo; about 5 minutes),
+(it downloads a prebuilt cadcraft-cli from https://github.com/ihayashi/cadcraft, or builds it
+with cargo if there is none for your system),
 then run /reload-plugins or restart Claude.
 
 Already have a binary somewhere? Put it on PATH or set CADCRAFT_CLI=/full/path/to/cadcraft-cli.

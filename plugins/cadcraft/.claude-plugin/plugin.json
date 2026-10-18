@@ -1,7 +1,7 @@
 {
   "name": "cadcraft",
   "displayName": "CADCraft",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Draw, dimension, hatch, inspect and export 2D CAD drawings (DXF/DWG/SVG/PNG/PDF) from Claude, using CADCraft's headless MCP server.",
   "author": {
     "name": "Igor Hayashi",
