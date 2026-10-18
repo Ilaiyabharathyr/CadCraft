@@ -452,6 +452,10 @@ pub struct Settings {
     pub polarsnap: bool,
     /// POLARDIST: the PolarSnap step; 0 uses the snap X spacing.
     pub polardist: f64,
+    /// The current UCS's X axis, radians from world +X: ortho, polar and object snap tracking
+    /// work along the UCS axes. Filled in by [`Session::drafting_settings`]; not a setting.
+    #[serde(skip)]
+    pub ucs_angle: f64,
 }
 
 impl Default for Settings {
@@ -510,6 +514,7 @@ impl Default for Settings {
             polaraddang: Vec::new(),
             polarsnap: false,
             polardist: 0.0,
+            ucs_angle: 0.0,
         }
     }
 }
@@ -796,6 +801,8 @@ impl Session {
             settings.snapunit = d.header.snap_unit();
             settings.gridunit = d.header.grid_unit();
         }
+        let a = self.input_ucs().rotation();
+        settings.ucs_angle = if a.is_finite() { a } else { 0.0 };
         settings
     }
     /// The space commands act on (model space while working inside a layout viewport).

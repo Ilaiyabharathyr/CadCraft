@@ -668,40 +668,41 @@ fn draw_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
         let unit = if s.gridunit.x == 0.0 { s.snapunit.x } else { s.gridunit.x };
         let minor = adaptive(unit, xf.scale, 8.0);
         let major = minor * major_n;
+        // The grid lies in the snap frame: SNAPBASE and SNAPANG in the current UCS.
+        let space = app.session.space();
+        let (origin, angle) = app.session.doc().map(|d| cadcraft_engine::snap::grid_frame_in(d, &space)).unwrap_or((Vec2::ZERO, 0.0));
+        let to_world = |q: Vec2| origin + q.rotate(angle);
+        // The view's corners in grid coordinates bound the lines needed.
+        let corners = [wb.min, Vec2::new(wb.max.x, wb.min.y), wb.max, Vec2::new(wb.min.x, wb.max.y)].map(|c| (c - origin).rotate(-angle));
+        let lo = Vec2::new(corners.iter().map(|c| c.x).fold(f64::INFINITY, f64::min), corners.iter().map(|c| c.y).fold(f64::INFINITY, f64::min));
+        let hi =
+            Vec2::new(corners.iter().map(|c| c.x).fold(f64::NEG_INFINITY, f64::max), corners.iter().map(|c| c.y).fold(f64::NEG_INFINITY, f64::max));
+        let (x0, x1) = ((lo.x / minor).floor(), (hi.x / minor).ceil());
+        let (y0, y1) = ((lo.y / minor).floor(), (hi.y / minor).ceil());
         let mut lines = Vec::new();
-        let x0 = (wb.min.x / minor).floor() as i64;
-        let x1 = (wb.max.x / minor).ceil() as i64;
-        let y0 = (wb.min.y / minor).floor() as i64;
-        let y1 = (wb.max.y / minor).ceil() as i64;
-        if (x1 - x0) < 2000 && (y1 - y0) < 2000 {
-            for i in x0..=x1 {
+        if [x0, x1, y0, y1].iter().all(|v| v.is_finite()) && (x1 - x0) < 2000.0 && (y1 - y0) < 2000.0 {
+            let is_major = |v: f64| ((v / major) - (v / major).round()).abs() < 1e-6;
+            let stroke = |m: bool| Stroke::new(1.0, if m { t.grid_major } else { t.grid_minor });
+            for i in (x0 as i64)..=(x1 as i64) {
                 let x = i as f64 * minor;
-                let is_major = (x / major).round() * major - x == 0.0 || ((x / major) - (x / major).round()).abs() < 1e-6;
-                let sx = xf.to_screen(Vec2::new(x, 0.0)).x;
-                lines.push(Shape::line_segment(
-                    [pos2(sx, xf.rect.top()), pos2(sx, xf.rect.bottom())],
-                    Stroke::new(1.0, if is_major { t.grid_major } else { t.grid_minor }),
-                ));
+                let (a, b) = (to_world(Vec2::new(x, lo.y)), to_world(Vec2::new(x, hi.y)));
+                lines.push(Shape::line_segment([xf.to_screen(a), xf.to_screen(b)], stroke(is_major(x))));
             }
-            for j in y0..=y1 {
+            for j in (y0 as i64)..=(y1 as i64) {
                 let y = j as f64 * minor;
-                let is_major = ((y / major) - (y / major).round()).abs() < 1e-6;
-                let sy = xf.to_screen(Vec2::new(0.0, y)).y;
-                lines.push(Shape::line_segment(
-                    [pos2(xf.rect.left(), sy), pos2(xf.rect.right(), sy)],
-                    Stroke::new(1.0, if is_major { t.grid_major } else { t.grid_minor }),
-                ));
+                let (a, b) = (to_world(Vec2::new(lo.x, y)), to_world(Vec2::new(hi.x, y)));
+                lines.push(Shape::line_segment([xf.to_screen(a), xf.to_screen(b)], stroke(is_major(y))));
             }
         }
         p.extend(lines);
     }
-    // Axes through the origin.
-    let o = xf.to_screen(Vec2::ZERO);
-    if xf.rect.y_range().contains(o.y) {
-        p.line_segment([pos2(xf.rect.left(), o.y), pos2(xf.rect.right(), o.y)], Stroke::new(1.0, t.axis_x));
-    }
-    if xf.rect.x_range().contains(o.x) {
-        p.line_segment([pos2(o.x, xf.rect.top()), pos2(o.x, xf.rect.bottom())], Stroke::new(1.0, t.axis_y));
+    // The current UCS's X and Y axes through its origin.
+    let u = app.session.input_ucs();
+    let o = u.origin.xy();
+    for (dir, color) in [(u.x.xy(), t.axis_x), (u.y.xy(), t.axis_y)] {
+        if let Some(seg) = clip_infinite(xf, o, dir, false) {
+            p.line_segment(seg, Stroke::new(1.0, color));
+        }
     }
 }
 
@@ -718,7 +719,9 @@ fn draw_iso_grid(app: &CadApp, p: &egui::Painter, xf: &Xf) {
         }
         d *= 5.0;
     }
-    let (origin, angle) = app.session.doc().map(cadcraft_engine::snap::grid_frame).unwrap_or((Vec2::ZERO, 0.0));
+    // In the current UCS (SNAPBASE from its origin, SNAPANG from its X axis).
+    let space = app.session.space();
+    let (origin, angle) = app.session.doc().map(|d| cadcraft_engine::snap::grid_frame_in(d, &space)).unwrap_or((Vec2::ZERO, 0.0));
     let lines = iso::grid_lines(xf.world_bounds(), d, origin, angle, s.gridmajor);
     p.extend(
         lines.into_iter().map(|l| {
@@ -1114,7 +1117,8 @@ fn draw_snap_marker(p: &egui::Painter, at: Pos2, hit: &SnapHit) {
 
 /// Acquired tracking points (small `+`, `//` for a Parallel line), the dotted paths the cursor
 /// is on and the tooltip naming them ("Endpoint: 5.0000 < 90°").
-fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquired], track: Option<&snap::tracking::Track>, far: f64) {
+/// `ucs`: the current UCS's X axis (radians), which the tooltips measure angles from.
+fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquired], track: Option<&snap::tracking::Track>, far: f64, ucs: f64) {
     use snap::tracking::{Acquired, PathShape};
     let t = Tokens::get();
     let st = Stroke::new(1.0, t.snap);
@@ -1151,7 +1155,7 @@ fn draw_tracking(p: &egui::Painter, xf: &Xf, acquired: &[snap::tracking::Acquire
         p.extend(Shape::dotted_line(&pts, t.snap, 6.0, 1.0));
         let (distance, angle) = (
             cadcraft_engine::units::format_distance(path.from.dist(tr.point), 2, 4),
-            (path.from.angle_to(tr.point).to_degrees().round() as i64).rem_euclid(360),
+            ((path.from.angle_to(tr.point) - ucs).to_degrees().round() as i64).rem_euclid(360),
         );
         tips.push(if path.name == "Polar" {
             crate::tf!("Polar: {distance} < {angle}°", distance = distance, angle = angle)
@@ -1819,7 +1823,14 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     // Acquired tracking points and the polar / tracking paths under the cursor.
     if app.canvas.cursor.is_some() {
-        draw_tracking(&painter, &xf, &app.session.tracking.acquired, app.canvas.track.as_ref(), view.height * 4.0);
+        draw_tracking(
+            &painter,
+            &xf,
+            &app.session.tracking.acquired,
+            app.canvas.track.as_ref(),
+            view.height * 4.0,
+            app.session.input_ucs().rotation(),
+        );
     }
     if let (Some(hit), Some(_)) = (app.canvas.snap, app.canvas.cursor) {
         draw_snap_marker(&painter, xf.to_screen(hit.point), &hit);
