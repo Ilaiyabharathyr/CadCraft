@@ -1,0 +1,17 @@
+{
+  "name": "cadcraft-plugins",
+  "description": "Claude plugins for CADCraft, the open-source CAD drafting app written in Rust",
+  "owner": {
+    "name": "Igor Hayashi",
+    "url": "https://github.com/ihayashi"
+  },
+  "plugins": [
+    {
+      "name": "cadcraft",
+      "source": "./plugins/cadcraft",
+      "description": "Draw, dimension, hatch, inspect and export 2D CAD drawings (DXF/DWG/SVG/PNG/PDF) from Claude, using CADCraft's headless MCP server.",
+      "category": "design",
+      "keywords": ["cad", "dxf", "dwg", "drafting", "mcp"]
+    }
+  ]
+}
