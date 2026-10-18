@@ -493,7 +493,7 @@ impl Session {
     /// A routine waits for the user's answer to a `get…` function: its prompt.
     pub(crate) fn lisp_prompt(&self) -> Option<Prompt> {
         match self.lisp.run.as_ref()?.waiting.as_ref()? {
-            Need::Get(req) => Some(req.prompt()),
+            Need::Get(req) => Some(req.prompt(&self.input_ucs())),
             _ => None,
         }
     }
@@ -611,3 +611,5 @@ fn file_key(name: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ucs_tests;

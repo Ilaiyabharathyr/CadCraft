@@ -118,11 +118,11 @@ pub fn lattice_snap(p: Vec2, d: f64, origin: Vec2, angle: f64) -> Vec2 {
 /// isometric lattice, and the settings with grid snap off so the rectangular grid leaves it be.
 /// Otherwise both unchanged, also when PolarSnap (SNAPTYPE 1) is the snap type: snap mode then
 /// steps along the tracking paths instead.
-pub(crate) fn grid_snap(doc: &cadcraft_doc::Drawing, mut s: Settings, p: Vec2) -> (Vec2, Settings) {
+pub(crate) fn grid_snap(doc: &cadcraft_doc::Drawing, space: &cadcraft_doc::Space, mut s: Settings, p: Vec2) -> (Vec2, Settings) {
     if !(s.snapmode && s.isodraft) || s.polarsnap {
         return (p, s);
     }
-    let (origin, angle) = super::grid_frame(doc);
+    let (origin, angle) = super::grid_frame_in(doc, space);
     s.snapmode = false;
     (lattice_snap(p, s.snapunit.y, origin, angle), s)
 }
@@ -144,10 +144,12 @@ fn nearest_axis(plane: IsoPlane, d: Vec2) -> Vec2 {
 /// Ortho without snapping: `p` constrained relative to `base` to the nearest axis of the current
 /// isometric plane (or to horizontal/vertical when isometric drafting is off).
 pub fn constrain(s: &Settings, base: Vec2, p: Vec2) -> Vec2 {
+    // Along the current UCS's axes (`s.ucs_angle`), the isometric ones turned with it.
     if !s.isodraft {
-        return super::ortho(base, p);
+        return super::ortho_at(base, p, s.ucs_angle);
     }
-    let dir = nearest_axis(s.isoplane, p - base);
+    let a = if s.ucs_angle.is_finite() { s.ucs_angle } else { 0.0 };
+    let dir = nearest_axis(s.isoplane, (p - base).rotate(-a)).rotate(a);
     let r = base + dir * (p - base).dot(dir);
     if r.is_finite() { r } else { p }
 }
