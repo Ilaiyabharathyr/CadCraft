@@ -43,7 +43,7 @@ pub use cadcraft_geom as geom;
 pub use cadcraft_render as render;
 pub use cmd::hatch::{HatchPicks, PatternChoice, PickMode, pattern_choices};
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
-pub use prompt::{Accept, Drag, Input, Interactive, Picker, Prompt, Step};
+pub use prompt::{Accept, Drag, Input, Interactive, Picker, PointInput, Prompt, Step};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -629,11 +629,6 @@ pub struct Session {
     /// The last segment given at a point prompt (its base point and the point): polar angles
     /// relative to the last segment (POLARMODE bit 1) are measured from it.
     pub last_segment: Option<(Vec2, Vec2)>,
-    /// The last typed `@distance<angle` input, as `(distance, angle in radians)`.
-    /// Set by [`Session::typed`] and consumed by commands that resolve a deferred
-    /// tangent first point (e.g. [`cmd::draw::LineM`]) when the next point is typed
-    /// rather than clicked. Cleared at [`Session::start`].
-    pub last_polar: Option<(f64, f64)>,
     /// Point modifiers pending at the current point prompt (`FROM`, `M2P`, `.x`, `<a`…).
     pub point_mods: Vec<pointmod::Frame>,
     /// Cursor position in world coordinates (from the UI; used for direct distance entry).
@@ -699,7 +694,6 @@ impl Session {
             last_command: None,
             last_point: Vec2::ZERO,
             last_segment: None,
-            last_polar: None,
             point_mods: Vec::new(),
             cursor: Vec2::ZERO,
             cursor_deferred: None,
@@ -925,7 +919,6 @@ impl Session {
 
     /// Start a command by name or alias as if typed at the command line.
     pub fn start(&mut self, name: &str) -> Result<()> {
-        self.last_polar = None;
         let name = name.trim();
         let (transparent, name) = match name.strip_prefix('\'') {
             Some(n) => (true, n),
@@ -1053,7 +1046,7 @@ impl Session {
         // A deferred snap is only meaningful where the prompt resolves it; elsewhere it is the
         // point it was picked at.
         let input = match input {
-            Input::Deferred(d) if !self.current_prompt().is_some_and(|p| p.deferred) => Input::Point(d.at),
+            Input::Deferred(d) if !self.current_prompt().is_some_and(|p| p.deferred) => Input::Point(PointInput::Picked(d.at)),
             other => other,
         };
         // Generic selection handling during "Select objects:" prompts.
@@ -1107,7 +1100,8 @@ impl Session {
         }
         let space = self.space();
         match input {
-            Input::Point(p) => {
+            Input::Point(pi) => {
+                let p = pi.point();
                 let ap = self.pixel_size() * self.settings.pickbox.max(1.0) * 1.5;
                 if let Some(pw) = self.pending_window.take() {
                     let crossing = p.x < pw.corner.x;
@@ -1169,7 +1163,8 @@ impl Session {
             };
         }
         match input {
-            Input::Point(p) => {
+            Input::Point(pi) => {
+                let p = pi.point();
                 if mode.push(p) {
                     return Ok(mode.select(self.doc()?, &self.space()).map(Input::Pick));
                 }
@@ -1192,10 +1187,11 @@ impl Session {
         let step = match input {
             Some(Input::Cancel) => Ok(Step::Cancel),
             Some(i) => {
-                if let Input::Point(p) = &i {
-                    self.last_point = *p;
-                    if let Some(b) = base.filter(|b| b.is_finite() && p.is_finite() && b.dist(*p) > 1e-12) {
-                        self.last_segment = Some((b, *p));
+                if let Input::Point(pi) = &i {
+                    let p = pi.point();
+                    self.last_point = p;
+                    if let Some(b) = base.filter(|b| b.is_finite() && p.is_finite() && b.dist(p) > 1e-12) {
+                        self.last_segment = Some((b, p));
                     }
                     // A temporary tracking point (TT) serves one point.
                     self.tracking.release_temporary();
@@ -1517,7 +1513,7 @@ impl Session {
                 lisp::value::Value::Real(r) => self.typed(&format!("{r}")),
                 lisp::value::Value::Str(s) => self.typed(&s),
                 other => match other.as_point() {
-                    Some(p) => self.input(Input::Point(Vec2::new(p[0], p[1]))),
+                    Some(p) => self.input(Input::Point(PointInput::Picked(Vec2::new(p[0], p[1])))),
                     None => {
                         self.echo(format!("Invalid input: {}", lisp::value::to_text(&other, true)));
                         Ok(())
@@ -1538,16 +1534,15 @@ impl Session {
             return self.input(Input::Keyword(k));
         }
         if prompt.accept.point {
-            if let Some(p) = prompt::parse_point_with(tt, self.last_point, &self.angle_settings()) {
-                self.last_polar = prompt::parse_polar_text(tt, &self.angle_settings());
-                return self.input(Input::Point(p));
+            if let Some(pi) = prompt::parse_point_input(tt, self.last_point, &self.angle_settings()) {
+                return self.input(Input::Point(pi));
             }
             // Direct distance entry along the tracking path the cursor is on, from the point it
             // comes from (an acquired or temporary tracking point needs no base point).
             if let Some(dist) = units::parse_distance(tt).filter(|_| !prompt.accept.number)
                 && let Some((from, dir)) = self.tracking.last.as_ref().filter(|t| t.point.near(self.cursor, 1e-9)).and_then(|t| t.along())
             {
-                return self.input(Input::Point(from + dir * dist));
+                return self.input(Input::Point(PointInput::Picked(from + dir * dist)));
             }
             // Direct distance entry along the rubber band.
             if let (Some(base), Some(dist)) = (prompt.base, units::parse_distance(tt))
@@ -1559,7 +1554,7 @@ impl Session {
                 }
                 let dir = (c - base).normalized();
                 let dir = if dir == Vec2::ZERO { Vec2::X } else { dir };
-                return self.input(Input::Point(base + dir * dist));
+                return self.input(Input::Point(PointInput::Picked(base + dir * dist)));
             }
         }
         self.input(Input::Text(tt.to_string()))
