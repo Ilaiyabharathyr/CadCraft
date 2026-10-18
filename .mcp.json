@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cadcraft": {
+      "command": "bash",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/cadcraft-mcp.sh"]
+    }
+  }
+}
