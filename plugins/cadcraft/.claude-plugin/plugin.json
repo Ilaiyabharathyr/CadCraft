@@ -1,0 +1,14 @@
+{
+  "name": "cadcraft",
+  "displayName": "CADCraft",
+  "version": "0.1.0",
+  "description": "Draw, dimension, hatch, inspect and export 2D CAD drawings (DXF/DWG/SVG/PNG/PDF) from Claude, using CADCraft's headless MCP server.",
+  "author": {
+    "name": "Igor Hayashi",
+    "url": "https://github.com/ihayashi"
+  },
+  "homepage": "https://github.com/ihayashi/cadcraft",
+  "repository": "https://github.com/ihayashi/cadcraft",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["cad", "dxf", "dwg", "drafting", "mcp"]
+}
