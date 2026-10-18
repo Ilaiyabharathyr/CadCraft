@@ -1,14 +1,14 @@
 //! The navigation overlays on the drawing area: the ViewCube (Top face, Home, compass ring and
-//! the WCS menu) and the UCS icon.
+//! the UCS menu) and the UCS icon.
 //!
 //! Every overlay registers a widget that senses clicks *and* drags, so egui hands the pointer to
 //! the overlay instead of the canvas underneath (a click on the ViewCube must never also pick or
 //! start a selection window in the drawing). What the overlays do goes through commands:
-//! `zoom.extents` (Top face, Home), `ui.toggle.viewcube`, `ui.toggle.ucsicon`.
+//! `zoom.extents` (Top face, Home), `ui.toggle.viewcube`, `ui.toggle.ucsicon`, `ucs`.
 //!
-//! CADCraft's model view is a 2D plan view of the World Coordinate System: there is no view
-//! twist, no 3D view direction and no user coordinate system yet, so the compass ring explains
-//! that instead of rotating, and the WCS menu lists the only coordinate system there is.
+//! CADCraft's model view is a 2D plan view: there is no view twist and no 3D view direction yet,
+//! so the compass ring explains that instead of rotating. The UCS menu lists World and the
+//! drawing's named UCSs.
 
 use egui::{Color32, CursorIcon, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
@@ -42,7 +42,7 @@ impl Layout {
             ring,
             face: Rect::from_center_size(center, vec2(44.0, 44.0)),
             home: Rect::from_center_size(center + vec2(-ring + 2.0, -ring + 2.0), vec2(20.0, 20.0)),
-            pill: Rect::from_center_size(center + vec2(0.0, ring + 26.0), vec2(56.0, 16.0)),
+            pill: Rect::from_center_size(center + vec2(0.0, ring + 26.0), vec2(84.0, 16.0)),
             bounds: Rect::from_center_size(center, vec2(2.0 * (ring + 10.0), 2.0 * (ring + 10.0))),
         }
     }
@@ -131,7 +131,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui, l: &Layout) {
     if let Some((id, params)) = action {
         let _ = app.run(id, params);
     }
-    // The WCS pill (painted by the canvas) opens the coordinate-system menu.
+    // The UCS pill (painted by the canvas, wide enough for a cut-short UCS name) opens the
+    // coordinate-system menu.
     let pill = ui.interact(l.pill, ui.id().with("viewcube_wcs"), Sense::click_and_drag()).on_hover_cursor(CursorIcon::PointingHand);
     let pill = pill.on_hover_text("Coordinate system");
     ucs_menu(app, egui::Popup::menu(&pill));
@@ -153,45 +154,119 @@ fn paint_home(p: &egui::Painter, r: Rect, hot: bool) {
     p.line_segment([c + vec2(-1.2, 2.5), c + vec2(1.2, 2.5)], st);
 }
 
-/// The UCS icon's arms (as drawn by the canvas at the lower-left corner): the X arm and the Y arm.
-pub fn ucs_arms(canvas: Rect) -> [Rect; 2] {
-    let o = pos2(canvas.left() + 36.0, canvas.bottom() - 34.0);
-    [Rect::from_min_max(o + vec2(-8.0, -8.0), o + vec2(80.0, 8.0)), Rect::from_min_max(o + vec2(-8.0, -82.0), o + vec2(8.0, 8.0))]
+/// How long the UCS icon's arms are, in points.
+pub const ARM: f32 = 60.0;
+
+/// Where the UCS icon is drawn: the point its arms start from, the screen directions of its X
+/// and Y arms (unit vectors: the current UCS's axes seen in the plan view) and whether the UCS is
+/// the World UCS (the icon then has a square at its corner).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IconPlace {
+    pub origin: Pos2,
+    pub x: egui::Vec2,
+    pub y: egui::Vec2,
+    pub world: bool,
+}
+
+impl IconPlace {
+    /// The World UCS's icon at the lower-left corner of the drawing area.
+    pub fn corner(canvas: Rect) -> IconPlace {
+        IconPlace { origin: pos2(canvas.left() + 36.0, canvas.bottom() - 34.0), x: vec2(1.0, 0.0), y: vec2(0.0, -1.0), world: true }
+    }
+
+    /// The icon for the current UCS: at its origin when UCSICON asks for that (ORigin) and the
+    /// whole icon fits there, else at the corner. `to_screen` maps a point of the space shown.
+    pub fn of(app: &CadApp, canvas: Rect, to_screen: impl Fn(cadcraft_geom::Vec2) -> Pos2) -> IconPlace {
+        let u = app.session.input_ucs();
+        let dir = |v: cadcraft_geom::Vec3, or: egui::Vec2| {
+            let d = vec2(v.x as f32, -(v.y as f32));
+            let l = d.length();
+            if l.is_finite() && l > 1e-6 { d / l } else { or }
+        };
+        let mut place = IconPlace { x: dir(u.x, vec2(1.0, 0.0)), y: dir(u.y, vec2(0.0, -1.0)), world: u.is_world(), ..IconPlace::corner(canvas) };
+        // At the origin only where the screen shows the space the UCS belongs to (not from paper
+        // space into an active viewport).
+        let same_space = app.session.space() == app.session.layout_space();
+        if app.session.ucsicon_bits() & 2 != 0 && same_space {
+            let at = to_screen(u.origin.xy());
+            let reach = ARM + 16.0;
+            let inner = canvas.shrink(12.0);
+            if [at, at + place.x * reach, at + place.y * reach].iter().all(|p| p.x.is_finite() && p.y.is_finite() && inner.contains(*p)) {
+                place.origin = at;
+            }
+        }
+        place
+    }
+
+    /// The icon's arms with room around them: the X arm and the Y arm.
+    pub fn arms(&self) -> [Rect; 2] {
+        let o = self.origin;
+        [Rect::from_two_pos(o, o + self.x * (ARM + 20.0)).expand(8.0), Rect::from_two_pos(o, o + self.y * (ARM + 22.0)).expand(8.0)]
+    }
+}
+
+/// How the current UCS is named on screen.
+fn ucs_label(app: &CadApp) -> String {
+    let (u, name) = app.session.ucs_named();
+    if u.is_world() && name.is_empty() {
+        "World Coordinate System".into()
+    } else if name.is_empty() {
+        "Unnamed UCS".into()
+    } else {
+        name
+    }
 }
 
 /// Make the UCS icon clickable: hovering highlights it, a click (either button) opens the
 /// coordinate-system menu.
-pub fn ucs_icon(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect) {
+pub fn ucs_icon(app: &mut CadApp, ui: &mut egui::Ui, canvas: Rect, place: &IconPlace) {
     let t = Tokens::get();
-    let [x, y] = ucs_arms(canvas);
+    let [x, y] = place.arms();
     let rx = ui.interact(x, ui.id().with("ucs_x"), Sense::click_and_drag());
     let ry = ui.interact(y, ui.id().with("ucs_y"), Sense::click_and_drag());
-    let resp = (rx | ry).on_hover_cursor(CursorIcon::PointingHand).on_hover_text("UCS icon: World Coordinate System");
+    let resp = (rx | ry).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(format!("UCS icon: {}", ucs_label(app)));
     if resp.hovered() {
-        let o = pos2(x.left() + 8.0, x.center().y);
+        let o = place.origin;
         let st = Stroke::new(2.0, t.hover);
         let p = ui.painter_at(canvas);
-        p.line_segment([o, o + vec2(60.0, 0.0)], st);
-        p.line_segment([o, o + vec2(0.0, -60.0)], st);
+        p.line_segment([o, o + place.x * ARM], st);
+        p.line_segment([o, o + place.y * ARM], st);
     }
     // Opened with `Bool(true)`: a pointer-anchored popup records its position only then.
     let open = (resp.clicked() || resp.secondary_clicked()).then_some(egui::SetOpenCommand::Bool(true));
     ucs_menu(app, egui::Popup::menu(&resp).open_memory(open).at_pointer_fixed());
 }
 
-/// The coordinate-system menu: the WCS (the only coordinate system so far) and the icon switch.
+/// The coordinate-system menu: World, the drawing's named UCSs (picking one makes it current,
+/// through the UCS command) and the icon switch.
 fn ucs_menu(app: &mut CadApp, popup: egui::Popup<'_>) {
-    let mut hide = false;
+    let (u, current) = app.session.ucs_named();
+    let names: Vec<String> = app.session.doc().map(|d| d.ucss.iter().map(|u| u.name.clone()).collect()).unwrap_or_default();
+    let mut action: Option<(&str, serde_json::Value)> = None;
     popup.show(|ui| {
-        ui.radio(true, "World (WCS)").on_hover_text("CADCraft draws in the World Coordinate System; user coordinate systems aren't available yet.");
+        if ui.radio(u.is_world() && current.is_empty(), "World (WCS)").clicked() {
+            action = Some(("ucs.world", json!({})));
+            ui.close();
+        }
+        for n in &names {
+            if ui.radio(current.eq_ignore_ascii_case(n), n.as_str()).clicked() {
+                action = Some(("ucs", json!({"option": "named", "action": "restore", "name": n})));
+                ui.close();
+            }
+        }
+        if !u.is_world() && current.is_empty() {
+            let _ = ui.radio(true, "Unnamed");
+        }
         ui.separator();
         if ui.button("Hide UCS Icon").clicked() {
-            hide = true;
+            action = Some(("ui.toggle.ucsicon", json!({"on": false})));
             ui.close();
         }
     });
-    if hide {
-        let _ = app.run("ui.toggle.ucsicon", json!({"on": false}));
+    if let Some((id, params)) = action
+        && let Err(e) = app.run(id, params)
+    {
+        app.session.echo(e);
     }
 }
 
@@ -282,10 +357,47 @@ mod tests {
     }
 
     #[test]
+    fn the_ucs_icon_follows_the_ucs() {
+        let (mut app, _ctx) = app_and_ctx();
+        let c = canvas(&app);
+        // A plain mapping: the canvas centre is world (0, 0), one point per unit.
+        let to_screen = |p: cadcraft_geom::Vec2| pos2(c.center().x + p.x as f32, c.center().y - p.y as f32);
+        let world = IconPlace::of(&app, c, to_screen);
+        assert!(world.world && (world.x - vec2(1.0, 0.0)).length() < 1e-6 && (world.y - vec2(0.0, -1.0)).length() < 1e-6);
+        // At the World origin (on screen, with ORigin on by default).
+        assert!((world.origin - c.center()).length() < 1e-3, "{:?} vs {:?}", world.origin, c.center());
+        // A UCS turned 90° at (20, 10): the X arm points up the screen, the Y arm left.
+        app.run("ucs", json!({"option": "origin", "origin": [20, 10]})).unwrap();
+        app.run("ucs", json!({"option": "z", "angle": 90})).unwrap();
+        let p = IconPlace::of(&app, c, to_screen);
+        assert!(!p.world);
+        assert!((p.x - vec2(0.0, -1.0)).length() < 1e-6 && (p.y - vec2(-1.0, 0.0)).length() < 1e-6, "{p:?}");
+        assert!((p.origin - pos2(c.center().x + 20.0, c.center().y - 10.0)).length() < 1e-3);
+        // Its click areas lie along the turned arms.
+        let [ax, ay] = p.arms();
+        assert!(ax.contains(p.origin + p.x * 40.0) && ay.contains(p.origin + p.y * 40.0));
+        // Noorigin, or an origin off screen: the corner.
+        app.run("ucsicon", json!({"origin": false})).unwrap();
+        assert_eq!(IconPlace::of(&app, c, to_screen).origin, IconPlace::corner(c).origin);
+        app.run("ucsicon", json!({"origin": true})).unwrap();
+        app.run("ucs", json!({"option": "origin", "origin": [1e6, 0]})).unwrap();
+        assert_eq!(IconPlace::of(&app, c, to_screen).origin, IconPlace::corner(c).origin);
+        // The menu switch turns UCSICON off through its command.
+        app.run("ui.toggle.ucsicon", json!({"on": false})).unwrap();
+        assert_eq!(app.session.ucsicon_bits() & 1, 0);
+        app.run("ui.toggle.ucsicon", json!({})).unwrap();
+        assert_eq!(app.session.ucsicon_bits() & 1, 1, "a toggle without `on` flips it");
+        app.run("ui.toggle.ucsicon.origin", json!({"on": false})).unwrap();
+        assert_eq!(app.session.ucsicon_bits(), 1);
+    }
+
+    #[test]
     fn ucs_icon_and_wcs_pill_open_the_coordinate_system_menu() {
         let (mut app, ctx) = app_and_ctx();
-        let [x, _] = ucs_arms(canvas(&app));
-        click(&mut app, &ctx, x.center(), egui::PointerButton::Primary);
+        // Where the canvas drew it: at the World origin when that is on screen (UCSICON 3).
+        let xf = app.canvas.xf.expect("laid out");
+        let place = IconPlace::of(&app, canvas(&app), |p| xf.to_screen(p));
+        click(&mut app, &ctx, place.origin + place.x * 40.0, egui::PointerButton::Primary);
         assert!(menu_shown(&ctx), "UCS icon menu");
         assert!(app.session.pending_window.is_none(), "the click stayed on the icon");
         let l = Layout::new(canvas(&app));
